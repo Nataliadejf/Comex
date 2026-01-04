@@ -1,0 +1,4 @@
+"""
+Backend do Comex Analyzer.
+"""
+

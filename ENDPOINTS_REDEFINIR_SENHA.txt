@@ -1,0 +1,93 @@
+# Endpoints de Redefinir Senha para adicionar ao main.py
+
+Adicione estes endpoints APÓS o endpoint /register no arquivo main.py:
+
+```python
+class RedefinirSenhaRequest(BaseModel):
+    """Schema para solicitar redefinição de senha."""
+    email: str
+
+
+class NovaSenhaRequest(BaseModel):
+    """Schema para definir nova senha."""
+    token: str
+    nova_senha: str
+
+
+@app.post("/solicitar-redefinicao-senha")
+async def solicitar_redefinicao_senha(
+    request: RedefinirSenhaRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Endpoint para solicitar redefinição de senha."""
+    try:
+        usuario = db.query(Usuario).filter(Usuario.email == request.email).first()
+        if not usuario:
+            # Por segurança, não revelar se o email existe ou não
+            logger.info(f"Solicitação de redefinição para email não encontrado: {request.email}")
+            return {"message": "Se o email existir, você receberá instruções para redefinir a senha"}
+        
+        # Gerar token de redefinição
+        token_redefinicao = secrets.token_urlsafe(32)
+        data_expiracao = datetime.utcnow() + timedelta(hours=1)  # Token válido por 1 hora
+        
+        # Salvar token no banco
+        usuario.token_aprovacao = token_redefinicao
+        usuario.data_expiracao_token = data_expiracao
+        db.commit()
+        
+        # TODO: Enviar email com link de redefinição
+        logger.info(f"Token de redefinição gerado para {request.email}: {token_redefinicao}")
+        
+        return {"message": "Se o email existir, você receberá instruções para redefinir a senha"}
+    except Exception as e:
+        logger.error(f"Erro ao solicitar redefinição: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao processar solicitação")
+
+
+@app.post("/redefinir-senha")
+async def redefinir_senha(
+    request: NovaSenhaRequest,
+    db: Session = Depends(get_db)
+):
+    """Endpoint para redefinir senha usando token."""
+    try:
+        # Validar nova senha
+        senha_valida, mensagem_erro = validate_password(request.nova_senha)
+        if not senha_valida:
+            raise HTTPException(status_code=400, detail=mensagem_erro)
+        
+        # Buscar usuário pelo token
+        usuario = db.query(Usuario).filter(Usuario.token_aprovacao == request.token).first()
+        if not usuario:
+            raise HTTPException(status_code=400, detail="Token inválido ou expirado")
+        
+        # Verificar se token não expirou
+        if usuario.data_expiracao_token and usuario.data_expiracao_token < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Token expirado")
+        
+        # Truncar senha antes de criar hash
+        senha_para_hash = request.nova_senha
+        senha_bytes = len(senha_para_hash.encode('utf-8'))
+        if senha_bytes > 72:
+            senha_bytes_truncated = senha_para_hash.encode('utf-8')[:72]
+            senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
+            logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes na redefinição")
+        
+        # Atualizar senha
+        usuario.senha_hash = get_password_hash(senha_para_hash)
+        usuario.token_aprovacao = None  # Limpar token após uso
+        usuario.data_expiracao_token = None
+        db.commit()
+        
+        logger.info(f"✅ Senha redefinida para: {usuario.email}")
+        return {"message": "Senha redefinida com sucesso"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao redefinir senha: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao redefinir senha")
+```
+
+

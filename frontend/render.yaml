@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: comex-analyzer-frontend
+    env: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./build
+    envVars:
+      - key: REACT_APP_API_URL
+        sync: false
+        value: https://seu-backend.onrender.com
+
