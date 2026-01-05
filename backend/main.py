@@ -15,7 +15,14 @@ from loguru import logger
 from config import settings
 from database import get_db, init_db, OperacaoComex, TipoOperacao, ViaTransporte
 from data_collector import DataCollector
-from api.export import router as export_router
+
+# Import opcional do router de exportação
+try:
+    from api.export import router as export_router
+    EXPORT_ROUTER_AVAILABLE = True
+except ImportError:
+    EXPORT_ROUTER_AVAILABLE = False
+    logger.warning("Router de exportação não disponível")
 
 # Inicializar app FastAPI
 app = FastAPI(
@@ -34,7 +41,8 @@ app.add_middleware(
 )
 
 # Incluir routers
-app.include_router(export_router)
+if EXPORT_ROUTER_AVAILABLE:
+    app.include_router(export_router)
 
 
 # Inicializar banco de dados na startup
