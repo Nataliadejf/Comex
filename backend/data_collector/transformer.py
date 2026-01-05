@@ -73,6 +73,37 @@ class DataTransformer:
         
         return transformed
     
+    def transform_csv_data(
+        self,
+        data: List[Dict[str, Any]],
+        mes: str,
+        tipo: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Transforma dados CSV das bases de dados brutas para formato do banco.
+        Similar ao transform_scraper_data mas otimizado para formato do MDIC.
+        
+        Args:
+            data: Dados brutos do CSV
+            mes: Mês de referência (YYYY-MM)
+            tipo: Tipo de operação
+        
+        Returns:
+            Lista de dicionários no formato do banco
+        """
+        transformed = []
+        
+        for record in data:
+            try:
+                transformed_record = self._transform_record(record, mes, tipo)
+                if transformed_record:
+                    transformed.append(transformed_record)
+            except Exception as e:
+                logger.error(f"Erro ao transformar registro CSV: {e}")
+                continue
+        
+        return transformed
+    
     def _transform_record(
         self,
         record: Dict[str, Any],

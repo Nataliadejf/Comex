@@ -24,7 +24,8 @@ class ComexStatAPIClient:
     """
     
     def __init__(self):
-        self.base_url = settings.comex_stat_api_url
+        # Tentar usar a API oficial primeiro
+        self.base_url = settings.comex_stat_api_url or "https://api-comexstat.mdic.gov.br"
         self.api_key = settings.comex_stat_api_key
         self.timeout = 30.0
         
@@ -132,10 +133,14 @@ class ComexStatAPIClient:
         
         headers = {
             "Accept": "application/json",
-            "User-Agent": "ComexAnalyzer/1.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Type": "application/json"
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        else:
+            # Tentar sem autenticação primeiro
+            headers.pop("Authorization", None)
         
         try:
             if HTTPX_AVAILABLE:

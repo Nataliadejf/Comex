@@ -21,6 +21,14 @@ except ImportError:
     SCRAPER_AVAILABLE = False
     logger.warning("scraper não disponível - apenas API será usada")
 
+# Import CSV scraper (sempre disponível - não requer Selenium)
+try:
+    from .csv_scraper import CSVDataScraper
+    CSV_SCRAPER_AVAILABLE = True
+except ImportError:
+    CSV_SCRAPER_AVAILABLE = False
+    logger.warning("CSV scraper não disponível")
+
 
 class DataCollector:
     """
@@ -31,6 +39,7 @@ class DataCollector:
     def __init__(self):
         self.api_client = ComexStatAPIClient()
         self.scraper = ComexStatScraper() if SCRAPER_AVAILABLE else None
+        self.csv_scraper = CSVDataScraper() if CSV_SCRAPER_AVAILABLE else None
         self.transformer = DataTransformer()
     
     async def collect_recent_data(self, db: Session) -> Dict[str, Any]:
@@ -57,22 +66,36 @@ class DataCollector:
             stats["usou_api"] = True
             try:
                 await self._collect_via_api(db, stats)
+                # Se coletou dados com sucesso, retornar
+                if stats["total_registros"] > 0:
+                    return stats
             except Exception as e:
                 logger.error(f"Erro ao coletar via API: {e}")
                 stats["erros"].append(f"API: {str(e)}")
-                # Fallback para scraper (se disponível)
-                if SCRAPER_AVAILABLE and self.scraper:
-                    stats["usou_api"] = False
-                    await self._collect_via_scraper(db, stats)
-                else:
-                    logger.warning("Scraper não disponível - não é possível fazer fallback")
-        else:
-            # Usar scraper diretamente (se disponível)
-            if SCRAPER_AVAILABLE and self.scraper:
+        
+        # Fallback 1: Tentar CSV scraper (mais confiável, não requer Selenium)
+        if CSV_SCRAPER_AVAILABLE and self.csv_scraper:
+            logger.info("Tentando coletar dados via CSV scraper (bases de dados brutas)")
+            try:
+                await self._collect_via_csv_scraper(db, stats)
+                if stats["total_registros"] > 0:
+                    return stats
+            except Exception as e:
+                logger.error(f"Erro ao coletar via CSV scraper: {e}")
+                stats["erros"].append(f"CSV Scraper: {str(e)}")
+        
+        # Fallback 2: Tentar scraper tradicional (se disponível)
+        if SCRAPER_AVAILABLE and self.scraper:
+            logger.info("Tentando coletar dados via scraper tradicional")
+            stats["usou_api"] = False
+            try:
                 await self._collect_via_scraper(db, stats)
-            else:
-                logger.warning("API não disponível e scraper não instalado - coleta não pode ser realizada")
-                stats["erros"].append("API não disponível e scraper não instalado")
+            except Exception as e:
+                logger.error(f"Erro ao coletar via scraper: {e}")
+                stats["erros"].append(f"Scraper: {str(e)}")
+        else:
+            logger.warning("Nenhum método de coleta disponível - API não disponível e scrapers não instalados")
+            stats["erros"].append("Nenhum método de coleta disponível")
         
         logger.info(
             f"Coleta concluída: {stats['total_registros']} registros, "
@@ -114,18 +137,67 @@ class DataCollector:
                 logger.error(error_msg)
                 stats["erros"].append(error_msg)
     
+    async def _collect_via_csv_scraper(
+        self,
+        db: Session,
+        stats: Dict[str, Any]
+    ):
+        """Coleta dados via CSV scraper (bases de dados brutas do MDIC)."""
+        if not CSV_SCRAPER_AVAILABLE or not self.csv_scraper:
+            logger.error("CSV scraper não disponível")
+            stats["erros"].append("CSV scraper não disponível")
+            return
+        
+        logger.info("Coletando dados via CSV scraper (bases de dados brutas)")
+        
+        # Baixar arquivos CSV dos últimos 24 meses
+        months = self._get_months_to_fetch()
+        
+        for mes_str in months:
+            try:
+                # Extrair ano e mês
+                ano, mes = map(int, mes_str.split('-'))
+                
+                # Baixar importação e exportação
+                for tipo in ["Importação", "Exportação"]:
+                    filepath = await self.csv_scraper.download_month_csv(ano, mes, tipo)
+                    
+                    if filepath:
+                        # Parse do arquivo CSV
+                        raw_data = self.csv_scraper.parse_csv_file(filepath)
+                        
+                        if raw_data:
+                            # Transformar dados
+                            transformed = self.transformer.transform_csv_data(
+                                raw_data,
+                                mes_str,
+                                tipo
+                            )
+                            
+                            # Salvar no banco
+                            saved = self._save_to_database(db, transformed, mes_str, tipo)
+                            stats["total_registros"] += saved
+                
+                if mes_str not in stats["meses_processados"]:
+                    stats["meses_processados"].append(mes_str)
+            
+            except Exception as e:
+                error_msg = f"Erro ao coletar {mes_str}: {e}"
+                logger.error(error_msg)
+                stats["erros"].append(error_msg)
+    
     async def _collect_via_scraper(
         self,
         db: Session,
         stats: Dict[str, Any]
     ):
-        """Coleta dados via scraper (fallback)."""
+        """Coleta dados via scraper tradicional (fallback)."""
         if not SCRAPER_AVAILABLE or not self.scraper:
             logger.error("Scraper não disponível")
             stats["erros"].append("Scraper não disponível (dependências não instaladas)")
             return
         
-        logger.info("Coletando dados via scraper")
+        logger.info("Coletando dados via scraper tradicional")
         
         # Baixar arquivos
         files = self.scraper.download_recent_data()

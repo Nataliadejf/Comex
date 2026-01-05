@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     
     # API Comex Stat
     comex_stat_api_url: Optional[str] = Field(
-        default=None,
+        default="https://api-comexstat.mdic.gov.br",
         alias="COMEX_STAT_API_URL"
     )
     comex_stat_api_key: Optional[str] = Field(
