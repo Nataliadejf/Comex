@@ -647,6 +647,176 @@ async def analise_ncm(
     }
 
 
+# Endpoints de Autenticação (opcionais - só funcionam se módulos estiverem disponíveis)
+if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
+    from fastapi import Form
+    from fastapi import BackgroundTasks
+    import secrets
+    from datetime import timedelta
+    
+    @app.post("/login")
+    async def login(
+        username: str = Form(...),
+        password: str = Form(...),
+        db: Session = Depends(get_db)
+    ):
+        """Endpoint de login usando email."""
+        try:
+            logger.info(f"Tentativa de login recebida: {username}")
+            
+            # Truncar senha se necessário (bcrypt limite: 72 bytes)
+            senha_original = password
+            senha_bytes_original = senha_original.encode('utf-8')
+            if len(senha_bytes_original) > 72:
+                senha_bytes_truncada = senha_bytes_original[:72]
+                senha_final = senha_bytes_truncada.decode('utf-8', errors='ignore')
+                logger.warning(f"⚠️ Senha truncada de {len(senha_bytes_original)} para 72 bytes")
+            else:
+                senha_final = senha_original
+            
+            # username é o email
+            user = authenticate_user(db, username, senha_final)
+            
+            if not user:
+                logger.warning(f"Login falhou para: {username}")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email ou senha incorretos, ou cadastro aguardando aprovação",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            # Atualizar último login
+            try:
+                user.ultimo_login = datetime.utcnow()
+                db.commit()
+                logger.info(f"✅ Login bem-sucedido para: {user.email}")
+            except Exception as e:
+                logger.error(f"Erro ao atualizar último login: {e}")
+                db.rollback()
+            
+            access_token = create_access_token(data={"sub": user.email})
+            
+            return {
+                "access_token": access_token,
+                "token_type": "bearer",
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "nome_completo": user.nome_completo,
+                    "nome_empresa": user.nome_empresa
+                }
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Erro inesperado no login: {e}")
+            raise HTTPException(status_code=500, detail=f"Erro interno do servidor: {str(e)}")
+    
+    class CadastroRequest(BaseModel):
+        """Schema para cadastro de usuário."""
+        email: str
+        password: str
+        nome_completo: str
+        data_nascimento: Optional[date] = None
+        nome_empresa: Optional[str] = None
+        cpf: Optional[str] = None
+        cnpj: Optional[str] = None
+    
+    @app.post("/register")
+    async def register(
+        cadastro: CadastroRequest,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db)
+    ):
+        """Endpoint de registro de usuário com aprovação."""
+        try:
+            logger.info(f"Tentativa de cadastro recebida: {cadastro.email}")
+            
+            # Validar senha
+            senha_valida, mensagem_erro = validate_password(cadastro.password)
+            if not senha_valida:
+                raise HTTPException(status_code=400, detail=mensagem_erro)
+            
+            # Verificar se email já existe
+            usuario_existente = db.query(Usuario).filter(Usuario.email == cadastro.email).first()
+            if usuario_existente:
+                raise HTTPException(status_code=400, detail="Email já cadastrado")
+            
+            # Truncar senha antes do hash
+            senha_para_hash = cadastro.password
+            senha_bytes = len(senha_para_hash.encode('utf-8'))
+            if senha_bytes > 72:
+                senha_bytes_truncated = senha_para_hash.encode('utf-8')[:72]
+                senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
+                logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes")
+            
+            novo_usuario = Usuario(
+                email=cadastro.email,
+                senha_hash=get_password_hash(senha_para_hash),
+                nome_completo=cadastro.nome_completo,
+                data_nascimento=cadastro.data_nascimento,
+                nome_empresa=cadastro.nome_empresa,
+                cpf=cadastro.cpf,
+                cnpj=cadastro.cnpj,
+                status_aprovacao="pendente",
+                ativo=0
+            )
+            db.add(novo_usuario)
+            db.flush()
+            
+            # Criar token de aprovação
+            token_aprovacao = secrets.token_urlsafe(32)
+            data_expiracao = datetime.utcnow() + timedelta(days=7)
+            
+            aprovacao = AprovacaoCadastro(
+                usuario_id=novo_usuario.id,
+                token_aprovacao=token_aprovacao,
+                email_destino=cadastro.email,
+                status="pendente",
+                data_expiracao=data_expiracao
+            )
+            db.add(aprovacao)
+            db.commit()
+            
+            logger.info(f"✅ Usuário criado: {cadastro.email} (ID: {novo_usuario.id})")
+            
+            # Enviar email em background
+            if EMAIL_SERVICE_AVAILABLE:
+                background_tasks.add_task(
+                    enviar_email_aprovacao,
+                    cadastro.email,
+                    cadastro.nome_completo,
+                    token_aprovacao
+                )
+            
+            return {
+                "message": "Cadastro realizado com sucesso! Aguarde aprovação por email.",
+                "email": cadastro.email
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Erro inesperado no cadastro: {e}")
+            raise HTTPException(status_code=500, detail=f"Erro interno do servidor: {str(e)}")
+else:
+    # Endpoints stub quando autenticação não está disponível
+    @app.post("/login")
+    async def login_stub():
+        """Endpoint de login não disponível - módulos de autenticação não instalados."""
+        raise HTTPException(
+            status_code=501,
+            detail="Autenticação não disponível. Módulos de autenticação não estão instalados."
+        )
+    
+    @app.post("/register")
+    async def register_stub():
+        """Endpoint de registro não disponível - módulos de autenticação não instalados."""
+        raise HTTPException(
+            status_code=501,
+            detail="Cadastro não disponível. Módulos de autenticação não estão instalados."
+        )
+
+
 if __name__ == "__main__":
     from loguru import logger
     
