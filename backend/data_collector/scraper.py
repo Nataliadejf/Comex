@@ -6,10 +6,16 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from loguru import logger
-import pandas as pd
 import requests
 
-# Selenium é opcional - só necessário para scraping avançado
+# Imports opcionais - não disponíveis no Render
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    logger.warning("pandas não disponível - funcionalidade de scraping limitada")
+
 try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
@@ -21,24 +27,7 @@ try:
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
-    # Criar classes dummy para evitar erros
-    class webdriver:
-        class Chrome:
-            pass
-    class By:
-        pass
-    class WebDriverWait:
-        pass
-    class expected_conditions:
-        pass
-    class Options:
-        pass
-    class Service:
-        pass
-    class TimeoutException(Exception):
-        pass
-    class WebDriverException(Exception):
-        pass
+    logger.warning("selenium não disponível - scraping não funcionará")
 
 from config import settings
 

@@ -4,8 +4,15 @@ Utilitários para exportação de relatórios.
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
-import pandas as pd
 from loguru import logger
+
+# Import opcional - não disponível no Render
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    logger.warning("pandas não disponível - exportação Excel/CSV limitada")
 
 from config import settings
 
@@ -41,6 +48,9 @@ class ReportExporter:
         
         filepath = self.exports_dir / filename
         
+        if not PANDAS_AVAILABLE:
+            raise ImportError("pandas e openpyxl são necessários para exportação em Excel. Instale com: pip install pandas openpyxl")
+        
         try:
             df = pd.DataFrame(data)
             df.to_excel(filepath, index=False, engine='openpyxl')
@@ -73,6 +83,19 @@ class ReportExporter:
             filename += '.csv'
         
         filepath = self.exports_dir / filename
+        
+        if not PANDAS_AVAILABLE:
+            # Fallback: CSV simples sem pandas
+            import csv
+            if data:
+                with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.DictWriter(f, fieldnames=data[0].keys())
+                    writer.writeheader()
+                    writer.writerows(data)
+                logger.info(f"Relatório CSV exportado (sem pandas): {filepath}")
+                return filepath
+            else:
+                raise ValueError("Nenhum dado para exportar")
         
         try:
             df = pd.DataFrame(data)
