@@ -17,14 +17,17 @@ except ImportError:
     logger.warning("bcrypt não disponível, usando passlib")
 
 try:
-    from jose import JWTError, jwt
+    from jose import JWTError, jwt as jose_jwt
     JWT_AVAILABLE = True
+    JWT_LIB = "jose"
 except ImportError:
     try:
         import jwt as pyjwt
         JWT_AVAILABLE = True
+        JWT_LIB = "pyjwt"
     except ImportError:
         JWT_AVAILABLE = False
+        JWT_LIB = None
         logger.warning("JWT não disponível")
 
 from config import settings
@@ -91,12 +94,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     
     to_encode.update({"exp": expire})
     
-    try:
-        from jose import jwt as jose_jwt
+    if JWT_LIB == "jose":
         encoded_jwt = jose_jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    except ImportError:
+    elif JWT_LIB == "pyjwt":
         import jwt as pyjwt
         encoded_jwt = pyjwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    else:
+        raise Exception("JWT não disponível")
     
     return encoded_jwt
 
@@ -136,12 +140,13 @@ def get_current_user(db: Session, token: str):
         if not JWT_AVAILABLE:
             raise Exception("JWT não disponível")
         
-        try:
-            from jose import jwt as jose_jwt
+        if JWT_LIB == "jose":
             payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        except ImportError:
+        elif JWT_LIB == "pyjwt":
             import jwt as pyjwt
             payload = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        else:
+            raise Exception("JWT não disponível")
         
         email: str = payload.get("sub")
         if email is None:
