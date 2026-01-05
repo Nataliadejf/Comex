@@ -9,14 +9,62 @@ const api = axios.create({
   },
 });
 
+// Interceptor para adicionar token em todas as requisições
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 // Interceptor para tratamento de erros
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Verificar se a resposta é HTML ao invés de JSON
+    const contentType = response.headers['content-type'] || '';
+    if (contentType.includes('text/html')) {
+      console.error('❌ Erro: API retornou HTML ao invés de JSON. Possível erro do servidor.');
+      return Promise.reject(new Error('Servidor retornou HTML ao invés de JSON. Verifique se o backend está rodando corretamente.'));
+    }
+    
+    // Verificar se o body parece ser HTML
+    if (typeof response.data === 'string' && response.data.trim().startsWith('<!')) {
+      console.error('❌ Erro: Resposta parece ser HTML:', response.data.substring(0, 200));
+      return Promise.reject(new Error('Servidor retornou HTML ao invés de JSON. Verifique a URL da API e se o backend está rodando.'));
+    }
+    
+    return response;
+  },
   (error) => {
     if (error.response) {
+      // Verificar se o erro é HTML
+      const contentType = error.response.headers['content-type'] || '';
+      if (contentType.includes('text/html') || 
+          (typeof error.response.data === 'string' && error.response.data.trim().startsWith('<!'))) {
+        console.error('❌ Erro: API retornou HTML de erro:', error.response.data.substring(0, 200));
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+        return Promise.reject(new Error(`Servidor retornou HTML ao invés de JSON. Verifique se o backend está rodando em ${apiUrl}`));
+      }
+      
+      // Se receber 401 (não autorizado), redirecionar para login
+      if (error.response.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+        return Promise.reject(error);
+      }
+      
       console.error('Erro da API:', error.response.data);
     } else if (error.request) {
-      console.error('Erro de conexão:', error.request);
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+      console.error('❌ Erro de conexão: Não foi possível conectar ao backend em', apiUrl);
+      console.error('Verifique se o backend está rodando e acessível.');
     } else {
       console.error('Erro:', error.message);
     }
@@ -26,27 +74,103 @@ api.interceptors.response.use(
 
 export default api;
 
+// Função auxiliar para verificar se backend está acessível
+const checkBackendHealth = async () => {
+  try {
+    const healthResponse = await api.get('/health', { timeout: 3000 });
+    return healthResponse.data?.status === 'healthy';
+  } catch (error) {
+    console.warn('⚠️ Backend health check falhou:', error.message);
+    return false;
+  }
+};
+
 // Endpoints
 export const dashboardAPI = {
-  getStats: (meses = 3, tipoOperacao = null, ncm = null, empresa = null, ncms = null) => {
-    const params = new URLSearchParams({ meses: meses.toString() });
-    if (tipoOperacao) params.append('tipo_operacao', tipoOperacao);
-    if (ncm) params.append('ncm', ncm);
-    if (empresa) params.append('empresa', empresa);
-    if (ncms) params.append('ncms', ncms); // Múltiplos NCMs separados por vírgula
-    return api.get(`/dashboard/stats?${params.toString()}`);
-  },
-  exportRelatorio: (meses = 3, tipoOperacao = null, ncm = null, empresa = null, formato = 'excel') => {
-    const params = new URLSearchParams({ meses: meses.toString(), formato });
-    if (tipoOperacao) params.append('tipo_operacao', tipoOperacao);
-    if (ncm) params.append('ncm', ncm);
-    if (empresa) params.append('empresa', empresa);
-    return api.get(`/dashboard/export?${params.toString()}`, { responseType: 'blob' });
+  getStats: async (paramsObj = {}) => {
+    try {
+      // Sempre usar objeto de parâmetros
+      const params = paramsObj || {};
+
+      // Verificar saúde do backend primeiro
+      const isHealthy = await checkBackendHealth();
+      if (!isHealthy) {
+        throw new Error(`Backend não está acessível em ${API_BASE_URL}. Verifique se o servidor está rodando.`);
+      }
+
+      const urlParams = new URLSearchParams();
+      urlParams.append('meses', params.meses || 24);
+      if (params.tipoOperacao) urlParams.append('tipo_operacao', params.tipoOperacao);
+      if (params.ncm) urlParams.append('ncm', params.ncm);
+      if (params.ncms && Array.isArray(params.ncms)) {
+        params.ncms.forEach(ncm => urlParams.append('ncms', ncm));
+      }
+      
+      const url = `/dashboard/stats?${urlParams.toString()}`;
+      console.log('🔗 Fazendo requisição para:', `${API_BASE_URL}${url}`);
+      
+      const response = await api.get(url, {
+        timeout: 10000,
+        validateStatus: (status) => status < 500, // Aceitar até 499 sem lançar erro
+      });
+      
+      // Verificar status HTTP
+      if (response.status >= 400) {
+        // Se retornou HTML em caso de erro
+        if (typeof response.data === 'string' && response.data.trim().startsWith('<!')) {
+          throw new Error(`Erro ${response.status}: Servidor retornou HTML. Verifique os logs do backend.`);
+        }
+        throw new Error(`Erro ${response.status}: ${response.data?.detail || response.data || response.statusText}`);
+      }
+      
+      // Validar resposta
+      if (!response || !response.data) {
+        throw new Error('Resposta vazia do servidor');
+      }
+      
+      // Verificar se não é HTML
+      if (typeof response.data === 'string' && response.data.trim().startsWith('<!')) {
+        console.error('❌ Resposta HTML recebida:', response.data.substring(0, 300));
+        throw new Error('Servidor retornou HTML ao invés de JSON. Verifique se o backend está rodando corretamente.');
+      }
+      
+      console.log('✅ Resposta válida recebida');
+      return response;
+    } catch (error) {
+      console.error('❌ Erro na requisição:', error);
+      
+      // Melhorar mensagem de erro
+      if (error.message.includes('Network Error') || error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED') {
+        const apiUrl = API_BASE_URL;
+        throw new Error(`Não foi possível conectar ao backend em ${apiUrl}. Verifique se o servidor está rodando.`);
+      }
+      
+      if (error.message.includes('timeout')) {
+        throw new Error('Timeout ao conectar ao backend. O servidor pode estar sobrecarregado.');
+      }
+      
+      throw error;
+    }
   },
 };
 
 export const buscaAPI = {
-  buscar: (filtros) => api.post('/buscar', filtros),
+  buscar: (filtros) => {
+    // Converter NCM único para lista se necessário
+    const filtrosProcessados = { ...filtros };
+    if (filtrosProcessados.ncm && !filtrosProcessados.ncms) {
+      filtrosProcessados.ncms = [filtrosProcessados.ncm];
+      delete filtrosProcessados.ncm;
+    }
+    return api.post('/buscar', filtrosProcessados);
+  },
+};
+
+export const empresasAPI = {
+  autocompleteImportadoras: (query, limit = 20) => 
+    api.get(`/empresas/autocomplete/importadoras?q=${encodeURIComponent(query)}&limit=${limit}`),
+  autocompleteExportadoras: (query, limit = 20) => 
+    api.get(`/empresas/autocomplete/exportadoras?q=${encodeURIComponent(query)}&limit=${limit}`),
 };
 
 export const ncmAPI = {
@@ -59,13 +183,5 @@ export const coletaAPI = {
 
 export const healthAPI = {
   check: () => api.get('/health'),
-};
-
-export const empresasAPI = {
-  autocomplete: (q, limit = 10) => api.get(`/empresas/autocomplete?q=${encodeURIComponent(q)}&limit=${limit}`),
-};
-
-export const ncmsAPI = {
-  verificar: (ncms) => api.get(`/ncms/verificar?ncms=${encodeURIComponent(ncms)}`),
 };
 

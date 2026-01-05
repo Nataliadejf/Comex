@@ -43,20 +43,23 @@ class DataScheduler:
             logger.warning("Agendador já está em execução")
             return
         
-        # Agendar coleta diária
-        schedule.every(settings.update_interval_hours).hours.do(
+        # Agendar coleta diária às 02:00 da manhã
+        schedule.every().day.at("02:00").do(
             lambda: asyncio.run(self._collect_data_task())
         )
         
         self.running = True
-        logger.info(
-            f"Agendador iniciado: coleta a cada {settings.update_interval_hours} horas"
-        )
+        logger.info("Agendador iniciado: coleta diária às 02:00")
         
-        # Executar loop do agendador
-        while self.running:
-            schedule.run_pending()
-            time.sleep(60)  # Verificar a cada minuto
+        # Executar loop do agendador em thread separada
+        import threading
+        def run_scheduler():
+            while self.running:
+                schedule.run_pending()
+                time.sleep(60)  # Verificar a cada minuto
+        
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
     
     def stop(self):
         """Para o agendador."""

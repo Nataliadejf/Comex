@@ -48,30 +48,19 @@ class OperacaoComex(Base):
         SQLEnum(TipoOperacao),
         nullable=False,
         index=True,
-        comment="Tipo de operação: Importação ou Exportação"
-    )
-    
-    # Identificação clara de importador/exportador
-    is_importacao = Column(
-        String(1),
-        nullable=False,
-        default='N',
-        index=True,
-        comment="S=Sim, N=Não - Identifica se é importação"
-    )
-    
-    is_exportacao = Column(
-        String(1),
-        nullable=False,
-        default='N',
-        index=True,
-        comment="S=Sim, N=Não - Identifica se é exportação"
+        comment="Tipo de operação"
     )
     
     # Localização
     pais_origem_destino = Column(String(100), nullable=False, index=True)
     uf = Column(String(2), nullable=False, index=True, comment="Unidade Federativa")
     porto_aeroporto = Column(String(100), nullable=True, comment="Porto/Aeroporto")
+    
+    # Empresa (Importador/Exportador)
+    razao_social_importador = Column(String(255), nullable=True, index=True, comment="Razão social do importador")
+    razao_social_exportador = Column(String(255), nullable=True, index=True, comment="Razão social do exportador")
+    cnpj_importador = Column(String(14), nullable=True, index=True, comment="CNPJ do importador")
+    cnpj_exportador = Column(String(14), nullable=True, index=True, comment="CNPJ do exportador")
     
     # Transporte
     via_transporte = Column(
@@ -100,9 +89,6 @@ class OperacaoComex(Base):
         comment="Data de importação dos dados"
     )
     
-    # Empresa (Importador/Exportador)
-    nome_empresa = Column(String(255), nullable=True, index=True, comment="Nome da empresa importadora/exportadora")
-    
     # Metadados
     mes_referencia = Column(String(7), nullable=False, index=True, comment="YYYY-MM")
     arquivo_origem = Column(String(255), nullable=True, comment="Arquivo de origem")
@@ -113,6 +99,8 @@ class OperacaoComex(Base):
         Index('idx_pais_tipo_data', 'pais_origem_destino', 'tipo_operacao', 'data_operacao'),
         Index('idx_uf_tipo_data', 'uf', 'tipo_operacao', 'data_operacao'),
         Index('idx_mes_tipo', 'mes_referencia', 'tipo_operacao'),
+        Index('idx_importador', 'razao_social_importador', 'tipo_operacao'),
+        Index('idx_exportador', 'razao_social_exportador', 'tipo_operacao'),
     )
     
     def __repr__(self):
@@ -159,49 +147,4 @@ class ColetaLog(Base):
             f"<ColetaLog(id={self.id}, mes={self.mes_referencia}, "
             f"status={self.status}, registros={self.registros_coletados})>"
         )
-
-
-class Usuario(Base):
-    """
-    Modelo de usuário para autenticação.
-    """
-    __tablename__ = "usuarios"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String(255), unique=True, nullable=False, index=True)  # Email é o login
-    senha_hash = Column(String(255), nullable=False)  # Hash da senha (bcrypt)
-    nome_completo = Column(String(255), nullable=False)
-    data_nascimento = Column(Date, nullable=True)
-    nome_empresa = Column(String(255), nullable=True)
-    cpf = Column(String(14), nullable=True, index=True)  # CPF formatado: 000.000.000-00
-    cnpj = Column(String(18), nullable=True, index=True)  # CNPJ formatado: 00.000.000/0000-00
-    status_aprovacao = Column(String(20), default="pendente", nullable=False)  # pendente, aprovado, rejeitado
-    ativo = Column(Integer, default=0, nullable=False)  # 0=inativo (aguardando aprovação), 1=ativo
-    data_criacao = Column(DateTime, default=datetime.utcnow, nullable=False)
-    data_aprovacao = Column(DateTime, nullable=True)
-    aprovado_por = Column(String(255), nullable=True)  # Email do admin que aprovou
-    ultimo_login = Column(DateTime, nullable=True)
-    
-    def __repr__(self):
-        return f"<Usuario(id={self.id}, email={self.email}, status={self.status_aprovacao})>"
-
-
-class AprovacaoCadastro(Base):
-    """
-    Log de aprovações de cadastro.
-    """
-    __tablename__ = "aprovacoes_cadastro"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    usuario_id = Column(Integer, ForeignKey('usuarios.id'), nullable=False)
-    token_aprovacao = Column(String(255), unique=True, nullable=False, index=True)
-    email_destino = Column(String(255), nullable=False)
-    status = Column(String(20), default="pendente", nullable=False)  # pendente, aprovado, rejeitado, expirado
-    data_solicitacao = Column(DateTime, default=datetime.utcnow, nullable=False)
-    data_aprovacao = Column(DateTime, nullable=True)
-    data_expiracao = Column(DateTime, nullable=False)
-    aprovado_por = Column(String(255), nullable=True)
-    
-    def __repr__(self):
-        return f"<AprovacaoCadastro(id={self.id}, usuario_id={self.usuario_id}, status={self.status})>"
 

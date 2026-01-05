@@ -21,13 +21,7 @@ class ComexStatAPIClient:
         
     def is_available(self) -> bool:
         """Verifica se a API está disponível."""
-        # API pode funcionar sem API key em alguns casos
-        disponivel = self.base_url is not None
-        if disponivel:
-            logger.info(f"API configurada: {self.base_url}")
-        else:
-            logger.warning("API não configurada: COMEX_STAT_API_URL não definido")
-        return disponivel
+        return self.base_url is not None and self.api_key is not None
     
     async def test_connection(self) -> bool:
         """
@@ -39,7 +33,8 @@ class ComexStatAPIClient:
             return False
         
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # Desabilitar verificação SSL para desenvolvimento (pode ser necessário)
+            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
                 # Tentar endpoint de health check ou similar
                 response = await client.get(f"{self.base_url}/health")
                 if response.status_code == 200:
@@ -94,36 +89,21 @@ class ComexStatAPIClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         
-        url_completa = f"{self.base_url}/dados"
-        logger.info(f"Buscando dados da API: {url_completa}")
-        logger.info(f"Parâmetros: {params}")
-        
         try:
             async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
                 response = await client.get(
-                    url_completa,
+                    f"{self.base_url}/dados",
                     params=params,
                     headers=headers
                 )
-                logger.info(f"Status da resposta: {response.status_code}")
-                
-                if response.status_code != 200:
-                    logger.warning(f"API retornou status {response.status_code}: {response.text[:200]}")
-                    return []
-                
                 response.raise_for_status()
                 data = response.json()
                 
-                registros = data.get("registros", [])
-                if isinstance(data, list):
-                    # Se a resposta é uma lista direta
-                    registros = data
-                
                 logger.info(
-                    f"Dados coletados via API: {len(registros)} registros"
+                    f"Dados coletados via API: {len(data.get('registros', []))} registros"
                 )
                 
-                return registros
+                return data.get("registros", [])
         
         except httpx.HTTPError as e:
             logger.error(f"Erro HTTP ao buscar dados da API: {e}")
@@ -141,7 +121,7 @@ class ComexStatAPIClient:
             return []
         
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
                 headers = {}
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"

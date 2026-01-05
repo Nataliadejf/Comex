@@ -41,10 +41,13 @@ class ComexStatScraper:
     
     def __init__(self):
         self.data_dir = settings.data_dir / "raw"
-        self.driver: Optional[webdriver.Chrome] = None
+        self.driver: Optional[Any] = None
         
     def _init_driver(self):
         """Inicializa o driver do Selenium."""
+        if not SELENIUM_AVAILABLE:
+            raise RuntimeError("Selenium não está disponível")
+        
         if self.driver is not None:
             return
         

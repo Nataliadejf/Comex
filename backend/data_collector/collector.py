@@ -162,11 +162,12 @@ class DataCollector:
                 stats["erros"].append(error_msg)
     
     def _get_months_to_fetch(self) -> List[str]:
-        """Retorna lista de meses dos últimos N meses."""
+        """Retorna lista de meses dos últimos 2 anos (24 meses)."""
         months = []
         today = datetime.now()
         
-        for i in range(settings.months_to_fetch):
+        # Buscar últimos 24 meses (2 anos)
+        for i in range(24):
             month_date = today - timedelta(days=30 * i)
             months.append(month_date.strftime("%Y-%m"))
         

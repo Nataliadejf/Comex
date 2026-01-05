@@ -43,6 +43,15 @@ async def startup_event():
     """Inicializa o banco de dados na startup."""
     init_db()
     logger.info("Banco de dados inicializado")
+    
+    # Iniciar scheduler para atualização diária
+    try:
+        from utils.scheduler import DataScheduler
+        scheduler = DataScheduler()
+        scheduler.start()
+        logger.info("Scheduler de atualização diária iniciado")
+    except Exception as e:
+        logger.warning(f"Não foi possível iniciar scheduler: {e}")
 
 
 # Schemas Pydantic
@@ -66,14 +75,19 @@ class DashboardStats(BaseModel):
     volume_importacoes: float
     volume_exportacoes: float
     valor_total_usd: float
+    valor_total_importacoes: Optional[float] = None  # Valor total de importações
+    valor_total_exportacoes: Optional[float] = None  # Valor total de exportações
     principais_ncms: List[dict]
     principais_paises: List[dict]
     registros_por_mes: dict
+    valores_por_mes: Optional[dict] = None  # Valores FOB por mês
+    pesos_por_mes: Optional[dict] = None  # Pesos por mês
 
 
 class BuscaFiltros(BaseModel):
     """Filtros de busca."""
-    ncm: Optional[str] = None
+    ncms: Optional[List[str]] = None  # Lista de NCMs
+    ncm: Optional[str] = None  # Mantido para compatibilidade
     data_inicio: Optional[date] = None
     data_fim: Optional[date] = None
     tipo_operacao: Optional[str] = None
@@ -84,6 +98,8 @@ class BuscaFiltros(BaseModel):
     valor_fob_max: Optional[float] = None
     peso_min: Optional[float] = None
     peso_max: Optional[float] = None
+    empresa_importadora: Optional[str] = None
+    empresa_exportadora: Optional[str] = None
     page: int = 1
     page_size: int = 100
 
@@ -132,37 +148,109 @@ async def coletar_dados(db: Session = Depends(get_db)):
 
 @app.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
-    meses: int = Query(default=3, ge=1, le=12),
+    meses: int = Query(default=24, ge=1, le=24),  # Padrão: 2 anos
+    tipo_operacao: Optional[str] = Query(default=None),
+    ncm: Optional[str] = Query(default=None),
+    ncms: Optional[List[str]] = Query(default=None),  # Múltiplos NCMs
+    empresa_importadora: Optional[str] = Query(default=None),
+    empresa_exportadora: Optional[str] = Query(default=None),
     db: Session = Depends(get_db)
 ):
     """
     Retorna estatísticas para o dashboard.
+    Por padrão busca últimos 2 anos (24 meses).
     """
-    from sqlalchemy import func, and_
+    from sqlalchemy import func, and_, or_
     from datetime import datetime, timedelta
     
-    # Calcular data inicial
+    # Calcular data inicial (padrão: 2 anos)
     data_inicio = datetime.now() - timedelta(days=30 * meses)
     
-    # Volume de importações e exportações
-    volume_imp = db.query(func.sum(OperacaoComex.peso_liquido_kg)).filter(
-        and_(
-            OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
-            OperacaoComex.data_operacao >= data_inicio.date()
-        )
-    ).scalar() or 0.0
+    # Construir filtros base
+    base_filters = [OperacaoComex.data_operacao >= data_inicio.date()]
     
-    volume_exp = db.query(func.sum(OperacaoComex.peso_liquido_kg)).filter(
-        and_(
-            OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
-            OperacaoComex.data_operacao >= data_inicio.date()
+    # Aplicar filtro de NCMs (múltiplos ou único)
+    ncms_filtro = []
+    if ncms:
+        for ncm_item in ncms:
+            ncm_limpo = ncm_item.replace('.', '').replace(' ', '').strip()
+            if len(ncm_limpo) == 8 and ncm_limpo.isdigit():
+                ncms_filtro.append(ncm_limpo)
+    elif ncm:
+        ncm_limpo = ncm.replace('.', '').replace(' ', '').strip()
+        if len(ncm_limpo) == 8 and ncm_limpo.isdigit():
+            ncms_filtro.append(ncm_limpo)
+    
+    if ncms_filtro:
+        if len(ncms_filtro) == 1:
+            base_filters.append(OperacaoComex.ncm == ncms_filtro[0])
+        else:
+            base_filters.append(OperacaoComex.ncm.in_(ncms_filtro))
+    
+    # Aplicar filtros de empresa
+    if empresa_importadora:
+        base_filters.append(
+            OperacaoComex.razao_social_importador.ilike(f"%{empresa_importadora}%")
         )
-    ).scalar() or 0.0
+    
+    if empresa_exportadora:
+        base_filters.append(
+            OperacaoComex.razao_social_exportador.ilike(f"%{empresa_exportadora}%")
+        )
+    
+    # Aplicar filtro de tipo de operação se fornecido
+    tipo_filtro = None
+    if tipo_operacao:
+        if tipo_operacao.lower() == "importação" or tipo_operacao.lower() == "importacao":
+            tipo_filtro = TipoOperacao.IMPORTACAO
+        elif tipo_operacao.lower() == "exportação" or tipo_operacao.lower() == "exportacao":
+            tipo_filtro = TipoOperacao.EXPORTACAO
+    
+    # Volume de importações e exportações
+    filtros_imp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO]
+    if tipo_filtro == TipoOperacao.IMPORTACAO or tipo_filtro is None:
+        volume_imp = db.query(func.sum(OperacaoComex.peso_liquido_kg)).filter(
+            and_(*filtros_imp)
+        ).scalar() or 0.0
+    else:
+        volume_imp = 0.0
+    
+    filtros_exp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO]
+    if tipo_filtro == TipoOperacao.EXPORTACAO or tipo_filtro is None:
+        volume_exp = db.query(func.sum(OperacaoComex.peso_liquido_kg)).filter(
+            and_(*filtros_exp)
+        ).scalar() or 0.0
+    else:
+        volume_exp = 0.0
     
     # Valor total movimentado
+    if tipo_filtro:
+        filtros_valor = base_filters + [OperacaoComex.tipo_operacao == tipo_filtro]
+    else:
+        filtros_valor = base_filters
+    
     valor_total = db.query(func.sum(OperacaoComex.valor_fob)).filter(
-        OperacaoComex.data_operacao >= data_inicio.date()
+        and_(*filtros_valor)
     ).scalar() or 0.0
+    
+    # Valores separados por tipo de operação (se não houver filtro de tipo)
+    valor_total_imp = 0.0
+    valor_total_exp = 0.0
+    if tipo_filtro is None:
+        # Calcular valores separados apenas se não houver filtro de tipo
+        filtros_valor_imp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO]
+        valor_total_imp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
+            and_(*filtros_valor_imp)
+        ).scalar() or 0.0
+        
+        filtros_valor_exp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO]
+        valor_total_exp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
+            and_(*filtros_valor_exp)
+        ).scalar() or 0.0
+    elif tipo_filtro == TipoOperacao.IMPORTACAO:
+        valor_total_imp = valor_total
+    elif tipo_filtro == TipoOperacao.EXPORTACAO:
+        valor_total_exp = valor_total
     
     # Principais NCMs
     principais_ncms = db.query(
@@ -171,7 +259,7 @@ async def get_dashboard_stats(
         func.sum(OperacaoComex.valor_fob).label('total_valor'),
         func.count(OperacaoComex.id).label('total_operacoes')
     ).filter(
-        OperacaoComex.data_operacao >= data_inicio.date()
+        and_(*filtros_valor)
     ).group_by(
         OperacaoComex.ncm,
         OperacaoComex.descricao_produto
@@ -195,7 +283,7 @@ async def get_dashboard_stats(
         func.sum(OperacaoComex.valor_fob).label('total_valor'),
         func.count(OperacaoComex.id).label('total_operacoes')
     ).filter(
-        OperacaoComex.data_operacao >= data_inicio.date()
+        and_(*filtros_valor)
     ).group_by(
         OperacaoComex.pais_origem_destino
     ).order_by(
@@ -211,12 +299,14 @@ async def get_dashboard_stats(
         for pais, total_valor, total_operacoes in principais_paises
     ]
     
-    # Registros por mês
-    registros_por_mes = db.query(
+    # Registros por mês com valores FOB e peso
+    registros_por_mes_query = db.query(
         OperacaoComex.mes_referencia,
-        func.count(OperacaoComex.id).label('count')
+        func.count(OperacaoComex.id).label('count'),
+        func.sum(OperacaoComex.valor_fob).label('valor_total'),
+        func.sum(OperacaoComex.peso_liquido_kg).label('peso_total')
     ).filter(
-        OperacaoComex.data_operacao >= data_inicio.date()
+        and_(*filtros_valor)
     ).group_by(
         OperacaoComex.mes_referencia
     ).order_by(
@@ -224,17 +314,33 @@ async def get_dashboard_stats(
     ).all()
     
     registros_dict = {
-        mes: count for mes, count in registros_por_mes
+        mes: count for mes, count, _, _ in registros_por_mes_query
     }
     
-    return DashboardStats(
+    valores_por_mes_dict = {
+        mes: float(valor_total) if valor_total else 0.0
+        for mes, _, valor_total, _ in registros_por_mes_query
+    }
+    
+    pesos_por_mes_dict = {
+        mes: float(peso_total) if peso_total else 0.0
+        for mes, _, _, peso_total in registros_por_mes_query
+    }
+    
+    stats_response = DashboardStats(
         volume_importacoes=float(volume_imp),
         volume_exportacoes=float(volume_exp),
         valor_total_usd=float(valor_total),
+        valor_total_importacoes=float(valor_total_imp) if valor_total_imp else None,
+        valor_total_exportacoes=float(valor_total_exp) if valor_total_exp else None,
         principais_ncms=principais_ncms_list,
         principais_paises=principais_paises_list,
-        registros_por_mes=registros_dict
+        registros_por_mes=registros_dict,
+        valores_por_mes=valores_por_mes_dict if valores_por_mes_dict else {},
+        pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {}
     )
+    
+    return stats_response
 
 
 @app.post("/buscar")
@@ -244,22 +350,41 @@ async def buscar_operacoes(
 ):
     """
     Busca operações com filtros avançados.
+    Por padrão, busca dados dos últimos 2 anos se não especificar datas.
     """
     from sqlalchemy import and_, or_
+    from datetime import datetime, timedelta
     
     query = db.query(OperacaoComex)
     
     # Aplicar filtros
     conditions = []
     
-    if filtros.ncm:
-        conditions.append(OperacaoComex.ncm == filtros.ncm)
+    # Filtro de NCMs (múltiplos)
+    ncms_filtro = []
+    if filtros.ncms:
+        # Limpar e validar NCMs
+        for ncm in filtros.ncms:
+            ncm_limpo = ncm.replace('.', '').replace(' ', '').strip()
+            if len(ncm_limpo) == 8 and ncm_limpo.isdigit():
+                ncms_filtro.append(ncm_limpo)
+    elif filtros.ncm:
+        # Compatibilidade: aceitar NCM único também
+        ncm_limpo = filtros.ncm.replace('.', '').replace(' ', '').strip()
+        if len(ncm_limpo) == 8 and ncm_limpo.isdigit():
+            ncms_filtro.append(ncm_limpo)
     
-    if filtros.data_inicio:
-        conditions.append(OperacaoComex.data_operacao >= filtros.data_inicio)
+    if ncms_filtro:
+        conditions.append(OperacaoComex.ncm.in_(ncms_filtro))
     
-    if filtros.data_fim:
-        conditions.append(OperacaoComex.data_operacao <= filtros.data_fim)
+    # Por padrão, buscar últimos 2 anos se não especificar datas
+    if not filtros.data_inicio:
+        filtros.data_inicio = (datetime.now() - timedelta(days=730)).date()
+    if not filtros.data_fim:
+        filtros.data_fim = datetime.now().date()
+    
+    conditions.append(OperacaoComex.data_operacao >= filtros.data_inicio)
+    conditions.append(OperacaoComex.data_operacao <= filtros.data_fim)
     
     if filtros.tipo_operacao:
         tipo = TipoOperacao.IMPORTACAO if filtros.tipo_operacao == "Importação" else TipoOperacao.EXPORTACAO
@@ -274,6 +399,17 @@ async def buscar_operacoes(
     if filtros.via_transporte:
         via = ViaTransporte[filtros.via_transporte.upper()]
         conditions.append(OperacaoComex.via_transporte == via)
+    
+    # Filtros de empresa
+    if filtros.empresa_importadora:
+        conditions.append(
+            OperacaoComex.razao_social_importador.ilike(f"%{filtros.empresa_importadora}%")
+        )
+    
+    if filtros.empresa_exportadora:
+        conditions.append(
+            OperacaoComex.razao_social_exportador.ilike(f"%{filtros.empresa_exportadora}%")
+        )
     
     if filtros.valor_fob_min:
         conditions.append(OperacaoComex.valor_fob >= filtros.valor_fob_min)
@@ -313,11 +449,86 @@ async def buscar_operacoes(
                 "pais_origem_destino": op.pais_origem_destino,
                 "uf": op.uf,
                 "valor_fob": op.valor_fob,
+                "peso_liquido_kg": op.peso_liquido_kg,
                 "data_operacao": op.data_operacao.isoformat(),
+                "razao_social_importador": op.razao_social_importador,
+                "razao_social_exportador": op.razao_social_exportador,
             }
             for op in operacoes
         ]
     }
+
+
+@app.get("/empresas/autocomplete/importadoras")
+async def autocomplete_importadoras(
+    q: str = Query(..., min_length=2, description="Termo de busca"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """
+    Autocomplete para empresas importadoras.
+    """
+    from sqlalchemy import func, distinct
+    
+    empresas = db.query(
+        distinct(OperacaoComex.razao_social_importador).label('empresa'),
+        func.count(OperacaoComex.id).label('total_operacoes'),
+        func.sum(OperacaoComex.valor_fob).label('valor_total')
+    ).filter(
+        OperacaoComex.razao_social_importador.isnot(None),
+        OperacaoComex.razao_social_importador != '',
+        OperacaoComex.razao_social_importador.ilike(f"%{q}%"),
+        OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO
+    ).group_by(
+        OperacaoComex.razao_social_importador
+    ).order_by(
+        func.sum(OperacaoComex.valor_fob).desc()
+    ).limit(limit).all()
+    
+    return [
+        {
+            "nome": empresa,
+            "total_operacoes": total_operacoes,
+            "valor_total": float(valor_total or 0)
+        }
+        for empresa, total_operacoes, valor_total in empresas
+    ]
+
+
+@app.get("/empresas/autocomplete/exportadoras")
+async def autocomplete_exportadoras(
+    q: str = Query(..., min_length=2, description="Termo de busca"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """
+    Autocomplete para empresas exportadoras.
+    """
+    from sqlalchemy import func, distinct
+    
+    empresas = db.query(
+        distinct(OperacaoComex.razao_social_exportador).label('empresa'),
+        func.count(OperacaoComex.id).label('total_operacoes'),
+        func.sum(OperacaoComex.valor_fob).label('valor_total')
+    ).filter(
+        OperacaoComex.razao_social_exportador.isnot(None),
+        OperacaoComex.razao_social_exportador != '',
+        OperacaoComex.razao_social_exportador.ilike(f"%{q}%"),
+        OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO
+    ).group_by(
+        OperacaoComex.razao_social_exportador
+    ).order_by(
+        func.sum(OperacaoComex.valor_fob).desc()
+    ).limit(limit).all()
+    
+    return [
+        {
+            "nome": empresa,
+            "total_operacoes": total_operacoes,
+            "valor_total": float(valor_total or 0)
+        }
+        for empresa, total_operacoes, valor_total in empresas
+    ]
 
 
 @app.get("/ncm/{ncm}/analise")

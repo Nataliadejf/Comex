@@ -6,28 +6,29 @@ services:
   - type: web
     name: comex-backend
     env: python
-    region: oregon  # ou: frankfurt, singapore, mumbai, sydney
-    plan: free  # ou: starter, standard, pro
+    region: oregon
+    plan: free
     buildCommand: pip install --upgrade pip && pip install -r backend/requirements-render-ultra-minimal.txt
     startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
-    rootDir: .  # Raiz do repositório
+    rootDir: .
     healthCheckPath: /health
     envVars:
-      # Database - Será preenchido automaticamente se você criar um PostgreSQL
+      # Database - Configure manualmente no Render Dashboard após criar PostgreSQL
       - key: DATABASE_URL
-        sync: false  # Você precisa configurar manualmente no Render Dashboard
+        sync: false
       
-      # API Externa Comex Stat (opcional)
+      # API Externa Comex Stat
       - key: COMEX_STAT_API_URL
         value: https://comexstat.mdic.gov.br
         sync: false
       
       - key: COMEX_STAT_API_KEY
-        sync: false  # Configure se tiver chave de API
+        value: ""
+        sync: false
       
-      # Secret Key para JWT (gere uma chave aleatória)
+      # Secret Key para JWT
       - key: SECRET_KEY
-        generateValue: true  # Render gera automaticamente
+        generateValue: true
       
       # Ambiente
       - key: ENVIRONMENT
@@ -40,10 +41,6 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
-  # Banco de Dados PostgreSQL (opcional - descomente se quiser criar via YAML)
-  # - type: pspg
-  #   name: comex-database
-  #   plan: free
-  #   databaseName: comex_db
-  #   user: comex_user
+
+
 

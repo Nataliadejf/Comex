@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from loguru import logger
 
 
 class Settings(BaseSettings):
@@ -16,12 +15,15 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", alias="ENVIRONMENT")
     debug: bool = Field(default=True, alias="DEBUG")
     
-    # Diretório de dados
-    data_dir: Path = Field(default=Path("D:/NatFranca"), alias="DATA_DIR")
+    # Diretório de dados (relativo ao projeto)
+    data_dir: Path = Field(
+        default=Path(__file__).parent.parent / "comex_data",
+        alias="DATA_DIR"
+    )
     
-    # Database
-    database_url: str = Field(
-        default="sqlite:///D:/NatFranca/database/comex.db",
+    # Database (será construído dinamicamente se não definido)
+    database_url: Optional[str] = Field(
+        default="",  # Será construído dinamicamente
         alias="DATABASE_URL"
     )
     
@@ -43,41 +45,37 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    log_dir: Path = Field(default=Path("D:/comex_data/logs"), alias="LOG_DIR")
-    
-    # Email Configuration
-    email_smtp_server: str = Field(default="smtp.gmail.com", alias="EMAIL_SMTP_SERVER")
-    email_smtp_port: int = Field(default=587, alias="EMAIL_SMTP_PORT")
-    email_sender: str = Field(default="nataliadejesus2@gmail.com", alias="EMAIL_SENDER")
-    email_sender_password: str = Field(default="", alias="EMAIL_SENDER_PASSWORD")
-    email_admin: str = Field(default="nataliadejesus2@gmail.com", alias="EMAIL_ADMIN")
-    app_url: str = Field(default="http://localhost:3000", alias="APP_URL")
-    
-    # SSL Configuration
-    ssl_verify: bool = Field(default=True, alias="SSL_VERIFY")
+    log_dir: Optional[Path] = Field(
+        default=Path(__file__).parent.parent / "comex_data" / "logs",
+        alias="LOG_DIR"
+    )
     
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
-        extra = "ignore"  # Ignorar campos extras no .env
         
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        
+        # Configurar caminhos relativos se não foram definidos via env
+        if str(self.data_dir) == "D:/comex_data" or "D:/" in str(self.data_dir):
+            self.data_dir = Path(__file__).parent.parent / "comex_data"
+        
+        # Configurar database_url se não foi definido ou contém D:/
+        if not self.database_url or "D:/comex_data" in str(self.database_url) or "D:/" in str(self.database_url):
+            db_path = self.data_dir / "database" / "comex.db"
+            self.database_url = f"sqlite:///{db_path.absolute()}"
+        
+        # Configurar log_dir se contém D:/
+        if "D:/comex_data" in str(self.log_dir) or "D:/" in str(self.log_dir):
+            self.log_dir = self.data_dir / "logs"
+        
         # Criar diretórios necessários
         self._create_directories()
     
     def _create_directories(self):
         """Cria os diretórios necessários se não existirem."""
-        # Verificar se o diretório base existe, senão usar fallback
-        if not Path(self.data_dir.parts[0]).exists():
-            # Se o drive não existe, usar diretório do projeto
-            project_dir = Path(__file__).parent.parent.parent / "data"
-            self.data_dir = project_dir
-            self.database_url = f"sqlite:///{project_dir / 'database' / 'comex.db'}"
-            self.log_dir = project_dir / "logs"
-            logger.warning(f"Drive {self.data_dir.parts[0]} não encontrado. Usando: {self.data_dir}")
-        
         directories = [
             self.data_dir,
             self.data_dir / "raw",
@@ -87,16 +85,44 @@ class Settings(BaseSettings):
             self.log_dir,
         ]
         
+        # Tenta criar todos os diretórios
+        failed = False
         for directory in directories:
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                logger.error(f"Erro ao criar diretório {directory}: {e}")
-                # Tentar criar em local alternativo
-                if "D:" in str(directory):
-                    alt_dir = Path(__file__).parent.parent.parent / "data" / directory.name
-                    alt_dir.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"Diretório alternativo criado: {alt_dir}")
+                failed = True
+                print(f"⚠️ Aviso: Não foi possível criar {directory}: {e}")
+        
+        # Se falhou, tenta usar diretório temporário como fallback
+        if failed:
+            try:
+                import tempfile
+                fallback_dir = Path(tempfile.gettempdir()) / "comex_data"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Atualiza os caminhos para o fallback
+                self.data_dir = fallback_dir
+                db_path = fallback_dir / "database" / "comex.db"
+                self.database_url = f"sqlite:///{db_path.absolute()}"
+                self.log_dir = fallback_dir / "logs"
+                
+                # Cria todos os diretórios no fallback
+                fallback_dirs = [
+                    self.data_dir,
+                    self.data_dir / "raw",
+                    self.data_dir / "processed",
+                    self.data_dir / "database",
+                    self.data_dir / "exports",
+                    self.log_dir,
+                ]
+                for d in fallback_dirs:
+                    d.mkdir(parents=True, exist_ok=True)
+                
+                print(f"✅ Usando diretório alternativo: {fallback_dir}")
+            except Exception as e2:
+                print(f"❌ Erro crítico: Não foi possível criar diretórios nem usar fallback: {e2}")
+                raise
 
 
 # Instância global de configurações

@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Card,
   Form,
   Input,
   DatePicker,
   Select,
-  AutoComplete,
   Button,
   Row,
   Col,
@@ -13,10 +12,24 @@ import {
   Space,
   Tag,
   message,
+  AutoComplete,
 } from 'antd';
-import { SearchOutlined, DownloadOutlined } from '@ant-design/icons';
+import { SearchOutlined, DownloadOutlined, ShopOutlined, ImportOutlined, ExportOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { buscaAPI, empresasAPI } from '../services/api';
+
+// Função debounce simples
+const debounce = (func, wait) => {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+};
 
 const { RangePicker } = DatePicker;
 const { Option } = Select;
@@ -30,7 +43,10 @@ const BuscaAvancada = () => {
     pageSize: 100,
     total: 0,
   });
-  const [empresasOptions, setEmpresasOptions] = useState([]);
+  const [importadorasOptions, setImportadorasOptions] = useState([]);
+  const [exportadorasOptions, setExportadorasOptions] = useState([]);
+  const [loadingImportadoras, setLoadingImportadoras] = useState(false);
+  const [loadingExportadoras, setLoadingExportadoras] = useState(false);
 
   const ufs = [
     'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA',
@@ -48,56 +64,94 @@ const BuscaAvancada = () => {
     'OUTRAS',
   ];
 
+  // Função de busca de importadoras com debounce
+  const buscarImportadoras = useCallback(
+    debounce(async (query) => {
+      if (!query || query.length < 2) {
+        setImportadorasOptions([]);
+        return;
+      }
+      
+      setLoadingImportadoras(true);
+      try {
+        const response = await empresasAPI.autocompleteImportadoras(query);
+        const options = response.data.map((empresa) => ({
+          value: empresa.nome,
+          label: `${empresa.nome} (${empresa.total_operacoes} operações)`,
+          empresa: empresa,
+        }));
+        setImportadorasOptions(options);
+      } catch (error) {
+        console.error('Erro ao buscar importadoras:', error);
+        setImportadorasOptions([]);
+      } finally {
+        setLoadingImportadoras(false);
+      }
+    }, 300),
+    []
+  );
+
+  // Função de busca de exportadoras com debounce
+  const buscarExportadoras = useCallback(
+    debounce(async (query) => {
+      if (!query || query.length < 2) {
+        setExportadorasOptions([]);
+        return;
+      }
+      
+      setLoadingExportadoras(true);
+      try {
+        const response = await empresasAPI.autocompleteExportadoras(query);
+        const options = response.data.map((empresa) => ({
+          value: empresa.nome,
+          label: `${empresa.nome} (${empresa.total_operacoes} operações)`,
+          empresa: empresa,
+        }));
+        setExportadorasOptions(options);
+      } catch (error) {
+        console.error('Erro ao buscar exportadoras:', error);
+        setExportadorasOptions([]);
+      } finally {
+        setLoadingExportadoras(false);
+      }
+    }, 300),
+    []
+  );
+
   const handleSearch = async (values, page = 1) => {
     setLoading(true);
     try {
+      // Processar NCMs múltiplos
+      let ncms = [];
+      if (values.ncms && Array.isArray(values.ncms)) {
+        ncms = values.ncms;
+      } else if (values.ncm) {
+        ncms = [values.ncm];
+      }
+
       const filtros = {
         ...values,
+        ncms: ncms.length > 0 ? ncms : undefined,
+        ncm: undefined, // Remover campo antigo
         data_inicio: values.periodo?.[0]?.format('YYYY-MM-DD'),
         data_fim: values.periodo?.[1]?.format('YYYY-MM-DD'),
         periodo: undefined,
+        empresa_importadora: values.empresa_importadora || undefined,
+        empresa_exportadora: values.empresa_exportadora || undefined,
         page,
         page_size: pagination.pageSize,
       };
 
       const response = await buscaAPI.buscar(filtros);
-      
-      if (response.data && response.data.results !== undefined) {
-        setResults(response.data.results || []);
-        setPagination({
-          ...pagination,
-          current: page,
-          total: response.data.total || 0,
-        });
-        
-        if (response.data.total === 0) {
-          message.info('Nenhum resultado encontrado. O banco de dados pode estar vazio.');
-        }
-      } else {
-        setResults([]);
-        setPagination({
-          ...pagination,
-          current: page,
-          total: 0,
-        });
-        message.warning('Resposta inválida do servidor');
-      }
+      setResults(response.data.results);
+      setPagination({
+        ...pagination,
+        current: page,
+        total: response.data.total,
+      });
     } catch (error) {
-      console.error('Erro detalhado:', error);
-      console.error('URL da API:', process.env.REACT_APP_API_URL || 'http://localhost:8000');
-      if (error.response) {
-        message.error(`Erro ${error.response.status}: ${error.response.data?.detail || 'Erro ao buscar dados'}`);
-      } else if (error.request) {
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-        message.error(`Não foi possível conectar ao backend em ${apiUrl}. Verifique se está rodando.`);
-        console.error('Erro de conexão. Verifique:', {
-          url: apiUrl,
-          erro: error.message,
-          request: error.request
-        });
-      } else {
-        message.error('Erro ao buscar dados: ' + (error.message || 'Erro desconhecido'));
-      }
+      message.error('Erro ao buscar dados');
+      console.error(error);
     } finally {
       setLoading(false);
     }
@@ -129,21 +183,12 @@ const BuscaAvancada = () => {
       title: 'Tipo',
       dataIndex: 'tipo_operacao',
       key: 'tipo_operacao',
-      width: 180,
-      render: (tipo, record) => {
-        const isImp = record.is_importacao === 'S';
-        const isExp = record.is_exportacao === 'S';
-        return (
-          <Space direction="vertical" size="small">
-            <Tag color={isImp ? 'green' : 'default'}>
-              {isImp ? '✓ Importação' : '✗ Não Importação'}
-            </Tag>
-            <Tag color={isExp ? 'blue' : 'default'}>
-              {isExp ? '✓ Exportação' : '✗ Não Exportação'}
-            </Tag>
-          </Space>
-        );
-      },
+      width: 120,
+      render: (tipo) => (
+        <Tag color={tipo === 'Importação' ? 'green' : 'blue'}>
+          {tipo}
+        </Tag>
+      ),
     },
     {
       title: 'País',
@@ -182,9 +227,19 @@ const BuscaAvancada = () => {
           onFinish={(values) => handleSearch(values, 1)}
         >
           <Row gutter={16}>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item name="ncm" label="NCM">
-                <Input placeholder="Código NCM (8 dígitos)" maxLength={8} />
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item name="ncms" label="NCMs">
+                <Select
+                  mode="tags"
+                  placeholder="Digite ou selecione NCMs (múltiplos)"
+                  tokenSeparators={[',', ' ']}
+                  filterOption={(input, option) =>
+                    (option?.value ?? '').includes(input.replace(/[^\d]/g, ''))
+                  }
+                  style={{ width: '100%' }}
+                >
+                  {/* Opções podem ser adicionadas aqui se necessário */}
+                </Select>
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={6}>
@@ -198,34 +253,6 @@ const BuscaAvancada = () => {
             <Col xs={24} sm={12} md={6}>
               <Form.Item name="pais" label="País">
                 <Input placeholder="Nome do país" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item name="empresa" label="Empresa">
-                <AutoComplete
-                  placeholder="Digite o nome da empresa..."
-                  onSearch={async (value) => {
-                    if (value && value.length >= 2) {
-                      try {
-                        console.log('Buscando empresas para:', value);
-                        const response = await empresasAPI.autocomplete(value, 10);
-                        console.log('Resposta autocomplete:', response.data);
-                        const empresas = response.data?.empresas || [];
-                        setEmpresasOptions(empresas.map(emp => ({ value: emp, label: emp })));
-                      } catch (error) {
-                        console.error('Erro ao buscar empresas:', error);
-                        console.error('Detalhes do erro:', error.response?.data || error.message);
-                        setEmpresasOptions([]);
-                      }
-                    } else {
-                      setEmpresasOptions([]);
-                    }
-                  }}
-                  options={empresasOptions}
-                  allowClear
-                  filterOption={false}
-                  notFoundContent={empresasOptions.length === 0 ? 'Digite pelo menos 2 caracteres' : null}
-                />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={6}>
@@ -252,7 +279,48 @@ const BuscaAvancada = () => {
             </Col>
             <Col xs={24} sm={12} md={6}>
               <Form.Item name="periodo" label="Período">
-                <RangePicker style={{ width: '100%' }} />
+                <RangePicker 
+                  style={{ width: '100%' }}
+                  defaultValue={[dayjs().subtract(2, 'year'), dayjs()]}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item name="empresa_importadora" label="Provável Importador">
+                <AutoComplete
+                  options={importadorasOptions}
+                  onSearch={buscarImportadoras}
+                  placeholder="Digite o nome da empresa importadora"
+                  loading={loadingImportadoras}
+                  filterOption={(inputValue, option) =>
+                    option?.value?.toLowerCase().includes(inputValue.toLowerCase())
+                  }
+                  style={{ width: '100%' }}
+                >
+                  <Input 
+                    prefix={<ImportOutlined />}
+                    placeholder="Digite o nome da empresa importadora"
+                  />
+                </AutoComplete>
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item name="empresa_exportadora" label="Provável Exportador">
+                <AutoComplete
+                  options={exportadorasOptions}
+                  onSearch={buscarExportadoras}
+                  placeholder="Digite o nome da empresa exportadora"
+                  loading={loadingExportadoras}
+                  filterOption={(inputValue, option) =>
+                    option?.value?.toLowerCase().includes(inputValue.toLowerCase())
+                  }
+                  style={{ width: '100%' }}
+                >
+                  <Input 
+                    prefix={<ExportOutlined />}
+                    placeholder="Digite o nome da empresa exportadora"
+                  />
+                </AutoComplete>
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={6}>

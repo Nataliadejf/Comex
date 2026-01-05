@@ -91,18 +91,11 @@ class DataTransformer:
             Dicionário transformado ou None se inválido
         """
         try:
-            # Determinar tipo de operação
-            tipo_op = TipoOperacao.IMPORTACAO if tipo == "Importação" else TipoOperacao.EXPORTACAO
-            is_imp = "S" if tipo_op == TipoOperacao.IMPORTACAO else "N"
-            is_exp = "S" if tipo_op == TipoOperacao.EXPORTACAO else "N"
-            
             # Mapear campos (ajustar conforme estrutura real dos dados)
             transformed = {
                 "ncm": self._extract_ncm(record),
                 "descricao_produto": self._extract_string(record, "descricao", "produto", ""),
-                "tipo_operacao": tipo_op,
-                "is_importacao": is_imp,
-                "is_exportacao": is_exp,
+                "tipo_operacao": TipoOperacao.IMPORTACAO if tipo == "Importação" else TipoOperacao.EXPORTACAO,
                 "pais_origem_destino": self._extract_string(record, "pais", "pais_origem", "pais_destino", ""),
                 "uf": self._extract_string(record, "uf", "estado", "").upper()[:2],
                 "porto_aeroporto": self._extract_string(record, "porto", "aeroporto", ""),
@@ -117,6 +110,25 @@ class DataTransformer:
                 "data_operacao": self._extract_date(record, mes),
                 "mes_referencia": mes,
                 "arquivo_origem": record.get("arquivo_origem", ""),
+                # Campos de empresa
+                "razao_social_importador": self._extract_string(
+                    record, 
+                    "razao_social_importador", "razao_social_imp", "importador", 
+                    "nome_importador", "empresa_importadora", ""
+                ) if tipo == "Importação" else None,
+                "razao_social_exportador": self._extract_string(
+                    record, 
+                    "razao_social_exportador", "razao_social_exp", "exportador", 
+                    "nome_exportador", "empresa_exportadora", ""
+                ) if tipo == "Exportação" else None,
+                "cnpj_importador": self._extract_string(
+                    record, 
+                    "cnpj_importador", "cnpj_imp", "cnpj_importador", ""
+                ).replace('.', '').replace('/', '').replace('-', '')[:14] if tipo == "Importação" else None,
+                "cnpj_exportador": self._extract_string(
+                    record, 
+                    "cnpj_exportador", "cnpj_exp", "cnpj_exportador", ""
+                ).replace('.', '').replace('/', '').replace('-', '')[:14] if tipo == "Exportação" else None,
             }
             
             # Validações básicas
@@ -243,41 +255,4 @@ class DataTransformer:
         }
         
         return via_mapping.get(via, ViaTransporte.OUTRAS)
-    
-    def transform_dataframe(
-        self,
-        df: 'pd.DataFrame',
-        mes: str,
-        tipo: str,
-        arquivo_origem: str = ""
-    ) -> List[Dict[str, Any]]:
-        """
-        Transforma um DataFrame do pandas para formato do banco.
-        
-        Args:
-            df: DataFrame do pandas
-            mes: Mês de referência (YYYY-MM)
-            tipo: Tipo de operação
-            arquivo_origem: Caminho do arquivo de origem
-        
-        Returns:
-            Lista de dicionários no formato do banco
-        """
-        transformed = []
-        
-        # Converter DataFrame para lista de dicionários
-        records = df.to_dict('records')
-        
-        for record in records:
-            try:
-                # Adicionar arquivo_origem ao registro
-                record['arquivo_origem'] = arquivo_origem
-                transformed_record = self._transform_record(record, mes, tipo)
-                if transformed_record:
-                    transformed.append(transformed_record)
-            except Exception as e:
-                logger.error(f"Erro ao transformar registro do DataFrame: {e}")
-                continue
-        
-        return transformed
 
