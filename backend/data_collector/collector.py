@@ -11,8 +11,15 @@ from sqlalchemy import and_
 from config import settings
 from database import get_db, OperacaoComex, ColetaLog, TipoOperacao
 from .api_client import ComexStatAPIClient
-from .scraper import ComexStatScraper
 from .transformer import DataTransformer
+
+# Import opcional - scraper não disponível no Render
+try:
+    from .scraper import ComexStatScraper
+    SCRAPER_AVAILABLE = True
+except ImportError:
+    SCRAPER_AVAILABLE = False
+    logger.warning("scraper não disponível - apenas API será usada")
 
 
 class DataCollector:
@@ -23,7 +30,7 @@ class DataCollector:
     
     def __init__(self):
         self.api_client = ComexStatAPIClient()
-        self.scraper = ComexStatScraper()
+        self.scraper = ComexStatScraper() if SCRAPER_AVAILABLE else None
         self.transformer = DataTransformer()
     
     async def collect_recent_data(self, db: Session) -> Dict[str, Any]:
@@ -53,12 +60,19 @@ class DataCollector:
             except Exception as e:
                 logger.error(f"Erro ao coletar via API: {e}")
                 stats["erros"].append(f"API: {str(e)}")
-                # Fallback para scraper
-                stats["usou_api"] = False
-                await self._collect_via_scraper(db, stats)
+                # Fallback para scraper (se disponível)
+                if SCRAPER_AVAILABLE and self.scraper:
+                    stats["usou_api"] = False
+                    await self._collect_via_scraper(db, stats)
+                else:
+                    logger.warning("Scraper não disponível - não é possível fazer fallback")
         else:
-            # Usar scraper diretamente
-            await self._collect_via_scraper(db, stats)
+            # Usar scraper diretamente (se disponível)
+            if SCRAPER_AVAILABLE and self.scraper:
+                await self._collect_via_scraper(db, stats)
+            else:
+                logger.warning("API não disponível e scraper não instalado - coleta não pode ser realizada")
+                stats["erros"].append("API não disponível e scraper não instalado")
         
         logger.info(
             f"Coleta concluída: {stats['total_registros']} registros, "
@@ -106,6 +120,11 @@ class DataCollector:
         stats: Dict[str, Any]
     ):
         """Coleta dados via scraper (fallback)."""
+        if not SCRAPER_AVAILABLE or not self.scraper:
+            logger.error("Scraper não disponível")
+            stats["erros"].append("Scraper não disponível (dependências não instaladas)")
+            return
+        
         logger.info("Coletando dados via scraper")
         
         # Baixar arquivos

@@ -4,7 +4,7 @@ Módulo de coleta de dados do Comex Stat.
 from .api_client import ComexStatAPIClient
 from .collector import DataCollector
 
-# Importar scraper apenas se disponível
+# Import opcional do scraper
 try:
     from .scraper import ComexStatScraper
     __all__ = [
@@ -13,7 +13,6 @@ try:
         "DataCollector",
     ]
 except ImportError:
-    ComexStatScraper = None
     __all__ = [
         "ComexStatAPIClient",
         "DataCollector",
