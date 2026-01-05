@@ -56,6 +56,12 @@ class Settings(BaseSettings):
         alias="LOG_DIR"
     )
     
+    # Autenticação
+    secret_key: str = Field(
+        default="sua-chave-secreta-aqui-mude-em-producao",
+        alias="SECRET_KEY"
+    )
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

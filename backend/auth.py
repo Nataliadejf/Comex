@@ -36,7 +36,7 @@ from config import settings
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Configuração JWT
-SECRET_KEY = getattr(settings, 'secret_key', 'sua-chave-secreta-aqui-mude-em-producao')
+SECRET_KEY = settings.secret_key
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
