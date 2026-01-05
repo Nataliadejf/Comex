@@ -181,6 +181,41 @@ async def coletar_dados(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
 
 
+class PopularDadosRequest(BaseModel):
+    """Schema para popular dados de exemplo."""
+    quantidade: int = 1000
+    meses: int = 24
+
+
+@app.post("/popular-dados-exemplo")
+async def popular_dados_exemplo(
+    request: PopularDadosRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Popula o banco de dados com dados de exemplo.
+    Útil para testes quando não há acesso ao Shell.
+    """
+    try:
+        from scripts.popular_dados_exemplo import gerar_dados_exemplo
+        
+        logger.info(f"Iniciando população de {request.quantidade} registros...")
+        
+        registros_criados = gerar_dados_exemplo(request.quantidade)
+        
+        return {
+            "success": True,
+            "message": f"Banco populado com {registros_criados} registros",
+            "registros_criados": registros_criados,
+            "quantidade_solicitada": request.quantidade
+        }
+    except Exception as e:
+        logger.error(f"Erro ao popular dados: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao popular dados: {str(e)}")
+
+
 @app.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
     meses: int = Query(default=24, ge=1, le=24),  # Padrão: 2 anos
