@@ -37,7 +37,7 @@ services:
       
       # Python
       - key: PYTHON_VERSION
-        value: "3.11"
+        value: "3.11.0"
 
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"
