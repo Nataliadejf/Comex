@@ -130,7 +130,10 @@ class ComexStatAPIClient:
         if uf:
             params["uf"] = uf
         
-        headers = {}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "ComexAnalyzer/1.0"
+        }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         
