@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Popular Dados - Comex Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .input-group {
+            margin-bottom: 25px;
+        }
+        
+        label {
+            display: block;
+            color: #333;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .recommendation {
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+            font-style: italic;
+        }
+        
+        button {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .status-box {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .status-box.show {
+            display: block;
+        }
+        
+        .status-box.success {
+            background: #f0fdf4;
+            border-left-color: #22c55e;
+        }
+        
+        .status-box.error {
+            background: #fef2f2;
+            border-left-color: #ef4444;
+        }
+        
+        .status-box.loading {
+            background: #fffbeb;
+            border-left-color: #f59e0b;
+        }
+        
+        .status-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .status-message {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .info-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            font-size: 13px;
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .info-box strong {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Popular Dados</h1>
+        <p class="subtitle">Preencha o banco de dados com dados de exemplo</p>
+        
+        <div class="info-box">
+            <strong>ℹ️ Informação:</strong> Como a API pública do Comex Stat não está disponível, 
+            vamos criar dados de exemplo para testar o sistema. Esses dados incluem operações 
+            de importação e exportação com diferentes NCMs, empresas e países.
+        </div>
+        
+        <div class="input-group">
+            <label for="quantidade">Quantidade de registros:</label>
+            <input type="number" id="quantidade" value="2000" min="100" max="10000" step="100">
+            <div class="recommendation">Recomendado: 2000 registros (teste rápido)</div>
+        </div>
+        
+        <div class="input-group">
+            <label for="meses">Período (meses):</label>
+            <input type="number" id="meses" value="24" min="1" max="24" step="1">
+            <div class="recommendation">Recomendado: 24 meses (últimos 2 anos)</div>
+        </div>
+        
+        <button id="popularBtn" onclick="popularDados()">
+            <span id="btnText">🚀 Popular Dados</span>
+        </button>
+        
+        <div id="statusBox" class="status-box">
+            <div class="status-title" id="statusTitle"></div>
+            <div class="status-message" id="statusMessage"></div>
+        </div>
+    </div>
+    
+    <script>
+        const BACKEND_URL = 'https://comex-backend-wjco.onrender.com';
+        
+        async function popularDados() {
+            const quantidade = parseInt(document.getElementById('quantidade').value);
+            const meses = parseInt(document.getElementById('meses').value);
+            const btn = document.getElementById('popularBtn');
+            const btnText = document.getElementById('btnText');
+            const statusBox = document.getElementById('statusBox');
+            const statusTitle = document.getElementById('statusTitle');
+            const statusMessage = document.getElementById('statusMessage');
+            
+            // Validar inputs
+            if (quantidade < 100 || quantidade > 10000) {
+                showStatus('error', 'Erro', 'A quantidade deve estar entre 100 e 10.000 registros.');
+                return;
+            }
+            
+            if (meses < 1 || meses > 24) {
+                showStatus('error', 'Erro', 'O período deve estar entre 1 e 24 meses.');
+                return;
+            }
+            
+            // Desabilitar botão e mostrar loading
+            btn.disabled = true;
+            btnText.innerHTML = '<span class="spinner"></span> Populando dados...';
+            showStatus('loading', 'Populando dados...', `Criando ${quantidade} registros para os últimos ${meses} meses. Isso pode levar alguns minutos...`);
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/popular-dados-exemplo`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        quantidade: quantidade,
+                        meses: meses
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('success', '✅ Dados Populados com Sucesso!', 
+                        `Foram criados ${data.registros_criados || quantidade} registros no banco de dados. ` +
+                        `Agora você pode acessar o dashboard e ver os dados nos gráficos e tabelas. ` +
+                        `Recarregue a página do dashboard para ver os novos dados.`);
+                    
+                    // Habilitar botão novamente
+                    btn.disabled = false;
+                    btnText.textContent = '🚀 Popular Dados Novamente';
+                } else {
+                    throw new Error(data.detail || data.message || 'Erro desconhecido');
+                }
+            } catch (error) {
+                console.error('Erro:', error);
+                showStatus('error', '❌ Erro ao Popular Dados', 
+                    `Não foi possível popular os dados: ${error.message}. ` +
+                    `Verifique se o backend está rodando em ${BACKEND_URL}`);
+                
+                // Habilitar botão novamente
+                btn.disabled = false;
+                btnText.textContent = '🚀 Tentar Novamente';
+            }
+        }
+        
+        function showStatus(type, title, message) {
+            const statusBox = document.getElementById('statusBox');
+            const statusTitle = document.getElementById('statusTitle');
+            const statusMessage = document.getElementById('statusMessage');
+            
+            statusBox.className = `status-box show ${type}`;
+            statusTitle.textContent = title;
+            statusMessage.textContent = message;
+        }
+        
+        // Verificar se o backend está acessível ao carregar a página
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${BACKEND_URL}/health`);
+                if (response.ok) {
+                    console.log('✅ Backend está acessível');
+                } else {
+                    showStatus('error', '⚠️ Atenção', 
+                        `O backend pode não estar acessível. Verifique: ${BACKEND_URL}/health`);
+                }
+            } catch (error) {
+                showStatus('error', '⚠️ Atenção', 
+                    `Não foi possível conectar ao backend. Verifique se está rodando em: ${BACKEND_URL}`);
+            }
+        });
+    </script>
+</body>
+</html>
+
