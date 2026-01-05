@@ -491,10 +491,12 @@ const Login = () => {
                     `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/solicitar-redefinicao-senha`,
                     { email: values.email }
                   );
-                  message.success('Se o email existir, você receberá instruções para redefinir a senha');
+                  message.success(response.data?.message || 'Se o email existir, você receberá instruções para redefinir a senha');
                   setActiveTab('login');
                 } catch (error) {
-                  message.error('Erro ao solicitar redefinição de senha');
+                  const errorMsg = error.response?.data?.detail || error.response?.data?.message || 'Erro ao solicitar redefinição de senha';
+                  message.error(errorMsg);
+                  console.error('Erro ao solicitar redefinição:', error);
                 }
               }}
               layout="vertical"
