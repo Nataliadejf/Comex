@@ -204,14 +204,16 @@ async def popular_dados_exemplo(
         registros_criados = gerar_dados_exemplo(request.quantidade)
         
         # Verificar quantas empresas foram criadas
-        from sqlalchemy import func
-        total_importadoras = db.query(func.count(func.distinct(OperacaoComex.razao_social_importador))).filter(
-            OperacaoComex.razao_social_importador.isnot(None)
-        ).scalar()
+        from sqlalchemy import func, distinct
+        total_importadoras = db.query(func.count(distinct(OperacaoComex.razao_social_importador))).filter(
+            OperacaoComex.razao_social_importador.isnot(None),
+            OperacaoComex.razao_social_importador != ''
+        ).scalar() or 0
         
-        total_exportadoras = db.query(func.count(func.distinct(OperacaoComex.razao_social_exportador))).filter(
-            OperacaoComex.razao_social_exportador.isnot(None)
-        ).scalar()
+        total_exportadoras = db.query(func.count(distinct(OperacaoComex.razao_social_exportador))).filter(
+            OperacaoComex.razao_social_exportador.isnot(None),
+            OperacaoComex.razao_social_exportador != ''
+        ).scalar() or 0
         
         return {
             "success": True,
