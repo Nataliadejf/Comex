@@ -690,7 +690,7 @@ async def autocomplete_importadoras(
 
 @app.get("/empresas/autocomplete/exportadoras")
 async def autocomplete_exportadoras(
-    q: str = Query(..., min_length=1, description="Termo de busca"),  # Reduzido para min_length=1
+    q: str = Query(..., min_length=1, description="Termo de busca"),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
@@ -698,14 +698,18 @@ async def autocomplete_exportadoras(
     Autocomplete para empresas exportadoras.
     Retorna empresas que contêm o termo de busca no nome.
     """
-    from sqlalchemy import func, distinct
+    from sqlalchemy import func
     
     try:
         logger.info(f"🔍 Buscando exportadoras com termo: '{q}'")
         
+        # Primeiro, verificar se há dados
+        total_registros = db.query(OperacaoComex).count()
+        logger.info(f"Total de registros no banco: {total_registros}")
+        
         # Buscar empresas exportadoras que contêm o termo
-        empresas = db.query(
-            OperacaoComex.razao_social_exportador.label('empresa'),
+        empresas_query = db.query(
+            OperacaoComex.razao_social_exportador,
             func.count(OperacaoComex.id).label('total_operacoes'),
             func.sum(OperacaoComex.valor_fob).label('valor_total')
         ).filter(
@@ -716,18 +720,28 @@ async def autocomplete_exportadoras(
             OperacaoComex.razao_social_exportador
         ).order_by(
             func.sum(OperacaoComex.valor_fob).desc()
-        ).limit(limit).all()
+        ).limit(limit)
         
-        resultado = [
-            {
-                "nome": empresa,
-                "total_operacoes": int(total_operacoes),
-                "valor_total": float(valor_total or 0)
-            }
-            for empresa, total_operacoes, valor_total in empresas
-        ]
+        empresas = empresas_query.all()
         
-        logger.info(f"✅ Encontradas {len(resultado)} exportadoras")
+        resultado = []
+        for empresa, total_operacoes, valor_total in empresas:
+            if empresa:  # Garantir que empresa não é None
+                resultado.append({
+                    "nome": str(empresa),
+                    "total_operacoes": int(total_operacoes) if total_operacoes else 0,
+                    "valor_total": float(valor_total or 0)
+                })
+        
+        logger.info(f"✅ Encontradas {len(resultado)} exportadoras para '{q}'")
+        if len(resultado) == 0:
+            # Debug: verificar quantas empresas existem sem filtro
+            total_empresas = db.query(func.count(func.distinct(OperacaoComex.razao_social_exportador))).filter(
+                OperacaoComex.razao_social_exportador.isnot(None),
+                OperacaoComex.razao_social_exportador != ''
+            ).scalar() or 0
+            logger.warning(f"⚠️ Nenhuma exportadora encontrada. Total de empresas no banco: {total_empresas}")
+        
         return resultado
     except Exception as e:
         logger.error(f"❌ Erro ao buscar exportadoras: {e}")
