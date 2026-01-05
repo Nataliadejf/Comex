@@ -1,0 +1,49 @@
+# Render.com Blueprint - Deploy Automático via Git
+# Este arquivo permite deploy automático conectando o repositório GitHub ao Render
+
+services:
+  # Backend API (FastAPI)
+  - type: web
+    name: comex-backend
+    env: python
+    region: oregon  # ou: frankfurt, singapore, mumbai, sydney
+    plan: free  # ou: starter, standard, pro
+    buildCommand: pip install --upgrade pip && pip install -r backend/requirements-render-ultra-minimal.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    rootDir: .  # Raiz do repositório
+    healthCheckPath: /health
+    envVars:
+      # Database - Será preenchido automaticamente se você criar um PostgreSQL
+      - key: DATABASE_URL
+        sync: false  # Você precisa configurar manualmente no Render Dashboard
+      
+      # API Externa Comex Stat (opcional)
+      - key: COMEX_STAT_API_URL
+        value: https://comexstat.mdic.gov.br
+        sync: false
+      
+      - key: COMEX_STAT_API_KEY
+        sync: false  # Configure se tiver chave de API
+      
+      # Secret Key para JWT (gere uma chave aleatória)
+      - key: SECRET_KEY
+        generateValue: true  # Render gera automaticamente
+      
+      # Ambiente
+      - key: ENVIRONMENT
+        value: production
+      
+      - key: DEBUG
+        value: "false"
+      
+      # Python
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  # Banco de Dados PostgreSQL (opcional - descomente se quiser criar via YAML)
+  # - type: pspg
+  #   name: comex-database
+  #   plan: free
+  #   databaseName: comex_db
+  #   user: comex_user
+
