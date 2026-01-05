@@ -8,7 +8,7 @@ services:
     env: python
     region: oregon
     plan: free
-    buildCommand: pip install --upgrade pip setuptools wheel && pip install --no-build-isolation --no-cache-dir -r backend/requirements-render-ultra-minimal.txt
+    buildCommand: pip install --upgrade pip setuptools wheel && pip install --only-binary :all: --no-cache-dir -r backend/requirements-render-ultra-minimal.txt || pip install --no-build-isolation --no-cache-dir -r backend/requirements-render-ultra-minimal.txt
     startCommand: cd backend && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     rootDir: .
     healthCheckPath: /health

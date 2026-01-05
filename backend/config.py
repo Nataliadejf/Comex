@@ -4,7 +4,13 @@ Configurações da aplicação.
 import os
 from pathlib import Path
 from typing import Optional
-from pydantic_settings import BaseSettings
+try:
+    # Pydantic v2
+    from pydantic_settings import BaseSettings
+except ImportError:
+    # Pydantic v1 (fallback para Render)
+    from pydantic import BaseSettings
+
 from pydantic import Field
 
 
