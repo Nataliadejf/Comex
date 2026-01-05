@@ -39,19 +39,9 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
-  # Frontend React (Static Site)
-  - type: static
-    name: comex-frontend
-    plan: free
-    buildCommand: "cd frontend && npm install && npm run build"
-    staticPublishPath: frontend/build
-    envVars:
-      # URL do Backend - Será atualizada automaticamente após deploy do backend
-      - key: REACT_APP_API_URL
-        sync: false
-        # Configure manualmente no Render Dashboard após criar o backend
-        # Valor sugerido: https://comex-backend.onrender.com
-        # Ou use o serviço que já está funcionando: https://comex-3.onrender.com
+# NOTA: Static Sites não são suportados no render.yaml Blueprint
+# Crie o frontend manualmente no Render Dashboard como "Static Site"
+# Veja DEPLOY_FRONTEND_RENDER.md para instruções detalhadas
 
 
 
