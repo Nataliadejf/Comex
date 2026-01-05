@@ -1,35 +1,35 @@
 # Requirements ULTRA minimalistas para Render.com
 # Apenas o essencial para a API funcionar
 # SEM dependências que requerem compilação Rust ou C pesada
-# Usar apenas wheels pré-compilados disponíveis no PyPI
+# Versões ANTIGAS e ESTÁVEIS com wheels pré-compilados garantidos
 
-# API Framework (versões que têm wheels pré-compilados sem Rust)
-fastapi==0.100.1
-uvicorn==0.23.2
-pydantic==1.10.13
+# API Framework (versões antigas e estáveis)
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+pydantic==1.10.7
 pydantic-settings==1.10.1
 
 # Database (SQLAlchemy + driver PostgreSQL binário)
-sqlalchemy==2.0.20
-psycopg2-binary==2.9.7
+sqlalchemy==1.4.46
+psycopg2-binary==2.9.6
 
-# HTTP Client (sem dependências pesadas)
-httpx==0.24.1
+# HTTP Client (aiohttp é puramente Python, sem Rust - assíncrono)
+aiohttp==3.8.5
 
 # Utilities
-python-dotenv==0.21.1
-python-multipart==0.0.6
+python-dotenv==0.21.0
+python-multipart==0.0.5
 
-# Logging
-loguru==0.7.0
+# Logging (versão antiga sem Rust)
+loguru==0.6.0
 
-# Scheduling (para atualização diária)
+# Scheduling
 schedule==1.2.0
 
 # NOTA CRÍTICA: 
-# - Pydantic v1 usado ao invés de v2 (v2 pode tentar compilar Rust)
-# - Todas as versões são estáveis e têm wheels pré-compilados
-# - Nenhuma compilação será tentada durante o build
+# - Versões ANTIGAS usadas para garantir wheels pré-compilados
+# - Nenhuma dependência transitiva deve requerer Rust
+# - Se ainda falhar, pode ser necessário usar requests ao invés de httpx
 
 
 

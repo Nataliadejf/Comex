@@ -1,12 +1,21 @@
 """
 Cliente para API do Comex Stat (se disponível).
 """
-import httpx
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+
+import aiohttp
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from loguru import logger
 
 from config import settings
+
+if not HTTPX_AVAILABLE:
+    logger.warning("httpx não disponível, usando aiohttp")
 
 
 class ComexStatAPIClient:
@@ -33,13 +42,23 @@ class ComexStatAPIClient:
             return False
         
         try:
-            # Desabilitar verificação SSL para desenvolvimento (pode ser necessário)
-            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                # Tentar endpoint de health check ou similar
-                response = await client.get(f"{self.base_url}/health")
-                if response.status_code == 200:
-                    logger.info("API do Comex Stat disponível")
-                    return True
+            if HTTPX_AVAILABLE:
+                # Desabilitar verificação SSL para desenvolvimento (pode ser necessário)
+                async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
+                    # Tentar endpoint de health check ou similar
+                    response = await client.get(f"{self.base_url}/health")
+                    if response.status_code == 200:
+                        logger.info("API do Comex Stat disponível")
+                        return True
+            else:
+                # Fallback para aiohttp
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                connector = aiohttp.TCPConnector(ssl=False)
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                    async with session.get(f"{self.base_url}/health") as response:
+                        if response.status == 200:
+                            logger.info("API do Comex Stat disponível")
+                            return True
         except Exception as e:
             logger.error(f"Erro ao testar conexão com API: {e}")
         
@@ -90,24 +109,40 @@ class ComexStatAPIClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                response = await client.get(
-                    f"{self.base_url}/dados",
-                    params=params,
-                    headers=headers
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                logger.info(
-                    f"Dados coletados via API: {len(data.get('registros', []))} registros"
-                )
-                
-                return data.get("registros", [])
+            if HTTPX_AVAILABLE:
+                async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
+                    response = await client.get(
+                        f"{self.base_url}/dados",
+                        params=params,
+                        headers=headers
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    logger.info(
+                        f"Dados coletados via API: {len(data.get('registros', []))} registros"
+                    )
+                    
+                    return data.get("registros", [])
+            else:
+                # Fallback para aiohttp
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                connector = aiohttp.TCPConnector(ssl=False)
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                    async with session.get(
+                        f"{self.base_url}/dados",
+                        params=params,
+                        headers=headers
+                    ) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                        
+                        logger.info(
+                            f"Dados coletados via API: {len(data.get('registros', []))} registros"
+                        )
+                        
+                        return data.get("registros", [])
         
-        except httpx.HTTPError as e:
-            logger.error(f"Erro HTTP ao buscar dados da API: {e}")
-            raise
         except Exception as e:
             logger.error(f"Erro ao buscar dados da API: {e}")
             raise
@@ -121,19 +156,33 @@ class ComexStatAPIClient:
             return []
         
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                headers = {}
-                if self.api_key:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                
-                response = await client.get(
-                    f"{self.base_url}/meses-disponiveis",
-                    headers=headers
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                return data.get("meses", [])
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            
+            if HTTPX_AVAILABLE:
+                async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
+                    response = await client.get(
+                        f"{self.base_url}/meses-disponiveis",
+                        headers=headers
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    return data.get("meses", [])
+            else:
+                # Fallback para aiohttp
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                connector = aiohttp.TCPConnector(ssl=False)
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                    async with session.get(
+                        f"{self.base_url}/meses-disponiveis",
+                        headers=headers
+                    ) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                        
+                        return data.get("meses", [])
         
         except Exception as e:
             logger.error(f"Erro ao buscar meses disponíveis: {e}")
