@@ -194,7 +194,12 @@ async def coletar_dados_ncms(
     db: Session = Depends(get_db)
 ):
     """
-    Coleta dados reais da API Comex Stat para múltiplos NCMs.
+    Coleta dados reais da API Comex Stat ou CSV scraper para múltiplos NCMs.
+    Sistema de fallback automático:
+    1. Tenta API REST primeiro
+    2. Se falhar, usa CSV scraper (bases de dados brutas)
+    3. Se falhar, usa scraper tradicional (se disponível)
+    
     Se ncms não for fornecido, coleta dados gerais (todos os NCMs).
     """
     try:
@@ -207,53 +212,51 @@ async def coletar_dados_ncms(
             "meses_processados": [],
             "erros": [],
             "ncms_processados": [],
-            "usou_api": False
+            "usou_api": False,
+            "metodo_usado": "desconhecido"
         }
         
         # Calcular meses a buscar
+        meses = request.meses or 24
         hoje = datetime.now()
         meses_lista = []
-        for i in range(request.meses or 24):
+        for i in range(meses):
             mes_date = hoje - timedelta(days=30 * i)
             meses_lista.append(mes_date.strftime("%Y-%m"))
         meses_lista = sorted(meses_lista)
         
-        # Verificar se API está disponível
-        if await collector.api_client.test_connection():
-            stats["usou_api"] = True
+        # Se não especificar NCMs, usar método coletivo (mais eficiente)
+        if not request.ncms or len(request.ncms) == 0:
+            logger.info(f"Coletando dados gerais (todos os NCMs) para {meses} meses...")
+            logger.info("Sistema tentará: API → CSV Scraper → Scraper tradicional")
             
-            # Se não especificar NCMs, coletar dados gerais
-            if not request.ncms or len(request.ncms) == 0:
-                logger.info("Coletando dados gerais (todos os NCMs)...")
-                for mes in meses_lista:
-                    try:
-                        tipos = ["Importação", "Exportação"]
-                        if request.tipo_operacao:
-                            tipos = [request.tipo_operacao]
-                        
-                        for tipo in tipos:
-                            logger.info(f"Coletando {mes} - {tipo}...")
-                            data = await collector.api_client.fetch_data(
-                                mes_inicio=mes,
-                                mes_fim=mes,
-                                tipo_operacao=tipo
-                            )
-                            
-                            if data:
-                                transformed = collector.transformer.transform_api_data(data, mes, tipo)
-                                saved = collector._save_to_database(db, transformed, mes, tipo)
-                                stats["total_registros"] += saved
-                                logger.info(f"✓ {saved} registros salvos para {mes} - {tipo}")
-                        
-                        if mes not in stats["meses_processados"]:
-                            stats["meses_processados"].append(mes)
-                    except Exception as e:
-                        error_msg = f"Erro ao coletar {mes}: {e}"
-                        logger.error(error_msg)
-                        stats["erros"].append(error_msg)
-            else:
-                # Coletar dados específicos de cada NCM
-                logger.info(f"Coletando dados para {len(request.ncms)} NCMs...")
+            # Usar o método coletivo do DataCollector que tem fallback automático
+            try:
+                # Ajustar meses no collector temporariamente
+                original_months = settings.months_to_fetch
+                settings.months_to_fetch = meses
+                
+                # Coletar dados (com fallback automático)
+                collection_stats = await collector.collect_recent_data(db)
+                
+                # Restaurar configuração
+                settings.months_to_fetch = original_months
+                
+                stats.update(collection_stats)
+                stats["metodo_usado"] = "API" if collection_stats.get("usou_api") else "CSV Scraper ou Scraper"
+                
+            except Exception as e:
+                logger.error(f"Erro na coleta coletiva: {e}")
+                stats["erros"].append(f"Coleta coletiva: {str(e)}")
+        else:
+            # Coletar dados específicos de cada NCM (via API apenas por enquanto)
+            logger.info(f"Coletando dados para {len(request.ncms)} NCMs específicos...")
+            
+            # Verificar se API está disponível
+            if await collector.api_client.test_connection():
+                stats["usou_api"] = True
+                stats["metodo_usado"] = "API"
+                
                 for ncm in request.ncms:
                     ncm_limpo = ncm.replace('.', '').replace(' ', '').strip()
                     if len(ncm_limpo) != 8 or not ncm_limpo.isdigit():
@@ -291,13 +294,16 @@ async def coletar_dados_ncms(
                         error_msg = f"Erro ao coletar NCM {ncm}: {e}"
                         logger.error(error_msg)
                         stats["erros"].append(error_msg)
-        else:
-            stats["erros"].append("API do Comex Stat não está disponível")
-            raise HTTPException(status_code=503, detail="API do Comex Stat não está disponível")
+            else:
+                # Se API não disponível e NCMs específicos, sugerir coleta geral
+                stats["erros"].append(
+                    "API não disponível para NCMs específicos. "
+                    "Use coleta geral (sem especificar NCMs) para usar CSV scraper."
+                )
         
         return {
             "success": True,
-            "message": f"Coleta concluída: {stats['total_registros']} registros",
+            "message": f"Coleta concluída: {stats['total_registros']} registros usando {stats.get('metodo_usado', 'desconhecido')}",
             "stats": stats
         }
     except HTTPException:
