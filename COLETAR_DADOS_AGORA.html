@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coletar Dados Reais - Passo a Passo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 30px;
+        }
+        h1 { color: #333; margin-bottom: 20px; text-align: center; }
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .step h2 {
+            color: #1a365d;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+        .step h3 {
+            color: #2d3748;
+            margin: 15px 0 10px 0;
+            font-size: 16px;
+        }
+        .step ol, .step ul {
+            margin-left: 20px;
+            margin-top: 10px;
+        }
+        .step li {
+            margin: 8px 0;
+            line-height: 1.6;
+        }
+        .step code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 10px 5px;
+            width: 100%;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .result-box {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .result-box.error { background: #fff5f5; border-color: #fc8181; color: #c53030; }
+        .result-box.success { background: #f0fff4; border-color: #68d391; color: #22543d; }
+        .result-box.info { background: #e6f3ff; border-color: #4facfe; color: #1a365d; }
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; margin-bottom: 5px; color: #333; font-weight: 600; }
+        .input-group input { width: 100%; padding: 10px; border: 2px solid #e9ecef; border-radius: 6px; }
+        .warning-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .success-box {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Coletar Dados Reais - Passo a Passo</h1>
+        
+        <div class="step">
+            <h2>PASSO 1: Configurar API no Render</h2>
+            <ol>
+                <li>Acesse: <a href="https://dashboard.render.com" target="_blank">https://dashboard.render.com</a></li>
+                <li>Vá em <strong>Services</strong> → <strong>comex-backend</strong></li>
+                <li>Clique em <strong>Environment</strong></li>
+                <li>Adicione/Verifique:
+                    <ul>
+                        <li><code>COMEX_STAT_API_URL</code> = <code>https://comexstat.mdic.gov.br</code></li>
+                        <li><code>COMEX_STAT_API_KEY</code> = (deixe vazio ou adicione se tiver)</li>
+                    </ul>
+                </li>
+                <li>Clique em <strong>Save Changes</strong></li>
+                <li>Aguarde 1-2 minutos até o serviço reiniciar</li>
+            </ol>
+        </div>
+        
+        <div class="step">
+            <h2>PASSO 2: Verificar Configuração</h2>
+            <button onclick="verificarConfig()">🔍 Verificar se API está Configurada</button>
+            <div id="resultConfig" class="result-box" style="display: none;"></div>
+        </div>
+        
+        <div class="step">
+            <h2>PASSO 3: Coletar Dados Reais</h2>
+            <div class="warning-box">
+                ⚠️ <strong>Atenção:</strong> A coleta pode levar 30-60 minutos. Você pode fechar esta página e acompanhar pelos logs do Render.
+            </div>
+            
+            <div class="input-group">
+                <label>Quantos meses coletar?</label>
+                <input type="number" id="meses" value="24" min="1" max="24">
+                <small>Recomendado: 24 meses (últimos 2 anos)</small>
+            </div>
+            
+            <button onclick="coletarDados()">📥 Coletar Dados Reais (Todos os NCMs)</button>
+            <div id="resultColeta" class="result-box" style="display: none;"></div>
+        </div>
+        
+        <div class="step">
+            <h2>PASSO 4: Acompanhar Coleta</h2>
+            <ol>
+                <li>Acesse: <a href="https://dashboard.render.com" target="_blank">Render Dashboard</a></li>
+                <li>Vá em <strong>comex-backend</strong> → <strong>Logs</strong></li>
+                <li>Procure por mensagens:
+                    <ul>
+                        <li><code>Coletando dados gerais (todos os NCMs)...</code></li>
+                        <li><code>✓ X registros salvos para YYYY-MM - Importação</code></li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+        
+        <div class="step">
+            <h2>PASSO 5: Verificar Resultados</h2>
+            <button onclick="verificarBanco()">📊 Verificar se Dados Foram Coletados</button>
+            <button onclick="testarDashboard()">📈 Testar Dashboard</button>
+            <div id="resultVerificacao" class="result-box" style="display: none;"></div>
+        </div>
+        
+        <div class="input-group">
+            <label>URL do Backend:</label>
+            <input type="text" id="backendUrl" value="https://comex-backend-wjco.onrender.com">
+        </div>
+    </div>
+
+    <script>
+        function getBackendUrl() {
+            return document.getElementById('backendUrl').value || 'https://comex-backend-wjco.onrender.com';
+        }
+        
+        function showResult(elementId, text, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = 'result-box ' + type;
+            element.textContent = text;
+        }
+        
+        async function verificarConfig() {
+            showResult('resultConfig', '⏳ Verificando configuração da API...', 'info');
+            try {
+                // Tentar fazer uma requisição simples para verificar se a API está configurada
+                const r = await fetch(`${getBackendUrl()}/coletar-dados-ncms`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ncms: null,
+                        meses: 1,
+                        tipo_operacao: "Importação"
+                    })
+                });
+                const data = await r.json();
+                
+                let output = '🔍 VERIFICAÇÃO DA CONFIGURAÇÃO\n';
+                output += '='.repeat(60) + '\n\n';
+                
+                if (data.stats?.erros?.some(e => e.includes('API do Comex Stat não está disponível'))) {
+                    output += '❌ API NÃO ESTÁ CONFIGURADA!\n\n';
+                    output += '💡 SOLUÇÃO:\n';
+                    output += '1. Acesse o Render Dashboard\n';
+                    output += '2. Vá em comex-backend → Environment\n';
+                    output += '3. Adicione COMEX_STAT_API_URL = https://comexstat.mdic.gov.br\n';
+                    output += '4. Salve e aguarde reiniciar\n';
+                    showResult('resultConfig', output, 'error');
+                } else if (data.stats?.usou_api === true) {
+                    output += '✅ API ESTÁ CONFIGURADA E FUNCIONANDO!\n\n';
+                    output += 'Você pode prosseguir para o Passo 3.\n';
+                    showResult('resultConfig', output, 'success');
+                } else {
+                    output += '⚠️ Status desconhecido. Verifique os logs do Render.\n';
+                    showResult('resultConfig', output, 'error');
+                }
+            } catch (error) {
+                showResult('resultConfig', `❌ Erro ao verificar: ${error.message}\n\nVerifique se o backend está rodando.`, 'error');
+            }
+        }
+        
+        async function coletarDados() {
+            const meses = parseInt(document.getElementById('meses').value) || 24;
+            
+            if (!confirm(`Deseja coletar dados reais dos últimos ${meses} meses?\n\nIsso pode levar 30-60 minutos. Você pode acompanhar pelos logs do Render.`)) {
+                return;
+            }
+            
+            showResult('resultColeta', '⏳ Iniciando coleta de dados reais...\n\nIsso pode levar vários minutos. Acompanhe pelos logs do Render.', 'info');
+            
+            try {
+                const r = await fetch(`${getBackendUrl()}/coletar-dados-ncms`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ncms: null,
+                        meses: meses,
+                        tipo_operacao: null
+                    })
+                });
+                const data = await r.json();
+                
+                let output = '📥 COLETA DE DADOS INICIADA\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `✅ ${data.message}\n\n`;
+                output += `Total de registros coletados até agora: ${data.stats.total_registros}\n`;
+                output += `Meses processados: ${data.stats.meses_processados.length}\n`;
+                output += `Usou API: ${data.stats.usou_api ? 'Sim' : 'Não'}\n\n`;
+                
+                if (data.stats.erros && data.stats.erros.length > 0) {
+                    output += '⚠️ ERROS ENCONTRADOS:\n';
+                    data.stats.erros.forEach(erro => {
+                        output += `  - ${erro}\n`;
+                    });
+                    output += '\n';
+                }
+                
+                output += '💡 PRÓXIMOS PASSOS:\n';
+                output += '1. Acompanhe os logs do Render para ver o progresso\n';
+                output += '2. A coleta roda em background - você pode fechar esta página\n';
+                output += '3. Quando terminar, volte aqui e clique em "Verificar se Dados Foram Coletados"\n';
+                
+                if (data.stats.usou_api) {
+                    showResult('resultColeta', output, 'success');
+                } else {
+                    showResult('resultColeta', output + '\n⚠️ API não está configurada! Configure no Passo 1.', 'error');
+                }
+            } catch (error) {
+                showResult('resultColeta', `❌ Erro ao iniciar coleta: ${error.message}\n\nVerifique se o backend está rodando e se a API está configurada.`, 'error');
+            }
+        }
+        
+        async function verificarBanco() {
+            showResult('resultVerificacao', '⏳ Verificando banco de dados...', 'info');
+            try {
+                const r = await fetch(`${getBackendUrl()}/test/empresas`);
+                const data = await r.json();
+                
+                let output = '📊 VERIFICAÇÃO DO BANCO\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `Total de registros: ${data.total_registros}\n`;
+                output += `Valor total importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor total exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Empresas importadoras: ${data.total_importadoras_distintas}\n`;
+                output += `Empresas exportadoras: ${data.total_exportadoras_distintas}\n\n`;
+                
+                if (data.total_registros === 0) {
+                    output += '❌ BANCO ESTÁ VAZIO!\n\n';
+                    output += '💡 Execute a coleta de dados no Passo 3.\n';
+                    showResult('resultVerificacao', output, 'error');
+                } else {
+                    output += '✅ BANCO TEM DADOS!\n\n';
+                    output += '💡 Agora você pode testar o dashboard.\n';
+                    showResult('resultVerificacao', output, 'success');
+                }
+            } catch (error) {
+                showResult('resultVerificacao', `❌ Erro: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testarDashboard() {
+            showResult('resultVerificacao', '⏳ Testando dashboard...', 'info');
+            try {
+                const r = await fetch(`${getBackendUrl()}/dashboard/stats?meses=24`);
+                const data = await r.json();
+                
+                let output = '📈 TESTE DO DASHBOARD\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `Valor total USD: US$ ${data.valor_total_usd?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Volume importações: ${data.volume_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'} KG\n`;
+                output += `Volume exportações: ${data.volume_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'} KG\n\n`;
+                
+                if (data.valor_total_usd === 0) {
+                    output += '⚠️ Dashboard retornando valores zerados!\n\n';
+                    output += '💡 Verifique se há dados no banco ou execute a coleta.\n';
+                    showResult('resultVerificacao', output, 'error');
+                } else {
+                    output += '✅ DASHBOARD ESTÁ FUNCIONANDO!\n\n';
+                    output += '💡 Acesse: https://comex-4.onrender.com/dashboard\n';
+                    showResult('resultVerificacao', output, 'success');
+                }
+            } catch (error) {
+                showResult('resultVerificacao', `❌ Erro: ${error.message}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>
+
