@@ -78,14 +78,24 @@ const Dashboard = () => {
       
       setLoadingImportadoras(true);
       try {
+        console.log('🔍 Buscando importadoras com termo:', query);
         const response = await empresasAPI.autocompleteImportadoras(query);
-        const options = response.data.map((empresa) => ({
-          value: empresa.nome,
-          label: `${empresa.nome} (${empresa.total_operacoes} operações)`,
-        }));
-        setImportadorasOptions(options);
+        console.log('✅ Resposta autocomplete importadoras:', response.data);
+        
+        if (response && response.data && Array.isArray(response.data)) {
+          const options = response.data.map((empresa) => ({
+            value: empresa.nome,
+            label: `${empresa.nome} (${empresa.total_operacoes || 0} operações)`,
+          }));
+          console.log('📋 Opções geradas:', options);
+          setImportadorasOptions(options);
+        } else {
+          console.warn('⚠️ Resposta inválida:', response);
+          setImportadorasOptions([]);
+        }
       } catch (error) {
-        console.error('Erro ao buscar importadoras:', error);
+        console.error('❌ Erro ao buscar importadoras:', error);
+        console.error('Detalhes do erro:', error.response?.data || error.message);
         setImportadorasOptions([]);
       } finally {
         setLoadingImportadoras(false);
@@ -104,14 +114,24 @@ const Dashboard = () => {
       
       setLoadingExportadoras(true);
       try {
+        console.log('🔍 Buscando exportadoras com termo:', query);
         const response = await empresasAPI.autocompleteExportadoras(query);
-        const options = response.data.map((empresa) => ({
-          value: empresa.nome,
-          label: `${empresa.nome} (${empresa.total_operacoes} operações)`,
-        }));
-        setExportadorasOptions(options);
+        console.log('✅ Resposta autocomplete exportadoras:', response.data);
+        
+        if (response && response.data && Array.isArray(response.data)) {
+          const options = response.data.map((empresa) => ({
+            value: empresa.nome,
+            label: `${empresa.nome} (${empresa.total_operacoes || 0} operações)`,
+          }));
+          console.log('📋 Opções geradas:', options);
+          setExportadorasOptions(options);
+        } else {
+          console.warn('⚠️ Resposta inválida:', response);
+          setExportadorasOptions([]);
+        }
       } catch (error) {
-        console.error('Erro ao buscar exportadoras:', error);
+        console.error('❌ Erro ao buscar exportadoras:', error);
+        console.error('Detalhes do erro:', error.response?.data || error.message);
         setExportadorasOptions([]);
       } finally {
         setLoadingExportadoras(false);

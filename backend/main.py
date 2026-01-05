@@ -203,17 +203,70 @@ async def popular_dados_exemplo(
         
         registros_criados = gerar_dados_exemplo(request.quantidade)
         
+        # Verificar quantas empresas foram criadas
+        from sqlalchemy import func
+        total_importadoras = db.query(func.count(func.distinct(OperacaoComex.razao_social_importador))).filter(
+            OperacaoComex.razao_social_importador.isnot(None)
+        ).scalar()
+        
+        total_exportadoras = db.query(func.count(func.distinct(OperacaoComex.razao_social_exportador))).filter(
+            OperacaoComex.razao_social_exportador.isnot(None)
+        ).scalar()
+        
         return {
             "success": True,
             "message": f"Banco populado com {registros_criados} registros",
             "registros_criados": registros_criados,
-            "quantidade_solicitada": request.quantidade
+            "quantidade_solicitada": request.quantidade,
+            "empresas_importadoras": total_importadoras or 0,
+            "empresas_exportadoras": total_exportadoras or 0
         }
     except Exception as e:
         logger.error(f"Erro ao popular dados: {e}")
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro ao popular dados: {str(e)}")
+
+
+@app.get("/test/empresas")
+async def test_empresas(db: Session = Depends(get_db)):
+    """
+    Endpoint de teste para verificar empresas no banco.
+    """
+    from sqlalchemy import func
+    
+    try:
+        # Contar total de registros
+        total_registros = db.query(OperacaoComex).count()
+        
+        # Contar empresas importadoras distintas
+        importadoras = db.query(
+            func.distinct(OperacaoComex.razao_social_importador)
+        ).filter(
+            OperacaoComex.razao_social_importador.isnot(None),
+            OperacaoComex.razao_social_importador != ''
+        ).limit(10).all()
+        
+        # Contar empresas exportadoras distintas
+        exportadoras = db.query(
+            func.distinct(OperacaoComex.razao_social_exportador)
+        ).filter(
+            OperacaoComex.razao_social_exportador.isnot(None),
+            OperacaoComex.razao_social_exportador != ''
+        ).limit(10).all()
+        
+        return {
+            "total_registros": total_registros,
+            "exemplo_importadoras": [imp[0] for imp in importadoras if imp[0]],
+            "exemplo_exportadoras": [exp[0] for exp in exportadoras if exp[0]],
+            "total_importadoras_distintas": len([imp[0] for imp in importadoras if imp[0]]),
+            "total_exportadoras_distintas": len([exp[0] for exp in exportadoras if exp[0]])
+        }
+    except Exception as e:
+        logger.error(f"Erro ao testar empresas: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"erro": str(e)}
 
 
 @app.get("/dashboard/stats", response_model=DashboardStats)
@@ -583,6 +636,8 @@ async def autocomplete_exportadoras(
     from sqlalchemy import func, distinct
     
     try:
+        logger.info(f"🔍 Buscando exportadoras com termo: '{q}'")
+        
         # Buscar empresas exportadoras que contêm o termo
         empresas = db.query(
             OperacaoComex.razao_social_exportador.label('empresa'),
@@ -598,7 +653,7 @@ async def autocomplete_exportadoras(
             func.sum(OperacaoComex.valor_fob).desc()
         ).limit(limit).all()
         
-        return [
+        resultado = [
             {
                 "nome": empresa,
                 "total_operacoes": int(total_operacoes),
@@ -606,8 +661,13 @@ async def autocomplete_exportadoras(
             }
             for empresa, total_operacoes, valor_total in empresas
         ]
+        
+        logger.info(f"✅ Encontradas {len(resultado)} exportadoras")
+        return resultado
     except Exception as e:
-        logger.error(f"Erro ao buscar exportadoras: {e}")
+        logger.error(f"❌ Erro ao buscar exportadoras: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return []
 
 
