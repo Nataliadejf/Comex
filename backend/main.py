@@ -188,6 +188,127 @@ class ColetarDadosNCMsRequest(BaseModel):
     tipo_operacao: Optional[str] = None  # "Importação" ou "Exportação" (None = ambos)
 
 
+@app.post("/coletar-dados-ncms")
+async def coletar_dados_ncms(
+    request: ColetarDadosNCMsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta dados reais da API Comex Stat para múltiplos NCMs.
+    Se ncms não for fornecido, coleta dados gerais (todos os NCMs).
+    """
+    try:
+        from datetime import datetime, timedelta
+        from data_collector import DataCollector
+        
+        collector = DataCollector()
+        stats = {
+            "total_registros": 0,
+            "meses_processados": [],
+            "erros": [],
+            "ncms_processados": [],
+            "usou_api": False
+        }
+        
+        # Calcular meses a buscar
+        hoje = datetime.now()
+        meses_lista = []
+        for i in range(request.meses or 24):
+            mes_date = hoje - timedelta(days=30 * i)
+            meses_lista.append(mes_date.strftime("%Y-%m"))
+        meses_lista = sorted(meses_lista)
+        
+        # Verificar se API está disponível
+        if await collector.api_client.test_connection():
+            stats["usou_api"] = True
+            
+            # Se não especificar NCMs, coletar dados gerais
+            if not request.ncms or len(request.ncms) == 0:
+                logger.info("Coletando dados gerais (todos os NCMs)...")
+                for mes in meses_lista:
+                    try:
+                        tipos = ["Importação", "Exportação"]
+                        if request.tipo_operacao:
+                            tipos = [request.tipo_operacao]
+                        
+                        for tipo in tipos:
+                            logger.info(f"Coletando {mes} - {tipo}...")
+                            data = await collector.api_client.fetch_data(
+                                mes_inicio=mes,
+                                mes_fim=mes,
+                                tipo_operacao=tipo
+                            )
+                            
+                            if data:
+                                transformed = collector.transformer.transform_api_data(data, mes, tipo)
+                                saved = collector._save_to_database(db, transformed, mes, tipo)
+                                stats["total_registros"] += saved
+                                logger.info(f"✓ {saved} registros salvos para {mes} - {tipo}")
+                        
+                        if mes not in stats["meses_processados"]:
+                            stats["meses_processados"].append(mes)
+                    except Exception as e:
+                        error_msg = f"Erro ao coletar {mes}: {e}"
+                        logger.error(error_msg)
+                        stats["erros"].append(error_msg)
+            else:
+                # Coletar dados específicos de cada NCM
+                logger.info(f"Coletando dados para {len(request.ncms)} NCMs...")
+                for ncm in request.ncms:
+                    ncm_limpo = ncm.replace('.', '').replace(' ', '').strip()
+                    if len(ncm_limpo) != 8 or not ncm_limpo.isdigit():
+                        logger.warning(f"NCM inválido ignorado: {ncm}")
+                        continue
+                    
+                    try:
+                        tipos = ["Importação", "Exportação"]
+                        if request.tipo_operacao:
+                            tipos = [request.tipo_operacao]
+                        
+                        for tipo in tipos:
+                            logger.info(f"Coletando NCM {ncm_limpo} - {tipo}...")
+                            for mes in meses_lista:
+                                try:
+                                    data = await collector.api_client.fetch_data(
+                                        mes_inicio=mes,
+                                        mes_fim=mes,
+                                        tipo_operacao=tipo,
+                                        ncm=ncm_limpo
+                                    )
+                                    
+                                    if data:
+                                        transformed = collector.transformer.transform_api_data(data, mes, tipo)
+                                        saved = collector._save_to_database(db, transformed, mes, tipo)
+                                        stats["total_registros"] += saved
+                                
+                                except Exception as e:
+                                    logger.warning(f"Erro ao coletar {ncm_limpo} - {mes}: {e}")
+                                    continue
+                        
+                        stats["ncms_processados"].append(ncm_limpo)
+                        logger.info(f"✓ NCM {ncm_limpo} processado")
+                    except Exception as e:
+                        error_msg = f"Erro ao coletar NCM {ncm}: {e}"
+                        logger.error(error_msg)
+                        stats["erros"].append(error_msg)
+        else:
+            stats["erros"].append("API do Comex Stat não está disponível")
+            raise HTTPException(status_code=503, detail="API do Comex Stat não está disponível")
+        
+        return {
+            "success": True,
+            "message": f"Coleta concluída: {stats['total_registros']} registros",
+            "stats": stats
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao coletar dados: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
+
+
 class PopularDadosRequest(BaseModel):
     """Schema para popular dados de exemplo."""
     quantidade: int = 1000
