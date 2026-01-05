@@ -983,6 +983,65 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             import traceback
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail="Erro ao listar cadastros pendentes")
+    
+    @app.post("/criar-usuario-teste")
+    async def criar_usuario_teste(
+        email: str = Form(...),
+        senha: str = Form(...),
+        nome_completo: str = Form(...),
+        db: Session = Depends(get_db)
+    ):
+        """
+        Endpoint para criar usuário já aprovado (apenas para desenvolvimento/teste).
+        ATENÇÃO: Em produção, considere proteger este endpoint com autenticação admin.
+        """
+        try:
+            # Verificar se usuário já existe
+            usuario_existente = db.query(Usuario).filter(Usuario.email == email).first()
+            
+            if usuario_existente:
+                # Atualizar usuário existente
+                usuario_existente.senha_hash = get_password_hash(senha)
+                usuario_existente.nome_completo = nome_completo
+                usuario_existente.status_aprovacao = "aprovado"
+                usuario_existente.ativo = 1
+                usuario_existente.token_aprovacao = None
+                
+                db.commit()
+                logger.info(f"✅ Usuário {email} atualizado e aprovado")
+                return {
+                    "message": "Usuário atualizado e aprovado com sucesso",
+                    "email": email,
+                    "status": "aprovado"
+                }
+            
+            # Criar novo usuário
+            senha_hash = get_password_hash(senha)
+            
+            novo_usuario = Usuario(
+                email=email,
+                senha_hash=senha_hash,
+                nome_completo=nome_completo,
+                status_aprovacao="aprovado",
+                ativo=1,
+                token_aprovacao=None,
+                data_criacao=datetime.utcnow()
+            )
+            
+            db.add(novo_usuario)
+            db.commit()
+            
+            logger.info(f"✅ Usuário {email} criado e aprovado")
+            return {
+                "message": "Usuário criado e aprovado com sucesso",
+                "email": email,
+                "status": "aprovado"
+            }
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Erro ao criar usuário teste: {e}")
+            raise HTTPException(status_code=500, detail=f"Erro ao criar usuário: {str(e)}")
 else:
     # Endpoints stub quando autenticação não está disponível
     @app.post("/login")
