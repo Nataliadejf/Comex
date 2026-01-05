@@ -1,0 +1,37 @@
+═══════════════════════════════════════════════════════════════
+  INSTRUÇÕES PARA COPIAR E COLAR NO RENDER.COM
+═══════════════════════════════════════════════════════════════
+
+PASSO 1: Acesse https://dashboard.render.com
+PASSO 2: Clique no serviço "comex-backend"
+PASSO 3: Clique em "Settings" no menu lateral
+PASSO 4: Role até "Build & Deploy"
+PASSO 5: No campo "Build Command", APAGUE tudo e COLE isto:
+
+═══════════════════════════════════════════════════════════════
+pip install -r requirements-render-ultra-minimal.txt
+═══════════════════════════════════════════════════════════════
+
+PASSO 6: Verifique se "Start Command" está assim:
+
+═══════════════════════════════════════════════════════════════
+uvicorn main:app --host 0.0.0.0 --port $PORT
+═══════════════════════════════════════════════════════════════
+
+PASSO 7: Verifique se "Root Directory" está assim:
+
+═══════════════════════════════════════════════════════════════
+backend
+═══════════════════════════════════════════════════════════════
+
+PASSO 8: Clique em "Save Changes"
+PASSO 9: Aguarde o deploy iniciar automaticamente
+
+═══════════════════════════════════════════════════════════════
+  SE AINDA FALHAR, USE ESTE BUILD COMMAND ALTERNATIVO:
+═══════════════════════════════════════════════════════════════
+
+pip install --upgrade pip && pip install fastapi==0.104.1 uvicorn==0.24.0 sqlalchemy==2.0.23 pydantic==2.5.0 pydantic-settings==2.1.0 psycopg2-binary==2.9.9 httpx==0.25.2 python-dotenv==1.0.0 python-multipart==0.0.6 loguru==0.7.2
+
+═══════════════════════════════════════════════════════════════
+
