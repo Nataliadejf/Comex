@@ -181,6 +181,13 @@ async def coletar_dados(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
 
 
+class ColetarDadosNCMsRequest(BaseModel):
+    """Schema para coletar dados de múltiplos NCMs."""
+    ncms: Optional[List[str]] = None  # Lista de NCMs específicos (None = todos)
+    meses: Optional[int] = 24  # Quantos meses buscar (padrão: 24)
+    tipo_operacao: Optional[str] = None  # "Importação" ou "Exportação" (None = ambos)
+
+
 class PopularDadosRequest(BaseModel):
     """Schema para popular dados de exemplo."""
     quantidade: int = 1000
