@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Testar API Comex Stat - Detalhado</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        button {
+            padding: 16px 32px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-bottom: 20px;
+        }
+        
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .results {
+            margin-top: 30px;
+        }
+        
+        .test-item {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+        }
+        
+        .test-item.success {
+            border-left-color: #22c55e;
+            background: #f0fdf4;
+        }
+        
+        .test-item.error {
+            border-left-color: #ef4444;
+            background: #fef2f2;
+        }
+        
+        .test-item.warning {
+            border-left-color: #f59e0b;
+            background: #fffbeb;
+        }
+        
+        .test-url {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            word-break: break-all;
+        }
+        
+        .test-details {
+            font-size: 13px;
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .test-details strong {
+            color: #333;
+        }
+        
+        .summary {
+            background: #e0e7ff;
+            border-left: 4px solid #6366f1;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+        
+        .summary h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+        
+        .summary-item {
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .summary-item strong {
+            color: #333;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .preview {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Teste Detalhado da API Comex Stat</h1>
+        <p class="subtitle">Testa diferentes URLs e formatos para entender o que está disponível</p>
+        
+        <button id="testBtn" onclick="testarAPI()">
+            🚀 Iniciar Teste
+        </button>
+        
+        <div id="results" class="results"></div>
+        
+        <div id="summary" class="summary" style="display: none;">
+            <h2>📊 Resumo dos Testes</h2>
+            <div id="summaryContent"></div>
+        </div>
+    </div>
+    
+    <script>
+        const BACKEND_URL = 'https://comex-backend-wjco.onrender.com';
+        
+        async function testarAPI() {
+            const btn = document.getElementById('testBtn');
+            const resultsDiv = document.getElementById('results');
+            const summaryDiv = document.getElementById('summary');
+            const summaryContent = document.getElementById('summaryContent');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Testando API...';
+            resultsDiv.innerHTML = '';
+            summaryDiv.style.display = 'none';
+            
+            const baseUrls = [
+                'https://comexstat.mdic.gov.br',
+                'http://comexstat.mdic.gov.br'
+            ];
+            
+            const endpoints = [
+                '/dados',
+                '/api/dados',
+                '/api/v1/dados',
+                '/api/comex/dados',
+                '/dados/export',
+                '/api/export',
+                '/api',
+                '/'
+            ];
+            
+            const testParams = {
+                mes_inicio: '2024-01',
+                mes_fim: '2024-01',
+                tipo_operacao: 'Importação'
+            };
+            
+            let successful = 0;
+            let jsonResponses = 0;
+            let htmlResponses = 0;
+            let errors = 0;
+            
+            for (const baseUrl of baseUrls) {
+                for (const endpoint of endpoints) {
+                    const url = `${baseUrl}${endpoint}`;
+                    const fullUrl = new URL(url);
+                    
+                    // Adicionar parâmetros à URL
+                    Object.keys(testParams).forEach(key => {
+                        fullUrl.searchParams.append(key, testParams[key]);
+                    });
+                    
+                    const testItem = document.createElement('div');
+                    testItem.className = 'test-item';
+                    testItem.innerHTML = `
+                        <div class="test-url">📡 ${fullUrl.toString()}</div>
+                        <div class="test-details">Testando...</div>
+                    `;
+                    resultsDiv.appendChild(testItem);
+                    
+                    try {
+                        const response = await fetch(fullUrl.toString(), {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'application/json',
+                                'User-Agent': 'Mozilla/5.0'
+                            }
+                        });
+                        
+                        const contentType = response.headers.get('content-type') || '';
+                        const isJson = contentType.includes('application/json');
+                        const isHtml = contentType.includes('text/html');
+                        const isXml = contentType.includes('xml');
+                        
+                        let preview = '';
+                        if (isJson) {
+                            const data = await response.json();
+                            preview = JSON.stringify(data).substring(0, 500);
+                            jsonResponses++;
+                        } else {
+                            preview = await response.text();
+                            preview = preview.substring(0, 500);
+                            if (isHtml) htmlResponses++;
+                        }
+                        
+                        if (response.ok) {
+                            successful++;
+                            testItem.className = 'test-item success';
+                            testItem.innerHTML = `
+                                <div class="test-url">✅ ${fullUrl.toString()}</div>
+                                <div class="test-details">
+                                    <strong>Status:</strong> ${response.status}<br>
+                                    <strong>Content-Type:</strong> ${contentType}<br>
+                                    <strong>Tamanho:</strong> ${preview.length} bytes<br>
+                                    ${isJson ? '<strong style="color: #22c55e;">🎉 JSON detectado!</strong>' : ''}
+                                    ${isHtml ? '<strong style="color: #f59e0b;">⚠️ HTML detectado</strong>' : ''}
+                                    ${isXml ? '<strong style="color: #6366f1;">📋 XML detectado</strong>' : ''}
+                                </div>
+                                ${preview ? `<div class="preview">${escapeHtml(preview)}</div>` : ''}
+                            `;
+                        } else {
+                            testItem.className = 'test-item warning';
+                            testItem.innerHTML = `
+                                <div class="test-url">⚠️ ${fullUrl.toString()}</div>
+                                <div class="test-details">
+                                    <strong>Status:</strong> ${response.status}<br>
+                                    <strong>Content-Type:</strong> ${contentType || 'N/A'}
+                                </div>
+                            `;
+                        }
+                    } catch (error) {
+                        errors++;
+                        testItem.className = 'test-item error';
+                        testItem.innerHTML = `
+                            <div class="test-url">❌ ${fullUrl.toString()}</div>
+                            <div class="test-details">
+                                <strong>Erro:</strong> ${error.message}
+                            </div>
+                        `;
+                    }
+                    
+                    // Pequeno delay
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
+            }
+            
+            // Mostrar resumo
+            summaryContent.innerHTML = `
+                <div class="summary-item">
+                    <strong>✅ Respostas bem-sucedidas (200):</strong> ${successful}
+                </div>
+                <div class="summary-item">
+                    <strong>📄 Respostas JSON:</strong> ${jsonResponses}
+                </div>
+                <div class="summary-item">
+                    <strong>🌐 Respostas HTML:</strong> ${htmlResponses}
+                </div>
+                <div class="summary-item">
+                    <strong>❌ Erros:</strong> ${errors}
+                </div>
+                ${jsonResponses === 0 ? `
+                    <div class="summary-item" style="margin-top: 20px; padding: 15px; background: #fef2f2; border-radius: 4px;">
+                        <strong>❌ CONCLUSÃO:</strong><br>
+                        A API do Comex Stat não parece ter uma API REST pública disponível.<br>
+                        Todos os endpoints testados retornaram HTML ao invés de JSON.<br><br>
+                        <strong>💡 RECOMENDAÇÕES:</strong><br>
+                        1. Use dados de exemplo para testes: /popular-dados-exemplo<br>
+                        2. Verifique se há documentação oficial da API do MDIC<br>
+                        3. Entre em contato com o MDIC para acesso à API
+                    </div>
+                ` : ''}
+            `;
+            summaryDiv.style.display = 'block';
+            
+            btn.disabled = false;
+            btn.textContent = '🔄 Testar Novamente';
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
+
