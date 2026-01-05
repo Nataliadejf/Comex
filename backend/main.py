@@ -235,7 +235,7 @@ async def test_empresas(db: Session = Depends(get_db)):
     """
     Endpoint de teste para verificar empresas no banco.
     """
-    from sqlalchemy import func
+    from sqlalchemy import func, distinct
     
     try:
         # Contar total de registros
@@ -243,7 +243,7 @@ async def test_empresas(db: Session = Depends(get_db)):
         
         # Contar empresas importadoras distintas
         importadoras = db.query(
-            func.distinct(OperacaoComex.razao_social_importador)
+            distinct(OperacaoComex.razao_social_importador)
         ).filter(
             OperacaoComex.razao_social_importador.isnot(None),
             OperacaoComex.razao_social_importador != ''
@@ -251,24 +251,87 @@ async def test_empresas(db: Session = Depends(get_db)):
         
         # Contar empresas exportadoras distintas
         exportadoras = db.query(
-            func.distinct(OperacaoComex.razao_social_exportador)
+            distinct(OperacaoComex.razao_social_exportador)
         ).filter(
             OperacaoComex.razao_social_exportador.isnot(None),
             OperacaoComex.razao_social_exportador != ''
         ).limit(10).all()
         
+        # Contar totais distintos
+        total_imp_distintas = db.query(
+            func.count(distinct(OperacaoComex.razao_social_importador))
+        ).filter(
+            OperacaoComex.razao_social_importador.isnot(None),
+            OperacaoComex.razao_social_importador != ''
+        ).scalar() or 0
+        
+        total_exp_distintas = db.query(
+            func.count(distinct(OperacaoComex.razao_social_exportador))
+        ).filter(
+            OperacaoComex.razao_social_exportador.isnot(None),
+            OperacaoComex.razao_social_exportador != ''
+        ).scalar() or 0
+        
+        # Valores totais
+        valor_total_imp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
+            OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO
+        ).scalar() or 0
+        
+        valor_total_exp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
+            OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO
+        ).scalar() or 0
+        
+        # Testar autocomplete
+        teste_autocomplete_imp = db.query(
+            OperacaoComex.razao_social_importador.label('empresa'),
+            func.count(OperacaoComex.id).label('total_operacoes')
+        ).filter(
+            OperacaoComex.razao_social_importador.isnot(None),
+            OperacaoComex.razao_social_importador != '',
+            OperacaoComex.razao_social_importador.ilike("%Importadora%")
+        ).group_by(
+            OperacaoComex.razao_social_importador
+        ).limit(5).all()
+        
+        teste_autocomplete_exp = db.query(
+            OperacaoComex.razao_social_exportador.label('empresa'),
+            func.count(OperacaoComex.id).label('total_operacoes')
+        ).filter(
+            OperacaoComex.razao_social_exportador.isnot(None),
+            OperacaoComex.razao_social_exportador != '',
+            OperacaoComex.razao_social_exportador.ilike("%Exportadora%")
+        ).group_by(
+            OperacaoComex.razao_social_exportador
+        ).limit(5).all()
+        
         return {
             "total_registros": total_registros,
             "exemplo_importadoras": [imp[0] for imp in importadoras if imp[0]],
             "exemplo_exportadoras": [exp[0] for exp in exportadoras if exp[0]],
-            "total_importadoras_distintas": len([imp[0] for imp in importadoras if imp[0]]),
-            "total_exportadoras_distintas": len([exp[0] for exp in exportadoras if exp[0]])
+            "total_importadoras_distintas": total_imp_distintas,
+            "total_exportadoras_distintas": total_exp_distintas,
+            "valor_total_importacoes": float(valor_total_imp),
+            "valor_total_exportacoes": float(valor_total_exp),
+            "teste_autocomplete_importadoras": [
+                {"nome": emp, "total_operacoes": int(total)} 
+                for emp, total in teste_autocomplete_imp
+            ],
+            "teste_autocomplete_exportadoras": [
+                {"nome": emp, "total_operacoes": int(total)} 
+                for emp, total in teste_autocomplete_exp
+            ],
+            "status": "ok" if total_registros > 0 else "vazio",
+            "problemas": [
+                "Banco está vazio" if total_registros == 0 else None,
+                "Nenhuma empresa importadora" if total_imp_distintas == 0 else None,
+                "Nenhuma empresa exportadora" if total_exp_distintas == 0 else None,
+            ]
         }
     except Exception as e:
         logger.error(f"Erro ao testar empresas: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return {"erro": str(e)}
+        return {"erro": str(e), "traceback": traceback.format_exc()}
 
 
 @app.get("/dashboard/stats", response_model=DashboardStats)
