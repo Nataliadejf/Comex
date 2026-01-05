@@ -205,6 +205,9 @@ class ComexStatAPIClient:
         """
         logger.info("Tentando endpoints alternativos da API Comex Stat...")
         
+        # Tentar HTTP ao invés de HTTPS (o Comex Stat pode ter problemas com HTTPS)
+        base_url_http = self.base_url.replace("https://", "http://")
+        
         # Lista de endpoints alternativos para tentar
         alternative_endpoints = [
             "/api/dados",
@@ -212,44 +215,47 @@ class ComexStatAPIClient:
             "/api/comex/dados",
             "/dados/export",
             "/api/export",
+            "/dados",  # Tentar novamente com HTTP
         ]
         
+        # Tentar com HTTP primeiro
         for endpoint in alternative_endpoints:
             try:
-                logger.info(f"Tentando endpoint: {endpoint}")
+                url = f"{base_url_http}{endpoint}"
+                logger.info(f"Tentando endpoint: {url}")
                 if HTTPX_AVAILABLE:
                     async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
                         response = await client.get(
-                            f"{self.base_url}{endpoint}",
+                            url,
                             params=params,
                             headers=headers
                         )
                         content_type = response.headers.get("content-type", "").lower()
                         if "application/json" in content_type:
                             data = response.json()
-                            logger.success(f"✅ Endpoint funcionou: {endpoint}")
+                            logger.success(f"✅ Endpoint funcionou: {url}")
                             return data.get("registros", []) if isinstance(data, dict) else data
                 else:
                     timeout = aiohttp.ClientTimeout(total=self.timeout)
                     connector = aiohttp.TCPConnector(ssl=False)
                     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                         async with session.get(
-                            f"{self.base_url}{endpoint}",
+                            url,
                             params=params,
                             headers=headers
                         ) as response:
                             content_type = response.headers.get("content-type", "").lower()
                             if "application/json" in content_type:
                                 data = await response.json()
-                                logger.success(f"✅ Endpoint funcionou: {endpoint}")
+                                logger.success(f"✅ Endpoint funcionou: {url}")
                                 return data.get("registros", []) if isinstance(data, dict) else data
             except Exception as e:
-                logger.debug(f"Endpoint {endpoint} não funcionou: {e}")
+                logger.debug(f"Endpoint {url} não funcionou: {e}")
                 continue
         
         # Se nenhum endpoint funcionou, retornar lista vazia
-        logger.warning("⚠️ Nenhum endpoint alternativo funcionou. A API pode não estar disponível ou a URL está incorreta.")
-        logger.warning("💡 Verifique a documentação oficial do Comex Stat para a URL correta da API.")
+        logger.warning("⚠️ Nenhum endpoint alternativo funcionou. A API pode não estar disponível como REST API pública.")
+        logger.warning("💡 O Comex Stat pode não ter uma API REST pública. Considere usar dados de exemplo ou verificar se há outra forma de acesso.")
         return []
     
     async def get_available_months(self) -> List[str]:
