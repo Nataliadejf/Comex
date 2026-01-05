@@ -5,7 +5,7 @@
 
 # API Framework (versões antigas e estáveis)
 fastapi==0.95.2
-uvicorn[standard]==0.22.0
+uvicorn==0.22.0
 pydantic==1.10.7
 pydantic-settings==1.10.1
 
