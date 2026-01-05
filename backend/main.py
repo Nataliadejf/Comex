@@ -531,74 +531,84 @@ async def buscar_operacoes(
 
 @app.get("/empresas/autocomplete/importadoras")
 async def autocomplete_importadoras(
-    q: str = Query(..., min_length=2, description="Termo de busca"),
+    q: str = Query(..., min_length=1, description="Termo de busca"),  # Reduzido para min_length=1
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     """
     Autocomplete para empresas importadoras.
+    Retorna empresas que contêm o termo de busca no nome.
     """
     from sqlalchemy import func, distinct
     
-    empresas = db.query(
-        distinct(OperacaoComex.razao_social_importador).label('empresa'),
-        func.count(OperacaoComex.id).label('total_operacoes'),
-        func.sum(OperacaoComex.valor_fob).label('valor_total')
-    ).filter(
-        OperacaoComex.razao_social_importador.isnot(None),
-        OperacaoComex.razao_social_importador != '',
-        OperacaoComex.razao_social_importador.ilike(f"%{q}%"),
-        OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO
-    ).group_by(
-        OperacaoComex.razao_social_importador
-    ).order_by(
-        func.sum(OperacaoComex.valor_fob).desc()
-    ).limit(limit).all()
-    
-    return [
-        {
-            "nome": empresa,
-            "total_operacoes": total_operacoes,
-            "valor_total": float(valor_total or 0)
-        }
-        for empresa, total_operacoes, valor_total in empresas
-    ]
+    try:
+        # Buscar empresas importadoras que contêm o termo
+        empresas = db.query(
+            OperacaoComex.razao_social_importador.label('empresa'),
+            func.count(OperacaoComex.id).label('total_operacoes'),
+            func.sum(OperacaoComex.valor_fob).label('valor_total')
+        ).filter(
+            OperacaoComex.razao_social_importador.isnot(None),
+            OperacaoComex.razao_social_importador != '',
+            OperacaoComex.razao_social_importador.ilike(f"%{q}%")
+        ).group_by(
+            OperacaoComex.razao_social_importador
+        ).order_by(
+            func.sum(OperacaoComex.valor_fob).desc()
+        ).limit(limit).all()
+        
+        return [
+            {
+                "nome": empresa,
+                "total_operacoes": int(total_operacoes),
+                "valor_total": float(valor_total or 0)
+            }
+            for empresa, total_operacoes, valor_total in empresas
+        ]
+    except Exception as e:
+        logger.error(f"Erro ao buscar importadoras: {e}")
+        return []
 
 
 @app.get("/empresas/autocomplete/exportadoras")
 async def autocomplete_exportadoras(
-    q: str = Query(..., min_length=2, description="Termo de busca"),
+    q: str = Query(..., min_length=1, description="Termo de busca"),  # Reduzido para min_length=1
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     """
     Autocomplete para empresas exportadoras.
+    Retorna empresas que contêm o termo de busca no nome.
     """
     from sqlalchemy import func, distinct
     
-    empresas = db.query(
-        distinct(OperacaoComex.razao_social_exportador).label('empresa'),
-        func.count(OperacaoComex.id).label('total_operacoes'),
-        func.sum(OperacaoComex.valor_fob).label('valor_total')
-    ).filter(
-        OperacaoComex.razao_social_exportador.isnot(None),
-        OperacaoComex.razao_social_exportador != '',
-        OperacaoComex.razao_social_exportador.ilike(f"%{q}%"),
-        OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO
-    ).group_by(
-        OperacaoComex.razao_social_exportador
-    ).order_by(
-        func.sum(OperacaoComex.valor_fob).desc()
-    ).limit(limit).all()
-    
-    return [
-        {
-            "nome": empresa,
-            "total_operacoes": total_operacoes,
-            "valor_total": float(valor_total or 0)
-        }
-        for empresa, total_operacoes, valor_total in empresas
-    ]
+    try:
+        # Buscar empresas exportadoras que contêm o termo
+        empresas = db.query(
+            OperacaoComex.razao_social_exportador.label('empresa'),
+            func.count(OperacaoComex.id).label('total_operacoes'),
+            func.sum(OperacaoComex.valor_fob).label('valor_total')
+        ).filter(
+            OperacaoComex.razao_social_exportador.isnot(None),
+            OperacaoComex.razao_social_exportador != '',
+            OperacaoComex.razao_social_exportador.ilike(f"%{q}%")
+        ).group_by(
+            OperacaoComex.razao_social_exportador
+        ).order_by(
+            func.sum(OperacaoComex.valor_fob).desc()
+        ).limit(limit).all()
+        
+        return [
+            {
+                "nome": empresa,
+                "total_operacoes": int(total_operacoes),
+                "valor_total": float(valor_total or 0)
+            }
+            for empresa, total_operacoes, valor_total in empresas
+        ]
+    except Exception as e:
+        logger.error(f"Erro ao buscar exportadoras: {e}")
+        return []
 
 
 @app.get("/ncm/{ncm}/analise")

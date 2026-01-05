@@ -24,8 +24,10 @@ def enviar_email_aprovacao(email_usuario: str, nome: str, token: str):
         logger.info(f"  Email: {email_usuario}")
         logger.info(f"  Token de aprovação: {token}")
         logger.info("")
-        logger.info(f"Link de aprovação: http://localhost:3000/aprovar?token={token}")
-        logger.info(f"Ou acesse: http://localhost:8000/docs e use o endpoint /aprovar-cadastro")
+        logger.info(f"Link de aprovação: https://comex-4.onrender.com/aprovar?token={token}")
+        logger.info(f"Ou acesse: https://comex-backend-wjco.onrender.com/docs e use o endpoint /aprovar-cadastro")
+        logger.info(f"Ou use o endpoint: POST https://comex-backend-wjco.onrender.com/aprovar-cadastro")
+        logger.info(f"Com body JSON: {{\"token\": \"{token}\"}}")
         logger.info("")
         logger.info("=" * 60)
         
@@ -65,7 +67,7 @@ def enviar_email_cadastro_aprovado(email: str, nome: str):
         logger.info("Seu cadastro no Comex Analyzer foi aprovado!")
         logger.info("Agora você já pode fazer login e usar o sistema.")
         logger.info("")
-        logger.info(f"Acesse: http://localhost:3000/login")
+        logger.info(f"Acesse: https://comex-4.onrender.com/login")
         logger.info("")
         logger.info("=" * 60)
         

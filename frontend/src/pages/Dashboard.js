@@ -71,7 +71,7 @@ const Dashboard = () => {
   // Função de busca de importadoras com debounce
   const buscarImportadoras = useCallback(
     debounce(async (query) => {
-      if (!query || query.length < 2) {
+      if (!query || query.length < 1) {
         setImportadorasOptions([]);
         return;
       }
@@ -97,7 +97,7 @@ const Dashboard = () => {
   // Função de busca de exportadoras com debounce
   const buscarExportadoras = useCallback(
     debounce(async (query) => {
-      if (!query || query.length < 2) {
+      if (!query || query.length < 1) {
         setExportadorasOptions([]);
         return;
       }
