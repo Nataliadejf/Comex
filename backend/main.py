@@ -750,6 +750,10 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
                 logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes")
             
+            # Em desenvolvimento, aprovar automaticamente
+            # Em produção, manter pendente até aprovação manual
+            auto_approve = settings.environment == "development" or settings.debug
+            
             novo_usuario = Usuario(
                 email=cadastro.email,
                 senha_hash=get_password_hash(senha_para_hash),
@@ -758,8 +762,8 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 nome_empresa=cadastro.nome_empresa,
                 cpf=cadastro.cpf,
                 cnpj=cadastro.cnpj,
-                status_aprovacao="pendente",
-                ativo=0
+                status_aprovacao="aprovado" if auto_approve else "pendente",
+                ativo=1 if auto_approve else 0
             )
             db.add(novo_usuario)
             db.flush()
@@ -789,15 +793,108 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                     token_aprovacao
                 )
             
-            return {
-                "message": "Cadastro realizado com sucesso! Aguarde aprovação por email.",
-                "email": cadastro.email
-            }
+            if auto_approve:
+                return {
+                    "message": "Cadastro realizado com sucesso! Você já pode fazer login.",
+                    "email": cadastro.email,
+                    "aprovado": True
+                }
+            else:
+                return {
+                    "message": "Cadastro realizado com sucesso! Aguarde aprovação por email.",
+                    "email": cadastro.email,
+                    "aprovado": False
+                }
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"❌ Erro inesperado no cadastro: {e}")
             raise HTTPException(status_code=500, detail=f"Erro interno do servidor: {str(e)}")
+    
+    class RedefinirSenhaRequest(BaseModel):
+        """Schema para solicitar redefinição de senha."""
+        email: str
+    
+    class NovaSenhaRequest(BaseModel):
+        """Schema para definir nova senha."""
+        token: str
+        nova_senha: str
+    
+    @app.post("/solicitar-redefinicao-senha")
+    async def solicitar_redefinicao_senha(
+        request: RedefinirSenhaRequest,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db)
+    ):
+        """Endpoint para solicitar redefinição de senha."""
+        try:
+            usuario = db.query(Usuario).filter(Usuario.email == request.email).first()
+            if not usuario:
+                # Por segurança, não revelar se o email existe ou não
+                logger.info(f"Solicitação de redefinição para email não encontrado: {request.email}")
+                return {"message": "Se o email existir, você receberá instruções para redefinir a senha"}
+            
+            # Gerar token de redefinição
+            token_redefinicao = secrets.token_urlsafe(32)
+            
+            # Salvar token no banco
+            try:
+                usuario.token_aprovacao = token_redefinicao
+                db.commit()
+                logger.info(f"✅ Token de redefinição salvo para {request.email}")
+            except Exception as e:
+                logger.error(f"Erro ao salvar token de redefinição: {e}")
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Erro ao processar solicitação: {str(e)}")
+            
+            # Log do token (em produção, enviar por email)
+            logger.info(f"📧 Token de redefinição gerado para {request.email}: {token_redefinicao}")
+            logger.info(f"   Link: http://localhost:3000/redefinir-senha?token={token_redefinicao}")
+            
+            return {"message": "Se o email existir, você receberá instruções para redefinir a senha"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erro ao solicitar redefinição: {e}")
+            raise HTTPException(status_code=500, detail="Erro ao processar solicitação")
+    
+    @app.post("/redefinir-senha")
+    async def redefinir_senha(
+        request: NovaSenhaRequest,
+        db: Session = Depends(get_db)
+    ):
+        """Endpoint para redefinir senha usando token."""
+        try:
+            # Validar nova senha
+            senha_valida, mensagem_erro = validate_password(request.nova_senha)
+            if not senha_valida:
+                raise HTTPException(status_code=400, detail=mensagem_erro)
+            
+            # Buscar usuário pelo token
+            usuario = db.query(Usuario).filter(Usuario.token_aprovacao == request.token).first()
+            if not usuario:
+                raise HTTPException(status_code=400, detail="Token inválido ou expirado")
+            
+            # Truncar senha antes de criar hash
+            senha_para_hash = request.nova_senha
+            senha_bytes = len(senha_para_hash.encode('utf-8'))
+            if senha_bytes > 72:
+                senha_bytes_truncated = senha_para_hash.encode('utf-8')[:72]
+                senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
+                logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes na redefinição")
+            
+            # Atualizar senha
+            usuario.senha_hash = get_password_hash(senha_para_hash)
+            usuario.token_aprovacao = None  # Limpar token após uso
+            db.commit()
+            
+            logger.info(f"✅ Senha redefinida para: {usuario.email}")
+            return {"message": "Senha redefinida com sucesso"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erro ao redefinir senha: {e}")
+            raise HTTPException(status_code=500, detail="Erro ao redefinir senha")
 else:
     # Endpoints stub quando autenticação não está disponível
     @app.post("/login")
