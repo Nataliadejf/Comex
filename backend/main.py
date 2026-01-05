@@ -954,28 +954,34 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 Usuario.status_aprovacao == "pendente"
             ).all()
             
+            cadastros_list = []
+            for c in cadastros:
+                # Buscar token de aprovação
+                aprovacao = db.query(AprovacaoCadastro).filter(
+                    AprovacaoCadastro.usuario_id == c.id,
+                    AprovacaoCadastro.status == "pendente"
+                ).first()
+                
+                cadastros_list.append({
+                    "id": c.id,
+                    "email": c.email,
+                    "nome_completo": c.nome_completo,
+                    "nome_empresa": c.nome_empresa,
+                    "cpf": c.cpf,
+                    "cnpj": c.cnpj,
+                    "data_criacao": c.data_criacao.isoformat() if c.data_criacao else None,
+                    "token_aprovacao": aprovacao.token_aprovacao if aprovacao else None,
+                    "link_aprovacao": f"http://localhost:8000/docs#/default/aprovar_cadastro_aprovar_cadastro_post" if aprovacao else None
+                })
+            
             return {
-                "total": len(cadastros),
-                "cadastros": [
-                    {
-                        "id": c.id,
-                        "email": c.email,
-                        "nome_completo": c.nome_completo,
-                        "nome_empresa": c.nome_empresa,
-                        "data_criacao": c.data_criacao.isoformat() if c.data_criacao else None,
-                        "token_aprovacao": db.query(AprovacaoCadastro).filter(
-                            AprovacaoCadastro.usuario_id == c.id,
-                            AprovacaoCadastro.status == "pendente"
-                        ).first().token_aprovacao if db.query(AprovacaoCadastro).filter(
-                            AprovacaoCadastro.usuario_id == c.id,
-                            AprovacaoCadastro.status == "pendente"
-                        ).first() else None
-                    }
-                    for c in cadastros
-                ]
+                "total": len(cadastros_list),
+                "cadastros": cadastros_list
             }
         except Exception as e:
             logger.error(f"Erro ao listar cadastros pendentes: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail="Erro ao listar cadastros pendentes")
 else:
     # Endpoints stub quando autenticação não está disponível
