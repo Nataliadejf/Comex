@@ -148,3 +148,48 @@ class ColetaLog(Base):
             f"status={self.status}, registros={self.registros_coletados})>"
         )
 
+
+class Usuario(Base):
+    """
+    Modelo de usuário do sistema.
+    """
+    __tablename__ = "usuarios"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    senha_hash = Column(String(255), nullable=False)
+    nome_completo = Column(String(255), nullable=False)
+    data_nascimento = Column(Date, nullable=True)
+    nome_empresa = Column(String(255), nullable=True)
+    cpf = Column(String(11), nullable=True, unique=True)
+    cnpj = Column(String(14), nullable=True, unique=True)
+    status_aprovacao = Column(String(20), nullable=False, default="pendente")  # pendente, aprovado, rejeitado
+    ativo = Column(Integer, nullable=False, default=0)  # 0 = inativo, 1 = ativo
+    token_aprovacao = Column(String(255), nullable=True)
+    ultimo_login = Column(DateTime, nullable=True)
+    data_criacao = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f"<Usuario(id={self.id}, email={self.email}, status={self.status_aprovacao})>"
+
+
+class AprovacaoCadastro(Base):
+    """
+    Modelo para controle de aprovação de cadastros.
+    """
+    __tablename__ = "aprovacoes_cadastro"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey('usuarios.id'), nullable=False, index=True)
+    token_aprovacao = Column(String(255), unique=True, nullable=False, index=True)
+    email_destino = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="pendente")  # pendente, aprovado, rejeitado
+    data_criacao = Column(DateTime, default=datetime.utcnow, nullable=False)
+    data_expiracao = Column(DateTime, nullable=False)
+    data_aprovacao = Column(DateTime, nullable=True)
+    
+    usuario = relationship("Usuario", backref="aprovacoes")
+    
+    def __repr__(self):
+        return f"<AprovacaoCadastro(id={self.id}, usuario_id={self.usuario_id}, status={self.status})>"
+
