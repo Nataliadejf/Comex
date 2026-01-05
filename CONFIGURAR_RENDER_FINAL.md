@@ -2,29 +2,53 @@
 
 ## 🎯 Objetivo
 
-Configurar corretamente o serviço `comex-backend` no Render e remover serviços duplicados.
+Manter os serviços funcionando (Comex-3 e Comex-2) e configurar o frontend para usar o serviço correto.
+
+## ✅ Serviços que DEVEM ser mantidos
+
+- ✅ **Comex-3** - Deployed (Docker) - **MANTER**
+- ✅ **Comex-2** - Deployed (Docker) - **MANTER**
+
+## 🗑️ Serviços que podem ser deletados (opcional)
+
+- ❌ **comex-backend** - Failed deploy (Python 3) - Se não estiver funcionando
+- ❌ **Comex-** - Deploying (Docker) - Se não for necessário
 
 ## 📋 Passo a Passo Completo
 
-### PASSO 1: Limpar Serviços Duplicados
+### PASSO 1: Verificar qual serviço usar
 
-1. Acesse: https://dashboard.render.com
-2. Vá em **"My project"**
-3. Na lista de serviços, **delete**:
-   - ❌ Comex-3
-   - ❌ Comex-2
-   - ❌ Comex-
-   
-   **Como deletar:**
-   - Clique no nome do serviço
-   - Vá em **"Settings"** (menu lateral esquerdo)
-   - Role até o final da página
-   - Clique em **"Delete Service"**
-   - Confirme a exclusão
+1. Teste o endpoint `/health` de cada serviço:
+   - Comex-3: `https://comex-3.onrender.com/health`
+   - Comex-2: `https://comex-2.onrender.com/health`
 
-**Mantenha apenas**: ✅ `comex-backend`
+2. O serviço correto deve retornar JSON válido (ex: `{"status":"healthy"}` ou `{"message":"Comex Analyzer API"}`)
 
-### PASSO 2: Criar Banco de Dados PostgreSQL
+3. **Recomendação**: Use **Comex-3** como backend principal (parece estar mais estável)
+
+### PASSO 2: Configurar Frontend para usar o serviço correto
+
+**Opção A: Usar Comex-3 (Recomendado)**
+
+1. Edite o arquivo `frontend/.env`:
+   ```
+   REACT_APP_API_URL=https://comex-3.onrender.com
+   ```
+
+2. Reinicie o frontend:
+   - Execute `REINICIAR_FRONTEND.bat`
+   - Ou pare e inicie novamente o servidor React
+
+**Opção B: Usar Comex-2**
+
+1. Edite o arquivo `frontend/.env`:
+   ```
+   REACT_APP_API_URL=https://comex-2.onrender.com
+   ```
+
+2. Reinicie o frontend
+
+### PASSO 3: Criar Banco de Dados PostgreSQL (se necessário)
 
 1. No Render Dashboard, clique em **"+ New"** (canto superior direito)
 2. Selecione **"PostgreSQL"**
@@ -38,7 +62,7 @@ Configurar corretamente o serviço `comex-backend` no Render e remover serviços
 5. Aguarde a criação (1-2 minutos)
 6. Após criar, copie a **Internal Database URL** (formato: `postgresql://usuario:senha@host:porta/database`)
 
-### PASSO 3: Configurar o Serviço `comex-backend`
+### PASSO 4: Configurar o Serviço (se precisar atualizar)
 
 1. Clique no serviço **"comex-backend"**
 2. Vá em **"Settings"** (menu lateral)
@@ -74,7 +98,7 @@ Vá em **"Environment"** (menu lateral) e adicione/verifique:
 | `DEBUG` | `false` |
 | `PYTHON_VERSION` | `3.11` |
 
-### PASSO 4: Conectar ao Repositório GitHub
+### PASSO 5: Conectar ao Repositório GitHub (se necessário)
 
 1. No serviço `comex-backend`, vá em **"Settings"**
 2. Em **"Repository"**, verifique se está conectado a:
@@ -83,14 +107,14 @@ Vá em **"Environment"** (menu lateral) e adicione/verifique:
    - **Root Directory**: `.` (raiz)
 3. Se não estiver conectado, clique em **"Connect Repository"** e selecione o repositório
 
-### PASSO 5: Fazer Deploy
+### PASSO 6: Fazer Deploy (quando houver atualizações)
 
 1. No serviço `comex-backend`, clique em **"Manual Deploy"** (canto superior direito)
 2. Selecione **"Deploy latest commit"**
 3. Aguarde o build completar (5-10 minutos)
 4. Monitore os logs em tempo real
 
-### PASSO 6: Verificar Deploy
+### PASSO 7: Verificar Deploy
 
 Após o deploy:
 
@@ -101,7 +125,7 @@ Após o deploy:
    - ✅ `Banco de dados inicializado` - Banco conectado
    - ❌ Se houver erros, copie a mensagem completa
 
-### PASSO 7: Testar Backend
+### PASSO 8: Testar Backend
 
 1. Copie a URL do serviço (ex: `https://comex-backend-xxxx.onrender.com`)
 2. Teste o health check:
@@ -113,26 +137,21 @@ Após o deploy:
    {"status":"healthy","database":"connected"}
    ```
 
-### PASSO 8: Atualizar Frontend
+### PASSO 9: Testar Frontend
 
-1. Edite `frontend/.env`:
-   ```
-   REACT_APP_API_URL=https://seu-backend.onrender.com
-   ```
-2. Reinicie o frontend:
-   - Execute `REINICIAR_FRONTEND.bat`
-   - Ou pare e inicie novamente
+1. Acesse o frontend no navegador
+2. Teste o login
+3. Teste o dashboard
+4. Verifique se os dados estão sendo carregados corretamente
 
 ## ✅ Checklist Final
 
-- [ ] Serviços duplicados deletados
-- [ ] PostgreSQL criado
-- [ ] `DATABASE_URL` configurada no backend
-- [ ] Todas as variáveis de ambiente configuradas
-- [ ] Repositório GitHub conectado
-- [ ] Deploy realizado com sucesso
-- [ ] Health check funcionando
-- [ ] Frontend atualizado com URL do Render
+- [ ] Serviços funcionando verificados (Comex-3 e Comex-2)
+- [ ] Frontend configurado com URL do serviço correto
+- [ ] Frontend reiniciado após mudança de URL
+- [ ] Login testado no frontend
+- [ ] Dashboard testado no frontend
+- [ ] Dados sendo carregados corretamente
 
 ## 🐛 Troubleshooting
 
