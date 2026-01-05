@@ -49,8 +49,12 @@ if EXPORT_ROUTER_AVAILABLE:
 @app.on_event("startup")
 async def startup_event():
     """Inicializa o banco de dados na startup."""
-    init_db()
-    logger.info("Banco de dados inicializado")
+    try:
+        init_db()
+        logger.info("Banco de dados inicializado")
+    except Exception as e:
+        logger.error(f"Erro ao inicializar banco de dados: {e}")
+        # Não interrompe a aplicação, mas loga o erro
     
     # Iniciar scheduler para atualização diária
     try:
@@ -60,6 +64,7 @@ async def startup_event():
         logger.info("Scheduler de atualização diária iniciado")
     except Exception as e:
         logger.warning(f"Não foi possível iniciar scheduler: {e}")
+        # Não interrompe a aplicação se o scheduler falhar
 
 
 # Schemas Pydantic
