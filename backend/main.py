@@ -24,6 +24,28 @@ except ImportError:
     EXPORT_ROUTER_AVAILABLE = False
     logger.warning("Router de exportação não disponível")
 
+# Imports opcionais para funcionalidades de autenticação
+try:
+    from database.models import Usuario, AprovacaoCadastro
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    logger.warning("Modelos de autenticação não disponíveis")
+
+try:
+    from auth import authenticate_user, create_access_token, get_current_user, get_password_hash, validate_password
+    AUTH_FUNCTIONS_AVAILABLE = True
+except ImportError:
+    AUTH_FUNCTIONS_AVAILABLE = False
+    logger.warning("Funções de autenticação não disponíveis")
+
+try:
+    from services.email_service import enviar_email_aprovacao, enviar_email_cadastro_aprovado
+    EMAIL_SERVICE_AVAILABLE = True
+except ImportError:
+    EMAIL_SERVICE_AVAILABLE = False
+    logger.warning("Serviço de email não disponível")
+
 # Inicializar app FastAPI
 app = FastAPI(
     title="Comex Analyzer API",
