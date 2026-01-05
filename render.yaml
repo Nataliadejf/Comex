@@ -40,9 +40,8 @@ services:
         value: "3.11"
 
   # Frontend React (Static Site)
-  - type: web
+  - type: static
     name: comex-frontend
-    env: static
     plan: free
     buildCommand: "cd frontend && npm install && npm run build"
     staticPublishPath: frontend/build
