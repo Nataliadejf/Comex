@@ -41,6 +41,22 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
+  # Frontend React (Static Site)
+  - type: web
+    name: comex-frontend
+    env: static
+    region: oregon
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/build
+    envVars:
+      # URL do Backend - Será atualizada automaticamente após deploy do backend
+      - key: REACT_APP_API_URL
+        sync: false
+        # Configure manualmente no Render Dashboard após criar o backend
+        # Valor sugerido: https://comex-backend.onrender.com
+        # Ou use o serviço que já está funcionando: https://comex-3.onrender.com
+
 
 
 
