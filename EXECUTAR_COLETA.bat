@@ -15,7 +15,23 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Executar script de coleta
+REM Verificar backend primeiro
+echo Verificando backend antes de coletar...
+echo.
+python backend\scripts\diagnosticar_backend.py --url https://comex-backend-wjco.onrender.com >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo ⚠️  Backend pode nao estar acessivel.
+    echo    Deseja continuar mesmo assim? (S/N)
+    set /p continuar=
+    if /i not "%continuar%"=="S" (
+        echo Cancelado.
+        pause
+        exit /b 0
+    )
+)
+
+echo.
 echo Executando coleta de dados...
 echo.
 python backend\scripts\executar_coleta.py --meses 24

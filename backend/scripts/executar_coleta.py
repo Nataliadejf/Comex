@@ -103,16 +103,51 @@ def executar_coleta(
     except requests.exceptions.Timeout:
         print("❌ ERRO: Timeout - A coleta está demorando muito.")
         print("   Isso é normal para coletas grandes. Verifique os logs do Render.")
+        print()
+        print("💡 Tente:")
+        print("   1. Aguardar alguns minutos e verificar logs do Render")
+        print("   2. Coletar menos meses: --meses 6")
+        print("   3. Usar backend local: --local")
         return None
     except requests.exceptions.RequestException as e:
         print(f"❌ ERRO na requisição: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_detail = e.response.json()
-                print(f"   Detalhes: {error_detail}")
-            except:
-                print(f"   Status: {e.response.status_code}")
-                print(f"   Resposta: {e.response.text[:500]}")
+            status_code = e.response.status_code
+            print(f"   Status: {status_code}")
+            
+            if status_code == 502:
+                print()
+                print("⚠️  ERRO 502: Bad Gateway")
+                print("   O backend pode estar:")
+                print("   - Iniciando (aguarde alguns minutos)")
+                print("   - Offline (verifique o Render)")
+                print("   - Sobrecarregado")
+                print()
+                print("💡 SOLUÇÕES:")
+                print("   1. Execute diagnóstico: python backend/scripts/diagnosticar_backend.py")
+                print("   2. Verifique logs do Render")
+                print("   3. Aguarde 2-3 minutos e tente novamente")
+                print("   4. Use backend local: --local")
+            elif status_code == 503:
+                print()
+                print("⚠️  ERRO 503: Service Unavailable")
+                print("   Backend pode estar sobrecarregado.")
+                print("   Aguarde alguns minutos e tente novamente.")
+            else:
+                try:
+                    error_detail = e.response.json()
+                    print(f"   Detalhes: {error_detail}")
+                except:
+                    resposta_texto = e.response.text[:500]
+                    if resposta_texto:
+                        print(f"   Resposta: {resposta_texto}")
+        else:
+            print()
+            print("💡 Verifique:")
+            print("   1. Conexão com internet")
+            print("   2. URL do backend está correta")
+            print("   3. Backend está rodando")
+            print("   4. Execute diagnóstico: python backend/scripts/diagnosticar_backend.py")
         return None
     except Exception as e:
         print(f"❌ ERRO inesperado: {e}")
