@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste do Banco de Dados - Comex Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 30px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button.secondary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        button.success {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+        
+        .result-box {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            min-height: 200px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .result-box.loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #667eea;
+            font-size: 16px;
+        }
+        
+        .result-box.error {
+            background: #fff5f5;
+            border-color: #fc8181;
+            color: #c53030;
+        }
+        
+        .result-box.success {
+            background: #f0fff4;
+            border-color: #68d391;
+            color: #22543d;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .status-ok {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        
+        .status-error {
+            background: #fed7d7;
+            color: #c53030;
+        }
+        
+        .status-warning {
+            background: #feebc8;
+            color: #c05621;
+        }
+        
+        .info-box {
+            background: #e6f3ff;
+            border-left: 4px solid #4facfe;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        
+        .info-box h3 {
+            color: #1a365d;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        
+        .info-box p {
+            color: #2d3748;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .input-group input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Teste do Banco de Dados</h1>
+        <p class="subtitle">Diagnóstico completo do banco de dados do Comex Analyzer</p>
+        
+        <div class="info-box">
+            <h3>ℹ️ Como usar</h3>
+            <p>Clique nos botões abaixo para executar os testes. Os resultados aparecerão na caixa abaixo.</p>
+        </div>
+        
+        <div class="button-group">
+            <button onclick="testarBanco()">📊 Testar Banco Completo</button>
+            <button onclick="testarAutocomplete()" class="secondary">🔍 Testar Autocomplete</button>
+            <button onclick="popularDados()" class="success">➕ Popular Dados</button>
+            <button onclick="testarDashboard()">📈 Testar Dashboard</button>
+        </div>
+        
+        <div class="input-group">
+            <label for="backendUrl">URL do Backend:</label>
+            <input type="text" id="backendUrl" value="https://comex-backend-wjco.onrender.com" placeholder="URL do backend">
+        </div>
+        
+        <div id="result" class="result-box">
+            Clique em um dos botões acima para começar...
+        </div>
+    </div>
+
+    <script>
+        const BACKEND_URL = 'https://comex-backend-wjco.onrender.com';
+        
+        function getBackendUrl() {
+            return document.getElementById('backendUrl').value || BACKEND_URL;
+        }
+        
+        function showLoading() {
+            const result = document.getElementById('result');
+            result.className = 'result-box loading';
+            result.textContent = '⏳ Carregando...';
+        }
+        
+        function showResult(data, isError = false) {
+            const result = document.getElementById('result');
+            result.className = 'result-box' + (isError ? ' error' : ' success');
+            
+            if (typeof data === 'object') {
+                result.textContent = JSON.stringify(data, null, 2);
+            } else {
+                result.textContent = data;
+            }
+        }
+        
+        async function testarBanco() {
+            showLoading();
+            const url = getBackendUrl();
+            
+            try {
+                const response = await fetch(`${url}/test/empresas`);
+                const data = await response.json();
+                
+                let output = '📊 TESTE COMPLETO DO BANCO\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `Total de registros: ${data.total_registros}\n`;
+                output += `Empresas importadoras distintas: ${data.total_importadoras_distintas}\n`;
+                output += `Empresas exportadoras distintas: ${data.total_exportadoras_distintas}\n`;
+                output += `Valor total importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor total exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `\nStatus: ${data.status}\n`;
+                
+                if (data.problemas && data.problemas.filter(p => p).length > 0) {
+                    output += '\n⚠️ PROBLEMAS ENCONTRADOS:\n';
+                    data.problemas.filter(p => p).forEach(p => {
+                        output += `  - ${p}\n`;
+                    });
+                }
+                
+                output += '\n📋 Exemplos de Importadoras:\n';
+                if (data.exemplo_importadoras && data.exemplo_importadoras.length > 0) {
+                    data.exemplo_importadoras.forEach((emp, i) => {
+                        output += `  ${i + 1}. ${emp}\n`;
+                    });
+                } else {
+                    output += '  Nenhuma encontrada\n';
+                }
+                
+                output += '\n📋 Exemplos de Exportadoras:\n';
+                if (data.exemplo_exportadoras && data.exemplo_exportadoras.length > 0) {
+                    data.exemplo_exportadoras.forEach((emp, i) => {
+                        output += `  ${i + 1}. ${emp}\n`;
+                    });
+                } else {
+                    output += '  Nenhuma encontrada\n';
+                }
+                
+                output += '\n🔍 Teste Autocomplete Importadoras:\n';
+                if (data.teste_autocomplete_importadoras && data.teste_autocomplete_importadoras.length > 0) {
+                    data.teste_autocomplete_importadoras.forEach((emp, i) => {
+                        output += `  ${i + 1}. ${emp.nome} (${emp.total_operacoes} operações)\n`;
+                    });
+                } else {
+                    output += '  Nenhum resultado encontrado\n';
+                }
+                
+                output += '\n🔍 Teste Autocomplete Exportadoras:\n';
+                if (data.teste_autocomplete_exportadoras && data.teste_autocomplete_exportadoras.length > 0) {
+                    data.teste_autocomplete_exportadoras.forEach((emp, i) => {
+                        output += `  ${i + 1}. ${emp.nome} (${emp.total_operacoes} operações)\n`;
+                    });
+                } else {
+                    output += '  Nenhum resultado encontrado\n';
+                }
+                
+                if (data.total_registros === 0) {
+                    output += '\n\n❌ BANCO ESTÁ VAZIO!\n';
+                    output += '💡 Clique em "Popular Dados" para criar dados de exemplo.\n';
+                } else {
+                    output += '\n\n✅ Banco de dados está funcionando!\n';
+                }
+                
+                showResult(output, data.total_registros === 0);
+            } catch (error) {
+                showResult(`❌ Erro ao testar banco:\n${error.message}\n\nVerifique se o backend está rodando em: ${url}`, true);
+            }
+        }
+        
+        async function testarAutocomplete() {
+            showLoading();
+            const url = getBackendUrl();
+            
+            try {
+                const [impResponse, expResponse] = await Promise.all([
+                    fetch(`${url}/empresas/autocomplete/importadoras?q=Importadora&limit=10`),
+                    fetch(`${url}/empresas/autocomplete/exportadoras?q=Exportadora&limit=10`)
+                ]);
+                
+                const impData = await impResponse.json();
+                const expData = await expResponse.json();
+                
+                let output = '🔍 TESTE DE AUTOCOMPLETE\n';
+                output += '='.repeat(60) + '\n\n';
+                
+                output += 'Importadoras (busca: "Importadora"):\n';
+                if (impData.length > 0) {
+                    impData.forEach((emp, i) => {
+                        output += `  ${i + 1}. ${emp.nome} (${emp.total_operacoes} operações)\n`;
+                    });
+                } else {
+                    output += '  ⚠️ Nenhum resultado encontrado\n';
+                }
+                
+                output += '\nExportadoras (busca: "Exportadora"):\n';
+                if (expData.length > 0) {
+                    expData.forEach((emp, i) => {
+                        output += `  ${i + 1}. ${emp.nome} (${emp.total_operacoes} operações)\n`;
+                    });
+                } else {
+                    output += '  ⚠️ Nenhum resultado encontrado\n';
+                }
+                
+                if (impData.length === 0 && expData.length === 0) {
+                    output += '\n\n⚠️ Autocomplete não está retornando resultados!\n';
+                    output += '💡 Verifique se há dados no banco ou popula com dados de exemplo.\n';
+                    showResult(output, true);
+                } else {
+                    showResult(output, false);
+                }
+            } catch (error) {
+                showResult(`❌ Erro ao testar autocomplete:\n${error.message}`, true);
+            }
+        }
+        
+        async function popularDados() {
+            if (!confirm('Deseja popular o banco com 2000 registros de exemplo?')) {
+                return;
+            }
+            
+            showLoading();
+            const url = getBackendUrl();
+            
+            try {
+                const response = await fetch(`${url}/popular-dados-exemplo`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ quantidade: 2000, meses: 24 })
+                });
+                
+                const data = await response.json();
+                
+                let output = '➕ POPULAR DADOS\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `✅ ${data.message}\n`;
+                output += `Registros criados: ${data.registros_criados}\n`;
+                output += `Empresas importadoras: ${data.empresas_importadoras}\n`;
+                output += `Empresas exportadoras: ${data.empresas_exportadoras}\n`;
+                output += '\n💡 Agora você pode testar o banco novamente!\n';
+                
+                showResult(output, false);
+                
+                setTimeout(() => {
+                    if (confirm('Deseja testar o banco agora?')) {
+                        testarBanco();
+                    }
+                }, 1000);
+            } catch (error) {
+                showResult(`❌ Erro ao popular dados:\n${error.message}`, true);
+            }
+        }
+        
+        async function testarDashboard() {
+            showLoading();
+            const url = getBackendUrl();
+            
+            try {
+                const response = await fetch(`${url}/dashboard/stats?meses=24`);
+                const data = await response.json();
+                
+                let output = '📈 TESTE DO DASHBOARD\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `Valor total USD: US$ ${data.valor_total_usd?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor total importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor total exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Volume importações: ${data.volume_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'} KG\n`;
+                output += `Volume exportações: ${data.volume_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'} KG\n`;
+                output += `\nPrincipais NCMs: ${data.principais_ncms?.length || 0}\n`;
+                output += `Principais países: ${data.principais_paises?.length || 0}\n`;
+                
+                if (data.valor_total_usd === 0) {
+                    output += '\n\n⚠️ Dashboard retornando valores zerados!\n';
+                    output += '💡 Verifique se há dados no banco.\n';
+                    showResult(output, true);
+                } else {
+                    output += '\n\n✅ Dashboard está funcionando!\n';
+                    showResult(output, false);
+                }
+            } catch (error) {
+                showResult(`❌ Erro ao testar dashboard:\n${error.message}`, true);
+            }
+        }
+    </script>
+</body>
+</html>
+
