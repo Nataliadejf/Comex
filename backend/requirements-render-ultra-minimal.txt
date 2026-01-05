@@ -7,7 +7,7 @@
 fastapi==0.95.2
 uvicorn==0.22.0
 pydantic==1.10.7
-pydantic-settings==1.10.1
+# pydantic-settings não existe para Pydantic v1 - usando BaseSettings do pydantic diretamente
 
 # Database (SQLAlchemy + driver PostgreSQL binário)
 sqlalchemy==1.4.46
