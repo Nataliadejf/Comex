@@ -146,6 +146,15 @@ class ComexStatAPIClient:
                         headers=headers
                     )
                     response.raise_for_status()
+                    
+                    # Verificar se a resposta é JSON
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "text/html" in content_type:
+                        logger.warning(f"API retornou HTML ao invés de JSON. URL: {response.url}")
+                        logger.warning(f"Resposta (primeiros 500 chars): {response.text[:500]}")
+                        # Tentar diferentes endpoints ou formatos
+                        return await self._try_alternative_endpoints(params, headers)
+                    
                     data = response.json()
                     
                     logger.info(
@@ -164,6 +173,16 @@ class ComexStatAPIClient:
                         headers=headers
                     ) as response:
                         response.raise_for_status()
+                        
+                        # Verificar se a resposta é JSON
+                        content_type = response.headers.get("content-type", "").lower()
+                        if "text/html" in content_type:
+                            logger.warning(f"API retornou HTML ao invés de JSON. URL: {response.url}")
+                            text = await response.text()
+                            logger.warning(f"Resposta (primeiros 500 chars): {text[:500]}")
+                            # Tentar diferentes endpoints ou formatos
+                            return await self._try_alternative_endpoints(params, headers)
+                        
                         data = await response.json()
                         
                         logger.info(
@@ -174,7 +193,64 @@ class ComexStatAPIClient:
         
         except Exception as e:
             logger.error(f"Erro ao buscar dados da API: {e}")
+            # Se o erro for de JSON, tentar endpoints alternativos
+            if "JSON" in str(e) or "mimetype" in str(e).lower():
+                logger.info("Tentando endpoints alternativos...")
+                return await self._try_alternative_endpoints(params, headers)
             raise
+    
+    async def _try_alternative_endpoints(self, params: Dict[str, Any], headers: Dict[str, str]) -> List[Dict[str, Any]]:
+        """
+        Tenta diferentes endpoints e formatos quando o endpoint padrão não funciona.
+        """
+        logger.info("Tentando endpoints alternativos da API Comex Stat...")
+        
+        # Lista de endpoints alternativos para tentar
+        alternative_endpoints = [
+            "/api/dados",
+            "/api/v1/dados",
+            "/api/comex/dados",
+            "/dados/export",
+            "/api/export",
+        ]
+        
+        for endpoint in alternative_endpoints:
+            try:
+                logger.info(f"Tentando endpoint: {endpoint}")
+                if HTTPX_AVAILABLE:
+                    async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
+                        response = await client.get(
+                            f"{self.base_url}{endpoint}",
+                            params=params,
+                            headers=headers
+                        )
+                        content_type = response.headers.get("content-type", "").lower()
+                        if "application/json" in content_type:
+                            data = response.json()
+                            logger.success(f"✅ Endpoint funcionou: {endpoint}")
+                            return data.get("registros", []) if isinstance(data, dict) else data
+                else:
+                    timeout = aiohttp.ClientTimeout(total=self.timeout)
+                    connector = aiohttp.TCPConnector(ssl=False)
+                    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                        async with session.get(
+                            f"{self.base_url}{endpoint}",
+                            params=params,
+                            headers=headers
+                        ) as response:
+                            content_type = response.headers.get("content-type", "").lower()
+                            if "application/json" in content_type:
+                                data = await response.json()
+                                logger.success(f"✅ Endpoint funcionou: {endpoint}")
+                                return data.get("registros", []) if isinstance(data, dict) else data
+            except Exception as e:
+                logger.debug(f"Endpoint {endpoint} não funcionou: {e}")
+                continue
+        
+        # Se nenhum endpoint funcionou, retornar lista vazia
+        logger.warning("⚠️ Nenhum endpoint alternativo funcionou. A API pode não estar disponível ou a URL está incorreta.")
+        logger.warning("💡 Verifique a documentação oficial do Comex Stat para a URL correta da API.")
+        return []
     
     async def get_available_months(self) -> List[str]:
         """
