@@ -3,7 +3,6 @@ Módulo de autenticação e autorização.
 """
 from datetime import datetime, timedelta
 from typing import Optional
-from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from loguru import logger
@@ -16,15 +15,17 @@ except ImportError:
     BCRYPT_AVAILABLE = False
     logger.warning("bcrypt não disponível, usando passlib")
 
+# Tentar importar JWT (PyJWT primeiro, depois jose como fallback)
 try:
-    from jose import JWTError, jwt as jose_jwt
+    import jwt as pyjwt
     JWT_AVAILABLE = True
-    JWT_LIB = "jose"
+    JWT_LIB = "pyjwt"
 except ImportError:
     try:
-        import jwt as pyjwt
+        from jose import JWTError, jwt as jose_jwt
         JWT_AVAILABLE = True
-        JWT_LIB = "pyjwt"
+        JWT_LIB = "jose"
+        pyjwt = jose_jwt  # Alias para compatibilidade
     except ImportError:
         JWT_AVAILABLE = False
         JWT_LIB = None
@@ -94,11 +95,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     
     to_encode.update({"exp": expire})
     
-    if JWT_LIB == "jose":
-        encoded_jwt = jose_jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    elif JWT_LIB == "pyjwt":
-        import jwt as pyjwt
+    if JWT_LIB == "pyjwt":
         encoded_jwt = pyjwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    elif JWT_LIB == "jose":
+        encoded_jwt = jose_jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     else:
         raise Exception("JWT não disponível")
     
@@ -140,11 +140,10 @@ def get_current_user(db: Session, token: str):
         if not JWT_AVAILABLE:
             raise Exception("JWT não disponível")
         
-        if JWT_LIB == "jose":
-            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        elif JWT_LIB == "pyjwt":
-            import jwt as pyjwt
+        if JWT_LIB == "pyjwt":
             payload = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        elif JWT_LIB == "jose":
+            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         else:
             raise Exception("JWT não disponível")
         
