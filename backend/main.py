@@ -750,10 +750,7 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
                 logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes")
             
-            # Em desenvolvimento, aprovar automaticamente
-            # Em produção, manter pendente até aprovação manual
-            auto_approve = settings.environment == "development" or settings.debug
-            
+            # Todos os cadastros precisam de aprovação manual
             novo_usuario = Usuario(
                 email=cadastro.email,
                 senha_hash=get_password_hash(senha_para_hash),
@@ -762,8 +759,8 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 nome_empresa=cadastro.nome_empresa,
                 cpf=cadastro.cpf,
                 cnpj=cadastro.cnpj,
-                status_aprovacao="aprovado" if auto_approve else "pendente",
-                ativo=1 if auto_approve else 0
+                status_aprovacao="pendente",
+                ativo=0  # Inativo até aprovação
             )
             db.add(novo_usuario)
             db.flush()
@@ -793,18 +790,11 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                     token_aprovacao
                 )
             
-            if auto_approve:
-                return {
-                    "message": "Cadastro realizado com sucesso! Você já pode fazer login.",
-                    "email": cadastro.email,
-                    "aprovado": True
-                }
-            else:
-                return {
-                    "message": "Cadastro realizado com sucesso! Aguarde aprovação por email.",
-                    "email": cadastro.email,
-                    "aprovado": False
-                }
+            return {
+                "message": "Cadastro realizado com sucesso! Aguarde aprovação por email.",
+                "email": cadastro.email,
+                "aprovado": False
+            }
         except HTTPException:
             raise
         except Exception as e:
@@ -895,6 +885,98 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
         except Exception as e:
             logger.error(f"Erro ao redefinir senha: {e}")
             raise HTTPException(status_code=500, detail="Erro ao redefinir senha")
+    
+    class AprovarCadastroRequest(BaseModel):
+        """Schema para aprovar cadastro."""
+        token: str
+    
+    @app.post("/aprovar-cadastro")
+    async def aprovar_cadastro(
+        request: AprovarCadastroRequest,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db)
+    ):
+        """Endpoint para aprovar cadastro usando token."""
+        try:
+            # Buscar aprovação pelo token
+            aprovacao = db.query(AprovacaoCadastro).filter(
+                AprovacaoCadastro.token_aprovacao == request.token,
+                AprovacaoCadastro.status == "pendente"
+            ).first()
+            
+            if not aprovacao:
+                raise HTTPException(status_code=400, detail="Token inválido ou cadastro já processado")
+            
+            # Verificar se token não expirou
+            if aprovacao.data_expiracao < datetime.utcnow():
+                raise HTTPException(status_code=400, detail="Token expirado")
+            
+            # Buscar usuário
+            usuario = db.query(Usuario).filter(Usuario.id == aprovacao.usuario_id).first()
+            if not usuario:
+                raise HTTPException(status_code=404, detail="Usuário não encontrado")
+            
+            # Aprovar usuário
+            usuario.status_aprovacao = "aprovado"
+            usuario.ativo = 1
+            aprovacao.status = "aprovado"
+            aprovacao.data_aprovacao = datetime.utcnow()
+            db.commit()
+            
+            logger.info(f"✅ Cadastro aprovado para: {usuario.email}")
+            
+            # Enviar email de confirmação para o usuário
+            if EMAIL_SERVICE_AVAILABLE:
+                background_tasks.add_task(
+                    enviar_email_cadastro_aprovado,
+                    usuario.email,
+                    usuario.nome_completo
+                )
+            
+            return {
+                "message": "Cadastro aprovado com sucesso!",
+                "email": usuario.email,
+                "nome": usuario.nome_completo
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erro ao aprovar cadastro: {e}")
+            raise HTTPException(status_code=500, detail="Erro ao aprovar cadastro")
+    
+    @app.get("/cadastros-pendentes")
+    async def listar_cadastros_pendentes(
+        db: Session = Depends(get_db)
+    ):
+        """Lista todos os cadastros pendentes de aprovação."""
+        try:
+            cadastros = db.query(Usuario).filter(
+                Usuario.status_aprovacao == "pendente"
+            ).all()
+            
+            return {
+                "total": len(cadastros),
+                "cadastros": [
+                    {
+                        "id": c.id,
+                        "email": c.email,
+                        "nome_completo": c.nome_completo,
+                        "nome_empresa": c.nome_empresa,
+                        "data_criacao": c.data_criacao.isoformat() if c.data_criacao else None,
+                        "token_aprovacao": db.query(AprovacaoCadastro).filter(
+                            AprovacaoCadastro.usuario_id == c.id,
+                            AprovacaoCadastro.status == "pendente"
+                        ).first().token_aprovacao if db.query(AprovacaoCadastro).filter(
+                            AprovacaoCadastro.usuario_id == c.id,
+                            AprovacaoCadastro.status == "pendente"
+                        ).first() else None
+                    }
+                    for c in cadastros
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Erro ao listar cadastros pendentes: {e}")
+            raise HTTPException(status_code=500, detail="Erro ao listar cadastros pendentes")
 else:
     # Endpoints stub quando autenticação não está disponível
     @app.post("/login")
