@@ -1,12 +1,13 @@
 # Requirements ULTRA minimalistas para Render.com
 # Apenas o essencial para API funcionar
+# SEM dependências que requerem compilação Rust
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 sqlalchemy==2.0.23
 pydantic==2.5.0
 pydantic-settings==2.1.0
-python-jose==3.3.0
+PyJWT==2.8.0
 bcrypt==4.0.1
 loguru==0.7.2
 httpx==0.25.2
@@ -15,7 +16,7 @@ urllib3==2.1.0
 python-multipart==0.0.6
 python-dotenv==1.0.0
 
-# Removido python-jose[cryptography] - pode causar problemas
-# Usando python-jose sem cryptography por enquanto
-# Se precisar de cryptography depois, podemos adicionar
+# Substituído python-jose por PyJWT (mais leve, não requer cryptography)
+# PyJWT funciona perfeitamente para JWT tokens
+# Se precisar de python-jose depois, podemos adicionar sem [cryptography]
 
