@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solução: Dados Não Aparecem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 30px;
+        }
+        h1 { color: #333; margin-bottom: 10px; }
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .step h3 { color: #1a365d; margin-bottom: 8px; }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            margin: 5px;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        .result-box {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .result-box.error { background: #fff5f5; border-color: #fc8181; color: #c53030; }
+        .result-box.success { background: #f0fff4; border-color: #68d391; color: #22543d; }
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; margin-bottom: 5px; color: #333; font-weight: 600; }
+        .input-group input { width: 100%; padding: 10px; border: 2px solid #e9ecef; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Solução: Dados Não Aparecem no Dashboard</h1>
+        
+        <div class="step">
+            <h3>Passo 1: Verificar se há dados no banco</h3>
+            <button onclick="verificarBanco()">📊 Verificar Banco</button>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 2: Popular dados de exemplo (incluindo NCM 86079900)</h3>
+            <button onclick="popularDados()">➕ Popular Dados</button>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 3: Testar dashboard sem filtros</h3>
+            <button onclick="testarDashboardSemFiltros()">📈 Testar Dashboard</button>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 4: Testar dashboard com NCM específico</h3>
+            <div class="input-group">
+                <label>NCM para testar:</label>
+                <input type="text" id="ncmTeste" value="86079900" placeholder="Ex: 86079900">
+            </div>
+            <button onclick="testarDashboardComNCM()">🔍 Testar com NCM</button>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 5: Buscar dados específicos</h3>
+            <button onclick="buscarDados()">🔎 Buscar Dados</button>
+        </div>
+        
+        <div class="input-group">
+            <label>URL do Backend:</label>
+            <input type="text" id="backendUrl" value="https://comex-backend-wjco.onrender.com">
+        </div>
+        
+        <div id="result" class="result-box">Clique nos botões acima para diagnosticar...</div>
+    </div>
+
+    <script>
+        function getBackendUrl() {
+            return document.getElementById('backendUrl').value || 'https://comex-backend-wjco.onrender.com';
+        }
+        
+        function showResult(text, isError = false) {
+            const result = document.getElementById('result');
+            result.className = 'result-box' + (isError ? ' error' : ' success');
+            result.textContent = text;
+        }
+        
+        async function verificarBanco() {
+            showResult('⏳ Verificando banco...');
+            try {
+                const r = await fetch(`${getBackendUrl()}/test/empresas`);
+                const data = await r.json();
+                
+                let output = '📊 VERIFICAÇÃO DO BANCO\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `Total de registros: ${data.total_registros}\n`;
+                output += `Valor total importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor total exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                
+                if (data.total_registros === 0) {
+                    output += '\n❌ BANCO ESTÁ VAZIO!\n';
+                    output += '💡 Clique em "Popular Dados" para criar dados de exemplo.\n';
+                    showResult(output, true);
+                } else {
+                    output += '\n✅ Banco tem dados!\n';
+                    showResult(output, false);
+                }
+            } catch (error) {
+                showResult(`❌ Erro: ${error.message}`, true);
+            }
+        }
+        
+        async function popularDados() {
+            if (!confirm('Deseja popular o banco com 2000 registros (incluindo NCM 86079900)?')) return;
+            
+            showResult('⏳ Populando dados... Isso pode levar alguns minutos.');
+            try {
+                const r = await fetch(`${getBackendUrl()}/popular-dados-exemplo`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ quantidade: 2000, meses: 24 })
+                });
+                const data = await r.json();
+                
+                let output = '➕ DADOS POPULADOS\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `✅ ${data.message}\n`;
+                output += `Registros criados: ${data.registros_criados}\n`;
+                output += `Empresas importadoras: ${data.empresas_importadoras}\n`;
+                output += `Empresas exportadoras: ${data.empresas_exportadoras}\n`;
+                output += '\n💡 Agora teste o dashboard novamente!\n';
+                
+                showResult(output, false);
+                
+                setTimeout(() => {
+                    if (confirm('Deseja testar o dashboard agora?')) {
+                        testarDashboardSemFiltros();
+                    }
+                }, 1000);
+            } catch (error) {
+                showResult(`❌ Erro: ${error.message}`, true);
+            }
+        }
+        
+        async function testarDashboardSemFiltros() {
+            showResult('⏳ Testando dashboard sem filtros...');
+            try {
+                const r = await fetch(`${getBackendUrl()}/dashboard/stats?meses=24`);
+                const data = await r.json();
+                
+                let output = '📈 DASHBOARD SEM FILTROS\n';
+                output += '='.repeat(60) + '\n\n';
+                output += `Valor total USD: US$ ${data.valor_total_usd?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Volume importações: ${data.volume_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'} KG\n`;
+                output += `Volume exportações: ${data.volume_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'} KG\n`;
+                
+                if (data.valor_total_usd === 0) {
+                    output += '\n⚠️ Dashboard retornando valores zerados!\n';
+                    output += '💡 Verifique se há dados no banco ou popula com dados de exemplo.\n';
+                    showResult(output, true);
+                } else {
+                    output += '\n✅ Dashboard está funcionando!\n';
+                    showResult(output, false);
+                }
+            } catch (error) {
+                showResult(`❌ Erro: ${error.message}`, true);
+            }
+        }
+        
+        async function testarDashboardComNCM() {
+            const ncm = document.getElementById('ncmTeste').value;
+            if (!ncm) {
+                alert('Digite um NCM!');
+                return;
+            }
+            
+            showResult(`⏳ Testando dashboard com NCM ${ncm}...`);
+            try {
+                const r = await fetch(`${getBackendUrl()}/dashboard/stats?meses=24&ncm=${ncm}`);
+                const data = await r.json();
+                
+                let output = `📈 DASHBOARD COM NCM ${ncm}\n`;
+                output += '='.repeat(60) + '\n\n';
+                output += `Valor total USD: US$ ${data.valor_total_usd?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor importações: US$ ${data.valor_total_importacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                output += `Valor exportações: US$ ${data.valor_total_exportacoes?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                
+                if (data.valor_total_usd === 0) {
+                    output += `\n⚠️ Nenhum dado encontrado para NCM ${ncm}!\n`;
+                    output += '💡 Este NCM pode não existir nos dados. Tente:\n';
+                    output += '   - Remover o filtro de NCM\n';
+                    output += '   - Ou popular dados de exemplo novamente\n';
+                    showResult(output, true);
+                } else {
+                    output += `\n✅ Dados encontrados para NCM ${ncm}!\n`;
+                    showResult(output, false);
+                }
+            } catch (error) {
+                showResult(`❌ Erro: ${error.message}`, true);
+            }
+        }
+        
+        async function buscarDados() {
+            const ncm = document.getElementById('ncmTeste').value || '86079900';
+            showResult(`⏳ Buscando dados para NCM ${ncm}...`);
+            try {
+                const r = await fetch(`${getBackendUrl()}/buscar`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ncms: [ncm],
+                        page: 1,
+                        page_size: 10
+                    })
+                });
+                const data = await r.json();
+                
+                let output = `🔎 BUSCA DE DADOS - NCM ${ncm}\n`;
+                output += '='.repeat(60) + '\n\n';
+                output += `Total encontrado: ${data.total}\n`;
+                output += `Página: ${data.page} de ${data.total_pages}\n\n`;
+                
+                if (data.total === 0) {
+                    output += '⚠️ Nenhum dado encontrado para este NCM!\n';
+                    output += '💡 Este NCM pode não existir nos dados.\n';
+                    showResult(output, true);
+                } else {
+                    output += 'Primeiros resultados:\n';
+                    data.results.slice(0, 5).forEach((op, i) => {
+                        output += `\n${i + 1}. NCM: ${op.ncm}\n`;
+                        output += `   Tipo: ${op.tipo_operacao}\n`;
+                        output += `   Valor: US$ ${op.valor_fob?.toLocaleString('pt-BR', {minimumFractionDigits: 2}) || '0.00'}\n`;
+                        output += `   Data: ${op.data_operacao}\n`;
+                    });
+                    showResult(output, false);
+                }
+            } catch (error) {
+                showResult(`❌ Erro: ${error.message}`, true);
+            }
+        }
+    </script>
+</body>
+</html>
+

@@ -26,6 +26,11 @@ NCMs_EXEMPLO = [
     ("02012000", "Carne bovina"),
     ("09011100", "Café não torrado"),
     ("15091000", "Óleo de oliva"),
+    ("86079900", "Outras partes e acessórios para veículos ferroviários"),  # NCM que o usuário está usando
+    ("27101259", "Gasolina"),
+    ("27101145", "Óleo diesel"),
+    ("27011200", "Carvão betuminoso"),
+    ("26011100", "Minérios de ferro"),
 ]
 
 PAISES_EXEMPLO = [
