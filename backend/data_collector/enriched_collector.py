@@ -165,16 +165,16 @@ class EnrichedDataCollector:
         
         for registro in registros:
             try:
-                # Verificar se já existe (usar chave única: NCM + Data + Tipo + País + UF)
-                existing = db.query(OperacaoComex).filter(
-                    and_(
-                        OperacaoComex.ncm == registro.get("ncm"),
-                        OperacaoComex.data_operacao == registro.get("data_operacao"),
-                        OperacaoComex.tipo_operacao == registro.get("tipo_operacao"),
-                        OperacaoComex.pais == registro.get("pais"),
-                        OperacaoComex.uf == registro.get("uf")
-                    )
-                ).first()
+                        # Verificar se já existe (usar chave única: NCM + Data + Tipo + País + UF)
+                        existing = db.query(OperacaoComex).filter(
+                            and_(
+                                OperacaoComex.ncm == registro.get("ncm"),
+                                OperacaoComex.data_operacao == registro.get("data_operacao"),
+                                OperacaoComex.tipo_operacao == registro.get("tipo_operacao"),
+                                OperacaoComex.pais_origem_destino == registro.get("pais_origem_destino"),
+                                OperacaoComex.uf == registro.get("uf")
+                            )
+                        ).first()
                 
                 if existing:
                     # Atualizar registro existente
