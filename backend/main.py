@@ -1379,6 +1379,141 @@ else:
         )
 
 
+# Endpoints para cruzamento de dados com empresas do MDIC
+try:
+    from data_collector.cruzamento_dados import CruzamentoDados
+    from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
+    CRUZAMENTO_AVAILABLE = True
+except ImportError:
+    CRUZAMENTO_AVAILABLE = False
+    logger.warning("Módulos de cruzamento não disponíveis")
+
+
+@app.post("/coletar-empresas-mdic")
+async def coletar_empresas_mdic(
+    ano: Optional[int] = Query(None, description="Ano específico (None = ano atual)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta lista de empresas exportadoras e importadoras do MDIC.
+    Esta lista contém CNPJ e nome das empresas, mas sem detalhamento por NCM.
+    """
+    if not CRUZAMENTO_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de cruzamento não disponível")
+    
+    try:
+        scraper = EmpresasMDICScraper()
+        empresas = await scraper.coletar_empresas(ano)
+        
+        return {
+            "success": True,
+            "message": f"Coletadas {len(empresas)} empresas do MDIC",
+            "total_empresas": len(empresas),
+            "ano": ano or datetime.now().year,
+            "empresas": empresas[:100]  # Retornar primeiras 100 como exemplo
+        }
+    except Exception as e:
+        logger.error(f"Erro ao coletar empresas do MDIC: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao coletar empresas: {str(e)}")
+
+
+class CruzamentoFiltros(BaseModel):
+    """Filtros para cruzamento de dados."""
+    ncm: Optional[str] = None
+    tipo_operacao: Optional[str] = None
+    uf: Optional[str] = None
+    limite: int = 1000
+
+
+@app.post("/cruzar-dados-empresas")
+async def cruzar_dados_empresas(
+    filtros: CruzamentoFiltros,
+    db: Session = Depends(get_db)
+):
+    """
+    Cruza dados de operações com lista de empresas do MDIC.
+    Tenta identificar empresas por CNPJ ou razão social.
+    """
+    if not CRUZAMENTO_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de cruzamento não disponível")
+    
+    try:
+        cruzamento = CruzamentoDados()
+        
+        filtros_dict = {}
+        if filtros.ncm:
+            filtros_dict["ncm"] = filtros.ncm
+        if filtros.tipo_operacao:
+            filtros_dict["tipo_operacao"] = filtros.tipo_operacao
+        if filtros.uf:
+            filtros_dict["uf"] = filtros.uf
+        
+        resultados = await cruzamento.cruzar_operacoes_bulk(
+            db,
+            filtros=filtros_dict if filtros_dict else None,
+            limite=filtros.limite
+        )
+        
+        estatisticas = cruzamento.estatisticas_cruzamento(resultados)
+        
+        return {
+            "success": True,
+            "message": f"Cruzamento concluído: {estatisticas['operacoes_identificadas']}/{estatisticas['total_operacoes']} operações identificadas",
+            "estatisticas": estatisticas,
+            "resultados": resultados[:100]  # Retornar primeiras 100 como exemplo
+        }
+    except Exception as e:
+        logger.error(f"Erro ao cruzar dados: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao cruzar dados: {str(e)}")
+
+
+@app.get("/estatisticas-cruzamento")
+async def estatisticas_cruzamento(
+    db: Session = Depends(get_db)
+):
+    """
+    Retorna estatísticas sobre cruzamento de dados.
+    """
+    if not CRUZAMENTO_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de cruzamento não disponível")
+    
+    try:
+        # Contar operações com CNPJ
+        from sqlalchemy import func, or_
+        
+        total_operacoes = db.query(func.count(OperacaoComex.id)).scalar() or 0
+        
+        operacoes_com_cnpj = db.query(func.count(OperacaoComex.id)).filter(
+            or_(
+                OperacaoComex.cnpj_importador.isnot(None),
+                OperacaoComex.cnpj_exportador.isnot(None)
+            )
+        ).scalar() or 0
+        
+        operacoes_com_razao_social = db.query(func.count(OperacaoComex.id)).filter(
+            or_(
+                OperacaoComex.razao_social_importador.isnot(None),
+                OperacaoComex.razao_social_exportador.isnot(None)
+            )
+        ).scalar() or 0
+        
+        return {
+            "total_operacoes": total_operacoes,
+            "operacoes_com_cnpj": operacoes_com_cnpj,
+            "operacoes_com_razao_social": operacoes_com_razao_social,
+            "taxa_cnpj": (operacoes_com_cnpj / total_operacoes * 100) if total_operacoes > 0 else 0,
+            "taxa_razao_social": (operacoes_com_razao_social / total_operacoes * 100) if total_operacoes > 0 else 0,
+            "nota": "Dados públicos são anonimizados. CNPJ/razão social podem não estar disponíveis em todas as operações."
+        }
+    except Exception as e:
+        logger.error(f"Erro ao calcular estatísticas: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular estatísticas: {str(e)}")
+
+
 if __name__ == "__main__":
     from loguru import logger
     
