@@ -808,18 +808,22 @@ async def buscar_operacoes(
 
 @app.get("/empresas/autocomplete/importadoras")
 async def autocomplete_importadoras(
-    q: str = Query(..., min_length=1, description="Termo de busca"),  # Reduzido para min_length=1
+    q: str = Query(..., min_length=1, description="Termo de busca"),
     limit: int = Query(default=20, ge=1, le=100),
+    incluir_sugestoes: bool = Query(default=True, description="Incluir empresas sugeridas do MDIC"),
     db: Session = Depends(get_db)
 ):
     """
     Autocomplete para empresas importadoras.
     Retorna empresas que contêm o termo de busca no nome.
+    Se não encontrar resultados, inclui empresas sugeridas do MDIC.
     """
     from sqlalchemy import func, distinct
     
     try:
-        # Buscar empresas importadoras que contêm o termo
+        resultado = []
+        
+        # 1. Buscar empresas importadoras que contêm o termo nas operações
         empresas = db.query(
             OperacaoComex.razao_social_importador.label('empresa'),
             func.count(OperacaoComex.id).label('total_operacoes'),
@@ -834,16 +838,103 @@ async def autocomplete_importadoras(
             func.sum(OperacaoComex.valor_fob).desc()
         ).limit(limit).all()
         
-        return [
+        resultado = [
             {
                 "nome": empresa,
                 "total_operacoes": int(total_operacoes),
-                "valor_total": float(valor_total or 0)
+                "valor_total": float(valor_total or 0),
+                "fonte": "operacoes"
             }
             for empresa, total_operacoes, valor_total in empresas
         ]
+        
+        # 2. Se não encontrou resultados ou quer incluir sugestões, buscar no MDIC
+        if (len(resultado) < limit and incluir_sugestoes) or len(resultado) == 0:
+            try:
+                from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
+                from data_collector.sinergia_analyzer import SinergiaAnalyzer
+                
+                scraper = EmpresasMDICScraper()
+                empresas_mdic = await scraper.coletar_empresas()
+                
+                # Filtrar empresas do MDIC que são importadoras e contêm o termo
+                empresas_mdic_filtradas = [
+                    emp for emp in empresas_mdic
+                    if emp.get("tipo_operacao", "").lower() in ["importação", "importacao", ""] and
+                    q.lower() in emp.get("razao_social", "").lower()
+                ]
+                
+                # Adicionar empresas do MDIC que não estão no resultado
+                empresas_ja_adicionadas = {r["nome"].lower() for r in resultado}
+                
+                for emp in empresas_mdic_filtradas[:limit - len(resultado)]:
+                    nome = emp.get("razao_social") or emp.get("nome_fantasia", "")
+                    if nome.lower() not in empresas_ja_adicionadas:
+                        resultado.append({
+                            "nome": nome,
+                            "total_operacoes": 0,  # Não temos dados de operações do MDIC
+                            "valor_total": 0.0,
+                            "fonte": "mdic",
+                            "cnpj": emp.get("cnpj"),
+                            "uf": emp.get("uf"),
+                            "faixa_valor": emp.get("faixa_valor")
+                        })
+                        empresas_ja_adicionadas.add(nome.lower())
+                
+            except Exception as e:
+                logger.debug(f"Erro ao buscar empresas MDIC para autocomplete: {e}")
+        
+        # 3. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
+        if len(resultado) < limit and incluir_sugestoes:
+            try:
+                from data_collector.sinergia_analyzer import SinergiaAnalyzer
+                from data_collector.cnae_analyzer import CNAEAnalyzer
+                
+                # Carregar CNAE se disponível
+                cnae_analyzer = None
+                try:
+                    arquivo_cnae = Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx")
+                    if arquivo_cnae.exists():
+                        cnae_analyzer = CNAEAnalyzer(arquivo_cnae)
+                        cnae_analyzer.carregar_cnae_excel()
+                except:
+                    pass
+                
+                analyzer = SinergiaAnalyzer(cnae_analyzer)
+                
+                # Buscar empresas com sinergia que são importadoras
+                empresas_com_sinergia = analyzer.analisar_sinergias_por_empresa(db, {}, limit * 2)
+                
+                # Filtrar empresas que contêm o termo e são importadoras
+                empresas_ja_adicionadas = {r["nome"].lower() for r in resultado}
+                
+                for emp in empresas_com_sinergia:
+                    nome = emp.get("razao_social", "")
+                    if (nome.lower() not in empresas_ja_adicionadas and
+                        q.lower() in nome.lower() and
+                        emp.get("importacoes", {}).get("total_operacoes", 0) > 0):
+                        resultado.append({
+                            "nome": nome,
+                            "total_operacoes": emp.get("importacoes", {}).get("total_operacoes", 0),
+                            "valor_total": emp.get("importacoes", {}).get("valor_total", 0.0),
+                            "fonte": "sinergia",
+                            "potencial_sinergia": emp.get("potencial_sinergia", 0),
+                            "cnpj": emp.get("cnpj"),
+                            "uf": emp.get("uf")
+                        })
+                        empresas_ja_adicionadas.add(nome.lower())
+                        
+                        if len(resultado) >= limit:
+                            break
+            except Exception as e:
+                logger.debug(f"Erro ao buscar sugestões de sinergia: {e}")
+        
+        return resultado[:limit]
+        
     except Exception as e:
         logger.error(f"Erro ao buscar importadoras: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return []
 
 
@@ -851,22 +942,22 @@ async def autocomplete_importadoras(
 async def autocomplete_exportadoras(
     q: str = Query(..., min_length=1, description="Termo de busca"),
     limit: int = Query(default=20, ge=1, le=100),
+    incluir_sugestoes: bool = Query(default=True, description="Incluir empresas sugeridas do MDIC"),
     db: Session = Depends(get_db)
 ):
     """
     Autocomplete para empresas exportadoras.
     Retorna empresas que contêm o termo de busca no nome.
+    Se não encontrar resultados, inclui empresas sugeridas do MDIC e sinergias.
     """
     from sqlalchemy import func
     
     try:
         logger.info(f"🔍 Buscando exportadoras com termo: '{q}'")
         
-        # Primeiro, verificar se há dados
-        total_registros = db.query(OperacaoComex).count()
-        logger.info(f"Total de registros no banco: {total_registros}")
+        resultado = []
         
-        # Buscar empresas exportadoras que contêm o termo
+        # 1. Buscar empresas exportadoras que contêm o termo nas operações
         empresas_query = db.query(
             OperacaoComex.razao_social_exportador,
             func.count(OperacaoComex.id).label('total_operacoes'),
@@ -889,19 +980,94 @@ async def autocomplete_exportadoras(
                 resultado.append({
                     "nome": str(empresa),
                     "total_operacoes": int(total_operacoes) if total_operacoes else 0,
-                    "valor_total": float(valor_total or 0)
+                    "valor_total": float(valor_total or 0),
+                    "fonte": "operacoes"
                 })
         
-        logger.info(f"✅ Encontradas {len(resultado)} exportadoras para '{q}'")
-        if len(resultado) == 0:
-            # Debug: verificar quantas empresas existem sem filtro
-            total_empresas = db.query(func.count(func.distinct(OperacaoComex.razao_social_exportador))).filter(
-                OperacaoComex.razao_social_exportador.isnot(None),
-                OperacaoComex.razao_social_exportador != ''
-            ).scalar() or 0
-            logger.warning(f"⚠️ Nenhuma exportadora encontrada. Total de empresas no banco: {total_empresas}")
+        logger.info(f"✅ Encontradas {len(resultado)} exportadoras nas operações para '{q}'")
         
-        return resultado
+        # 2. Se não encontrou resultados ou quer incluir sugestões, buscar no MDIC
+        if (len(resultado) < limit and incluir_sugestoes) or len(resultado) == 0:
+            try:
+                from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
+                
+                scraper = EmpresasMDICScraper()
+                empresas_mdic = await scraper.coletar_empresas()
+                
+                # Filtrar empresas do MDIC que são exportadoras e contêm o termo
+                empresas_mdic_filtradas = [
+                    emp for emp in empresas_mdic
+                    if emp.get("tipo_operacao", "").lower() in ["exportação", "exportacao", ""] and
+                    q.lower() in emp.get("razao_social", "").lower()
+                ]
+                
+                # Adicionar empresas do MDIC que não estão no resultado
+                empresas_ja_adicionadas = {r["nome"].lower() for r in resultado}
+                
+                for emp in empresas_mdic_filtradas[:limit - len(resultado)]:
+                    nome = emp.get("razao_social") or emp.get("nome_fantasia", "")
+                    if nome.lower() not in empresas_ja_adicionadas:
+                        resultado.append({
+                            "nome": nome,
+                            "total_operacoes": 0,
+                            "valor_total": 0.0,
+                            "fonte": "mdic",
+                            "cnpj": emp.get("cnpj"),
+                            "uf": emp.get("uf"),
+                            "faixa_valor": emp.get("faixa_valor")
+                        })
+                        empresas_ja_adicionadas.add(nome.lower())
+                
+            except Exception as e:
+                logger.debug(f"Erro ao buscar empresas MDIC: {e}")
+        
+        # 3. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
+        if len(resultado) < limit and incluir_sugestoes:
+            try:
+                from data_collector.sinergia_analyzer import SinergiaAnalyzer
+                from data_collector.cnae_analyzer import CNAEAnalyzer
+                
+                # Carregar CNAE se disponível
+                cnae_analyzer = None
+                try:
+                    arquivo_cnae = Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx")
+                    if arquivo_cnae.exists():
+                        cnae_analyzer = CNAEAnalyzer(arquivo_cnae)
+                        cnae_analyzer.carregar_cnae_excel()
+                except:
+                    pass
+                
+                analyzer = SinergiaAnalyzer(cnae_analyzer)
+                
+                # Buscar empresas com sinergia que são exportadoras
+                empresas_com_sinergia = analyzer.analisar_sinergias_por_empresa(db, {}, limit * 2)
+                
+                # Filtrar empresas que contêm o termo e são exportadoras
+                empresas_ja_adicionadas = {r["nome"].lower() for r in resultado}
+                
+                for emp in empresas_com_sinergia:
+                    nome = emp.get("razao_social", "")
+                    if (nome.lower() not in empresas_ja_adicionadas and
+                        q.lower() in nome.lower() and
+                        emp.get("exportacoes", {}).get("total_operacoes", 0) > 0):
+                        resultado.append({
+                            "nome": nome,
+                            "total_operacoes": emp.get("exportacoes", {}).get("total_operacoes", 0),
+                            "valor_total": emp.get("exportacoes", {}).get("valor_total", 0.0),
+                            "fonte": "sinergia",
+                            "potencial_sinergia": emp.get("potencial_sinergia", 0),
+                            "cnpj": emp.get("cnpj"),
+                            "uf": emp.get("uf")
+                        })
+                        empresas_ja_adicionadas.add(nome.lower())
+                        
+                        if len(resultado) >= limit:
+                            break
+            except Exception as e:
+                logger.debug(f"Erro ao buscar sugestões de sinergia: {e}")
+        
+        return resultado[:limit]
+        
     except Exception as e:
         logger.error(f"❌ Erro ao buscar exportadoras: {e}")
         import traceback

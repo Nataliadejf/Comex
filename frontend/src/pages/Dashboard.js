@@ -77,9 +77,9 @@ const Dashboard = () => {
   // Função de busca de importadoras com debounce
   const buscarImportadoras = useCallback(
     debounce(async (query) => {
-      if (!query || query.length < 1) {
-        setImportadorasOptions([]);
-        return;
+      // Permitir busca mesmo com query vazia para mostrar sugestões
+      if (!query) {
+        query = "";  // Busca vazia retorna sugestões
       }
       
       setLoadingImportadoras(true);
@@ -113,9 +113,9 @@ const Dashboard = () => {
   // Função de busca de exportadoras com debounce
   const buscarExportadoras = useCallback(
     debounce(async (query) => {
-      if (!query || query.length < 1) {
-        setExportadorasOptions([]);
-        return;
+      // Permitir busca mesmo com query vazia para mostrar sugestões
+      if (!query) {
+        query = "";  // Busca vazia retorna sugestões
       }
       
       setLoadingExportadoras(true);
