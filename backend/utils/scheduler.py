@@ -37,10 +37,22 @@ class DataScheduler:
         db = next(db_gen)
         
         try:
-            stats = await self.collector.collect_recent_data(db)
-            logger.info(
-                f"Coleta automática concluída: {stats['total_registros']} registros"
-            )
+            # Tentar coletor enriquecido primeiro (dados reais do MDIC)
+            try:
+                from data_collector.enriched_collector import EnrichedDataCollector
+                enriched_collector = EnrichedDataCollector()
+                stats = await enriched_collector.collect_and_enrich(db, meses=1)  # Último mês apenas
+                logger.info(
+                    f"✅ Coleta enriquecida concluída: {stats['total_registros']} registros, "
+                    f"{stats['empresas_enriquecidas']} empresas enriquecidas"
+                )
+            except Exception as e:
+                logger.warning(f"Coletor enriquecido não disponível, usando coletor padrão: {e}")
+                # Fallback para coletor padrão
+                stats = await self.collector.collect_recent_data(db)
+                logger.info(
+                    f"Coleta automática concluída: {stats['total_registros']} registros"
+                )
         except Exception as e:
             logger.error(f"Erro na coleta automática: {e}")
         finally:
