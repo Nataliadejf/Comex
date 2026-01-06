@@ -1703,6 +1703,110 @@ async def sugestoes_empresa(
         raise HTTPException(status_code=500, detail=f"Erro ao gerar sugestões: {str(e)}")
 
 
+@app.post("/atualizar-dados-completos")
+async def atualizar_dados_completos():
+    """
+    Executa atualização completa de todos os dados (empresas MDIC, relacionamentos, sinergias).
+    Útil para atualização manual ou via scheduler.
+    """
+    try:
+        from utils.data_updater import DataUpdater
+        
+        updater = DataUpdater()
+        resultado = await updater.atualizar_completo()
+        
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro na atualização completa: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na atualização: {str(e)}")
+
+
+@app.get("/dashboard/sinergias-estado")
+async def dashboard_sinergias_estado(
+    uf: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint otimizado para dashboard - sinergias por estado.
+    """
+    if not SINERGIA_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de sinergia não disponível")
+    
+    try:
+        analyzer = SinergiaAnalyzer()
+        resultado = analyzer.analisar_sinergias_por_estado(db, uf)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao buscar sinergias: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar sinergias: {str(e)}")
+
+
+@app.get("/dashboard/sugestoes-empresas")
+async def dashboard_sugestoes_empresas(
+    limite: int = Query(20, description="Número de sugestões"),
+    tipo: Optional[str] = Query(None, description="Tipo: 'importacao', 'exportacao', ou None para ambos"),
+    uf: Optional[str] = Query(None, description="Filtrar por UF"),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint otimizado para dashboard - sugestões de empresas.
+    Retorna empresas com maior potencial de sinergia.
+    """
+    if not SINERGIA_AVAILABLE or not CRUZAMENTO_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulos necessários não disponíveis")
+    
+    try:
+        # Carregar empresas
+        scraper = EmpresasMDICScraper()
+        empresas_lista = await scraper.coletar_empresas()
+        empresas_mdic = {}
+        for empresa in empresas_lista:
+            cnpj = empresa.get("cnpj")
+            if cnpj:
+                empresas_mdic[cnpj] = empresa
+        
+        # Carregar CNAE
+        cnae_analyzer = None
+        try:
+            arquivo_cnae = Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx")
+            if arquivo_cnae.exists():
+                cnae_analyzer = CNAEAnalyzer(arquivo_cnae)
+                cnae_analyzer.carregar_cnae_excel()
+        except Exception as e:
+            logger.warning(f"Não foi possível carregar CNAE: {e}")
+        
+        # Analisar sinergias
+        analyzer = SinergiaAnalyzer(cnae_analyzer)
+        resultados = analyzer.analisar_sinergias_por_empresa(db, empresas_mdic, limite * 2)
+        
+        # Filtrar por tipo se especificado
+        if tipo == "importacao":
+            resultados = [r for r in resultados if r["importacoes"]["total_operacoes"] > 0 and r["exportacoes"]["total_operacoes"] == 0]
+        elif tipo == "exportacao":
+            resultados = [r for r in resultados if r["exportacoes"]["total_operacoes"] > 0 and r["importacoes"]["total_operacoes"] == 0]
+        
+        # Filtrar por UF se especificado
+        if uf:
+            resultados = [r for r in resultados if r.get("uf") == uf]
+        
+        # Ordenar por potencial e limitar
+        resultados.sort(key=lambda x: x.get("potencial_sinergia", 0), reverse=True)
+        resultados = resultados[:limite]
+        
+        return {
+            "success": True,
+            "total": len(resultados),
+            "sugestoes": resultados
+        }
+    except Exception as e:
+        logger.error(f"Erro ao buscar sugestões: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar sugestões: {str(e)}")
+
+
 if __name__ == "__main__":
     from loguru import logger
     

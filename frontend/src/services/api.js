@@ -72,6 +72,28 @@ api.interceptors.response.use(
   }
 );
 
+// API de Sinergias e Sugestões
+export const sinergiasAPI = {
+  getSinergiasEstado: async (uf = null) => {
+    const params = uf ? { uf } : {};
+    const response = await api.get('/dashboard/sinergias-estado', { params });
+    return response.data;
+  },
+  
+  getSugestoesEmpresas: async (limite = 20, tipo = null, uf = null) => {
+    const params = { limite };
+    if (tipo) params.tipo = tipo;
+    if (uf) params.uf = uf;
+    const response = await api.get('/dashboard/sugestoes-empresas', { params });
+    return response.data;
+  },
+  
+  atualizarDadosCompletos: async () => {
+    const response = await api.post('/atualizar-dados-completos');
+    return response.data;
+  },
+};
+
 export default api;
 
 // Função auxiliar para verificar se backend está acessível
