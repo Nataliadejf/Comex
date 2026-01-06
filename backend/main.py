@@ -84,6 +84,31 @@ async def startup_event():
         scheduler = DataScheduler()
         scheduler.start()
         logger.info("Scheduler de atualização diária iniciado")
+        
+        # Executar atualização inicial de empresas e sinergias em background
+        async def atualizacao_inicial():
+            try:
+                from utils.data_updater import DataUpdater
+                updater = DataUpdater()
+                logger.info("Iniciando atualização inicial de empresas MDIC e sinergias...")
+                await updater.atualizar_empresas_mdic()
+                await updater.atualizar_relacionamentos(limite=500)  # Limite menor na inicialização
+                await updater.atualizar_sinergias(limite_empresas=50)  # Limite menor na inicialização
+                logger.info("✅ Atualização inicial concluída")
+            except Exception as e:
+                logger.warning(f"Atualização inicial não executada: {e}")
+        
+        # Executar após 30 segundos (dar tempo para o servidor inicializar)
+        import asyncio
+        import threading
+        def run_initial_update():
+            import time
+            time.sleep(30)
+            asyncio.run(atualizacao_inicial())
+        
+        update_thread = threading.Thread(target=run_initial_update, daemon=True)
+        update_thread.start()
+        
     except Exception as e:
         logger.warning(f"Não foi possível iniciar scheduler: {e}")
         # Não interrompe a aplicação se o scheduler falhar
