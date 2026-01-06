@@ -846,9 +846,10 @@ async def buscar_operacoes(
 
 @app.get("/empresas/autocomplete/importadoras")
 async def autocomplete_importadoras(
-    q: str = Query(..., min_length=1, description="Termo de busca"),
+    q: str = Query("", description="Termo de busca (vazio retorna sugestões)"),
     limit: int = Query(default=20, ge=1, le=100),
     incluir_sugestoes: bool = Query(default=True, description="Incluir empresas sugeridas do MDIC"),
+    ncm: Optional[str] = Query(None, description="Filtrar por NCM específico"),
     db: Session = Depends(get_db)
 ):
     """
