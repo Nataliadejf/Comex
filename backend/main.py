@@ -206,6 +206,44 @@ async def coletar_dados(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
 
 
+@app.post("/coletar-dados-enriquecidos")
+async def coletar_dados_enriquecidos(
+    meses: int = Query(24, description="Número de meses para coletar"),
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta dados CSV do portal oficial do MDIC e enriquece com empresas e CNAE.
+    Este endpoint:
+    1. Baixa tabelas de correlação do MDIC
+    2. Baixa dados mensais de importação/exportação dos últimos N meses
+    3. Processa e salva no banco de dados
+    4. Enriquece com informações de empresas do MDIC
+    5. Integra com CNAE para sugestões inteligentes
+    
+    Fonte: https://www.gov.br/mdic/pt-br/assuntos/comercio-exterior/estatisticas/base-de-dados-bruta
+    """
+    try:
+        from data_collector.enriched_collector import EnrichedDataCollector
+        
+        logger.info(f"Iniciando coleta enriquecida de dados do MDIC ({meses} meses)...")
+        
+        collector = EnrichedDataCollector()
+        stats = await collector.collect_and_enrich(db, meses)
+        
+        return {
+            "success": True,
+            "message": "Coleta enriquecida concluída",
+            "stats": stats,
+            "tabelas_baixadas": list(stats.get("tabelas_correlacao", {}).keys()),
+            "empresas_enriquecidas": stats.get("empresas_enriquecidas", 0)
+        }
+    except Exception as e:
+        logger.error(f"Erro na coleta enriquecida: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na coleta enriquecida: {str(e)}")
+
+
 class ColetarDadosNCMsRequest(BaseModel):
     """Schema para coletar dados de múltiplos NCMs."""
     ncms: Optional[List[str]] = None  # Lista de NCMs específicos (None = todos)
