@@ -956,38 +956,40 @@ async def autocomplete_exportadoras(
         logger.info(f"🔍 Buscando exportadoras com termo: '{q}'")
         
         resultado = []
+        query_lower = q.lower() if q else ""
         
-        # 1. Buscar empresas exportadoras que contêm o termo nas operações
-        empresas_query = db.query(
-            OperacaoComex.razao_social_exportador,
-            func.count(OperacaoComex.id).label('total_operacoes'),
-            func.sum(OperacaoComex.valor_fob).label('valor_total')
-        ).filter(
-            OperacaoComex.razao_social_exportador.isnot(None),
-            OperacaoComex.razao_social_exportador != '',
-            OperacaoComex.razao_social_exportador.ilike(f"%{q}%")
-        ).group_by(
-            OperacaoComex.razao_social_exportador
-        ).order_by(
-            func.sum(OperacaoComex.valor_fob).desc()
-        ).limit(limit)
-        
-        empresas = empresas_query.all()
-        
-        resultado = []
-        for empresa, total_operacoes, valor_total in empresas:
-            if empresa:  # Garantir que empresa não é None
-                resultado.append({
-                    "nome": str(empresa),
-                    "total_operacoes": int(total_operacoes) if total_operacoes else 0,
-                    "valor_total": float(valor_total or 0),
-                    "fonte": "operacoes"
-                })
+        # 1. Se tem query, buscar nas operações primeiro
+        if q:
+            empresas_query = db.query(
+                OperacaoComex.razao_social_exportador,
+                func.count(OperacaoComex.id).label('total_operacoes'),
+                func.sum(OperacaoComex.valor_fob).label('valor_total')
+            ).filter(
+                OperacaoComex.razao_social_exportador.isnot(None),
+                OperacaoComex.razao_social_exportador != '',
+                OperacaoComex.razao_social_exportador.ilike(f"%{q}%")
+            ).group_by(
+                OperacaoComex.razao_social_exportador
+            ).order_by(
+                func.sum(OperacaoComex.valor_fob).desc()
+            ).limit(limit)
+            
+            empresas = empresas_query.all()
+            
+            resultado = []
+            for empresa, total_operacoes, valor_total in empresas:
+                if empresa:  # Garantir que empresa não é None
+                    resultado.append({
+                        "nome": str(empresa),
+                        "total_operacoes": int(total_operacoes) if total_operacoes else 0,
+                        "valor_total": float(valor_total or 0),
+                        "fonte": "operacoes"
+                    })
         
         logger.info(f"✅ Encontradas {len(resultado)} exportadoras nas operações para '{q}'")
         
-        # 2. Se não encontrou resultados ou quer incluir sugestões, buscar no MDIC
-        if (len(resultado) < limit and incluir_sugestoes) or len(resultado) == 0:
+        # 2. Se não encontrou resultados ou query vazia, buscar no MDIC
+        if (len(resultado) < limit and incluir_sugestoes) or not q:
             try:
                 from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
                 
