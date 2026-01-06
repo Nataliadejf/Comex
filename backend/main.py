@@ -1388,6 +1388,15 @@ except ImportError:
     CRUZAMENTO_AVAILABLE = False
     logger.warning("Módulos de cruzamento não disponíveis")
 
+# Endpoints para análise de sinergias e CNAE
+try:
+    from data_collector.sinergia_analyzer import SinergiaAnalyzer
+    from data_collector.cnae_analyzer import CNAEAnalyzer
+    SINERGIA_AVAILABLE = True
+except ImportError:
+    SINERGIA_AVAILABLE = False
+    logger.warning("Módulos de sinergia não disponíveis")
+
 
 @app.post("/coletar-empresas-mdic")
 async def coletar_empresas_mdic(
@@ -1512,6 +1521,186 @@ async def estatisticas_cruzamento(
     except Exception as e:
         logger.error(f"Erro ao calcular estatísticas: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao calcular estatísticas: {str(e)}")
+
+
+@app.post("/carregar-cnae")
+async def carregar_cnae(
+    arquivo_path: Optional[str] = Query(None, description="Caminho do arquivo Excel CNAE")
+):
+    """
+    Carrega arquivo Excel com classificação CNAE.
+    """
+    if not SINERGIA_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de sinergia não disponível")
+    
+    try:
+        from pathlib import Path
+        
+        if arquivo_path:
+            arquivo = Path(arquivo_path)
+        else:
+            # Tentar caminho padrão
+            arquivo = Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx")
+        
+        analyzer = CNAEAnalyzer(arquivo)
+        sucesso = analyzer.carregar_cnae_excel()
+        
+        if sucesso:
+            stats = analyzer.estatisticas()
+            return {
+                "success": True,
+                "message": f"CNAE carregado com sucesso",
+                "estatisticas": stats
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Não foi possível carregar arquivo CNAE")
+    except Exception as e:
+        logger.error(f"Erro ao carregar CNAE: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao carregar CNAE: {str(e)}")
+
+
+@app.get("/analisar-sinergias-estado")
+async def analisar_sinergias_estado(
+    uf: Optional[str] = Query(None, description="UF específica (None = todos)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Analisa sinergias de importação/exportação por estado.
+    """
+    if not SINERGIA_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de sinergia não disponível")
+    
+    try:
+        analyzer = SinergiaAnalyzer()
+        resultado = analyzer.analisar_sinergias_por_estado(db, uf)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao analisar sinergias: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao analisar sinergias: {str(e)}")
+
+
+@app.post("/analisar-sinergias-empresas")
+async def analisar_sinergias_empresas(
+    limite: int = Query(100, description="Limite de empresas a analisar"),
+    ano: Optional[int] = Query(None, description="Ano para coletar empresas do MDIC"),
+    db: Session = Depends(get_db)
+):
+    """
+    Analisa sinergias por empresa, integrando com CNAE.
+    """
+    if not SINERGIA_AVAILABLE or not CRUZAMENTO_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulos necessários não disponíveis")
+    
+    try:
+        # Carregar empresas do MDIC
+        scraper = EmpresasMDICScraper()
+        empresas_lista = await scraper.coletar_empresas(ano)
+        
+        # Criar índice por CNPJ
+        empresas_mdic = {}
+        for empresa in empresas_lista:
+            cnpj = empresa.get("cnpj")
+            if cnpj:
+                empresas_mdic[cnpj] = empresa
+        
+        # Carregar CNAE se disponível
+        cnae_analyzer = None
+        try:
+            arquivo_cnae = Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx")
+            if arquivo_cnae.exists():
+                cnae_analyzer = CNAEAnalyzer(arquivo_cnae)
+                cnae_analyzer.carregar_cnae_excel()
+        except Exception as e:
+            logger.warning(f"Não foi possível carregar CNAE: {e}")
+        
+        # Analisar sinergias
+        analyzer = SinergiaAnalyzer(cnae_analyzer)
+        resultados = analyzer.analisar_sinergias_por_empresa(db, empresas_mdic, limite)
+        
+        return {
+            "success": True,
+            "message": f"Análise de sinergias concluída para {len(resultados)} empresas",
+            "total_empresas_mdic": len(empresas_mdic),
+            "empresas_analisadas": len(resultados),
+            "cnae_carregado": cnae_analyzer is not None,
+            "resultados": resultados
+        }
+    except Exception as e:
+        logger.error(f"Erro ao analisar sinergias de empresas: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao analisar sinergias: {str(e)}")
+
+
+@app.get("/sugestoes-empresa/{cnpj}")
+async def sugestoes_empresa(
+    cnpj: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Gera sugestões de importação/exportação para uma empresa específica.
+    """
+    if not SINERGIA_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Módulo de sinergia não disponível")
+    
+    try:
+        # Buscar empresa no MDIC
+        scraper = EmpresasMDICScraper()
+        empresas_lista = await scraper.coletar_empresas()
+        
+        empresa_mdic = None
+        cnpj_limpo = cnpj.replace('.', '').replace('/', '').replace('-', '')
+        for empresa in empresas_lista:
+            if empresa.get("cnpj") == cnpj_limpo:
+                empresa_mdic = empresa
+                break
+        
+        if not empresa_mdic:
+            raise HTTPException(status_code=404, detail="Empresa não encontrada no MDIC")
+        
+        # Carregar CNAE
+        cnae_analyzer = None
+        try:
+            arquivo_cnae = Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx")
+            if arquivo_cnae.exists():
+                cnae_analyzer = CNAEAnalyzer(arquivo_cnae)
+                cnae_analyzer.carregar_cnae_excel()
+        except Exception as e:
+            logger.warning(f"Não foi possível carregar CNAE: {e}")
+        
+        # Analisar empresa
+        analyzer = SinergiaAnalyzer(cnae_analyzer)
+        sinergia = analyzer._analisar_empresa_individual(
+            db,
+            cnpj_limpo,
+            empresa_mdic,
+            empresa_mdic.get("uf")
+        )
+        
+        if not sinergia:
+            raise HTTPException(status_code=404, detail="Não foi possível analisar empresa")
+        
+        return {
+            "success": True,
+            "empresa": sinergia,
+            "sugestoes": {
+                "importacao": sinergia.get("sugestao", ""),
+                "exportacao": sinergia.get("sugestao", ""),
+                "cnae": sinergia.get("cnae"),
+                "classificacao_cnae": sinergia.get("classificacao_cnae")
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao gerar sugestões: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar sugestões: {str(e)}")
 
 
 if __name__ == "__main__":
