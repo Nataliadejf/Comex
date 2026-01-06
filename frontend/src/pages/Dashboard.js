@@ -1393,22 +1393,6 @@ const Dashboard = () => {
       </Row>
     </div>
   );
-  
-  // Função para carregar sugestões de empresas
-  const loadSugestoesEmpresas = useCallback(async (tipo = null) => {
-    setLoadingSugestoes(true);
-    try {
-      const data = await sinergiasAPI.getSugestoesEmpresas(20, tipo, null);
-      if (data.success && data.sugestoes) {
-        setSugestoesEmpresas(data.sugestoes);
-      }
-    } catch (error) {
-      console.error('Erro ao carregar sugestões:', error);
-      setSugestoesEmpresas([]);
-    } finally {
-      setLoadingSugestoes(false);
-    }
-  }, []);
 };
 
 export default Dashboard;
