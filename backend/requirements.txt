@@ -7,11 +7,10 @@ pydantic-settings==2.1.0
 # Database
 sqlalchemy==2.0.23
 
-# Data Processing (opcional - necessário apenas para análise de dados)
-# Se tiver problemas ao instalar, use: pip install --only-binary :all: pandas numpy
-pandas>=2.2.0
-numpy>=2.0.0
-openpyxl==3.1.2
+# Data Processing
+pandas>=2.2.0  # Versão mais recente com suporte a Python 3.13
+numpy>=1.26.0
+openpyxl>=3.1.2
 
 # Web Scraping (se necessário)
 selenium==4.15.2
@@ -24,8 +23,6 @@ httpx==0.25.2
 # Utilities
 python-dotenv==1.0.0
 schedule==1.2.0
-certifi>=2023.7.22
-urllib3>=2.0.0
 
 # Logging
 loguru==0.7.2
@@ -39,9 +36,3 @@ python-multipart==0.0.6
 
 # PDF Export (opcional)
 reportlab==4.0.7
-
-# Authentication
-python-jose[cryptography]==3.3.0
-bcrypt==4.0.1
-
-# Email (smtplib e email são built-in do Python, não precisam ser instalados)
