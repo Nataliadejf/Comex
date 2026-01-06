@@ -5,13 +5,20 @@ https://www.gov.br/mdic/pt-br/assuntos/comercio-exterior/estatisticas/base-de-da
 """
 import aiohttp
 import asyncio
-import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from loguru import logger
 import io
 import csv
+
+# Import opcional de pandas
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    logger.warning("pandas não disponível - funcionalidade de tabelas limitada")
 
 from config import settings
 
@@ -262,21 +269,21 @@ class MDICCSVCollector:
             logger.error(traceback.format_exc())
             return []
     
-    def load_correlation_table(self, table_name: str) -> pd.DataFrame:
+    def load_correlation_table(self, table_name: str):
         """
-        Carrega uma tabela de correlação como DataFrame.
+        Carrega uma tabela de correlação como DataFrame ou lista de dicionários.
         
         Args:
             table_name: Nome da tabela
         
         Returns:
-            DataFrame com os dados
+            DataFrame se pandas disponível, senão lista de dicionários
         """
         filepath = self.tables_dir / f"{table_name}.csv"
         
         if not filepath.exists():
             logger.warning(f"Tabela {table_name} não encontrada")
-            return pd.DataFrame()
+            return pd.DataFrame() if PANDAS_AVAILABLE else []
         
         try:
             # Tentar diferentes encodings e delimitadores
@@ -286,19 +293,31 @@ class MDICCSVCollector:
             for encoding in encodings:
                 for delimiter in delimiters:
                     try:
-                        df = pd.read_csv(filepath, encoding=encoding, delimiter=delimiter, low_memory=False)
-                        if len(df) > 0:
-                            logger.info(f"✅ Carregada tabela {table_name}: {len(df)} registros")
-                            return df
-                    except:
+                        if PANDAS_AVAILABLE:
+                            df = pd.read_csv(filepath, encoding=encoding, delimiter=delimiter, low_memory=False)
+                            if len(df) > 0:
+                                logger.info(f"✅ Carregada tabela {table_name}: {len(df)} registros")
+                                return df
+                        else:
+                            # Fallback sem pandas
+                            content = filepath.read_text(encoding=encoding)
+                            reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+                            data = list(reader)
+                            if len(data) > 0:
+                                logger.info(f"✅ Carregada tabela {table_name}: {len(data)} registros")
+                                return data
+                    except Exception as e:
+                        logger.debug(f"Tentativa falhou ({encoding}, {delimiter}): {e}")
                         continue
             
             logger.error(f"Não foi possível carregar {table_name}")
-            return pd.DataFrame()
+            return pd.DataFrame() if PANDAS_AVAILABLE else []
             
         except Exception as e:
             logger.error(f"Erro ao carregar tabela {table_name}: {e}")
-            return pd.DataFrame()
+            import traceback
+            logger.error(traceback.format_exc())
+            return pd.DataFrame() if PANDAS_AVAILABLE else []
     
     async def get_available_files(self) -> List[Dict[str, Any]]:
         """

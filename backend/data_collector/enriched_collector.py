@@ -87,30 +87,41 @@ class EnrichedDataCollector:
                         mes_str = f"{ano}-{mes:02d}"
                         
                         # Processar CSV
-                        registros_raw = self.csv_collector.parse_csv_file(filepath)
-                        
-                        if registros_raw:
-                            # Transformar para formato do banco
-                            registros_transformados = self.transformer.transform_csv_data(
-                                registros_raw,
-                                mes_str,
-                                tipo_operacao
-                            )
+                        try:
+                            registros_raw = self.csv_collector.parse_csv_file(filepath)
                             
-                            # Salvar no banco
-                            salvos = self._save_to_database(db, registros_transformados, mes_str, tipo_operacao)
-                            stats["total_registros"] += len(registros_transformados)
-                            stats["registros_novos"] += salvos["novos"]
-                            stats["registros_atualizados"] += salvos["atualizados"]
-                            
-                            if mes_str not in stats["meses_processados"]:
-                                stats["meses_processados"].append(mes_str)
-                            
-                            logger.info(
-                                f"✅ {tipo_operacao} {mes_str}: "
-                                f"{len(registros_transformados)} registros "
-                                f"({salvos['novos']} novos, {salvos['atualizados']} atualizados)"
-                            )
+                            if registros_raw:
+                                # Transformar para formato do banco
+                                registros_transformados = self.transformer.transform_csv_data(
+                                    registros_raw,
+                                    mes_str,
+                                    tipo_operacao
+                                )
+                                
+                                if registros_transformados:
+                                    # Salvar no banco
+                                    salvos = self._save_to_database(db, registros_transformados, mes_str, tipo_operacao)
+                                    stats["total_registros"] += len(registros_transformados)
+                                    stats["registros_novos"] += salvos["novos"]
+                                    stats["registros_atualizados"] += salvos["atualizados"]
+                                    
+                                    if mes_str not in stats["meses_processados"]:
+                                        stats["meses_processados"].append(mes_str)
+                                    
+                                    logger.info(
+                                        f"✅ {tipo_operacao} {mes_str}: "
+                                        f"{len(registros_transformados)} registros "
+                                        f"({salvos['novos']} novos, {salvos['atualizados']} atualizados)"
+                                    )
+                                else:
+                                    logger.warning(f"⚠️ Nenhum registro transformado de {filepath.name}")
+                            else:
+                                logger.warning(f"⚠️ Arquivo vazio ou inválido: {filepath.name}")
+                        except Exception as e:
+                            logger.error(f"Erro ao processar {filepath.name}: {e}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                            stats["erros"].append(f"Erro ao processar {filepath.name}: {str(e)}")
                 
                 except Exception as e:
                     error_msg = f"Erro ao processar {filepath.name}: {e}"
