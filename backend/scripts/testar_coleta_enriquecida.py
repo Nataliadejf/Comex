@@ -5,12 +5,16 @@ Script para testar a coleta enriquecida de dados do MDIC.
 import asyncio
 import sys
 from pathlib import Path
+import os
 
-# Adicionar diretório raiz ao path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Mudar para o diretório backend
+backend_dir = Path(__file__).parent.parent
+os.chdir(backend_dir)
+sys.path.insert(0, str(backend_dir))
 
-from backend.database import get_db
-from backend.data_collector.enriched_collector import EnrichedDataCollector
+# Agora importar módulos relativos
+from database import get_db
+from data_collector.enriched_collector import EnrichedDataCollector
 from loguru import logger
 
 async def testar_coleta():
