@@ -1,4 +1,4 @@
+# Redirects para React Router (Render.com)
+# Todas as rotas devem redirecionar para index.html para o React Router funcionar
+
 /*    /index.html   200
-
-
-
