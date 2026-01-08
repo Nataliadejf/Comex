@@ -4,7 +4,7 @@ Lê arquivo Excel com classificação CNAE e relaciona com empresas.
 """
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from loguru import logger
 
 # Tentar importar pandas/openpyxl
@@ -13,7 +13,12 @@ try:
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
+    pd = None  # Definir pd como None quando não disponível
     logger.warning("pandas não disponível - análise CNAE limitada")
+
+# Para type hints quando pandas não está disponível
+if TYPE_CHECKING:
+    import pandas as pd
 
 try:
     import openpyxl
@@ -83,7 +88,7 @@ class CNAEAnalyzer:
             logger.error(traceback.format_exc())
             return False
     
-    def _processar_dataframe_cnae(self, df: pd.DataFrame, sheet_name: str):
+    def _processar_dataframe_cnae(self, df: Any, sheet_name: str):
         """
         Processa DataFrame do CNAE.
         

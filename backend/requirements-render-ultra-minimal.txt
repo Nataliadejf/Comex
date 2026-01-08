@@ -31,6 +31,10 @@ PyJWT==2.8.0
 passlib==1.7.4
 bcrypt==4.0.1
 
+# Data processing (necessário para análise CNAE e empresas recomendadas)
+pandas==2.0.3
+openpyxl==3.1.2
+
 # NOTA CRÍTICA: 
 # - Versões ANTIGAS usadas para garantir wheels pré-compilados
 # - Nenhuma dependência transitiva deve requerer Rust

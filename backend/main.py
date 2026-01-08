@@ -972,7 +972,12 @@ async def autocomplete_importadoras(
         if (len(resultado) < limit and incluir_sugestoes) or len(resultado) == 0:
             try:
                 from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
-                from data_collector.sinergia_analyzer import SinergiaAnalyzer
+                # Importação condicional - apenas quando necessário
+    try:
+        from data_collector.sinergia_analyzer import SinergiaAnalyzer
+    except (ImportError, NameError) as e:
+        logger.warning(f"SinergiaAnalyzer não disponível: {e}")
+        SinergiaAnalyzer = None
                 
                 scraper = EmpresasMDICScraper()
                 empresas_mdic = await scraper.coletar_empresas()
@@ -1007,7 +1012,12 @@ async def autocomplete_importadoras(
         # 3. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
         if len(resultado) < limit and incluir_sugestoes:
             try:
-                from data_collector.sinergia_analyzer import SinergiaAnalyzer
+                # Importação condicional - apenas quando necessário
+    try:
+        from data_collector.sinergia_analyzer import SinergiaAnalyzer
+    except (ImportError, NameError) as e:
+        logger.warning(f"SinergiaAnalyzer não disponível: {e}")
+        SinergiaAnalyzer = None
                 from data_collector.cnae_analyzer import CNAEAnalyzer
                 
                 # Carregar CNAE se disponível
@@ -1146,7 +1156,12 @@ async def autocomplete_exportadoras(
         # 3. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
         if len(resultado) < limit and incluir_sugestoes:
             try:
-                from data_collector.sinergia_analyzer import SinergiaAnalyzer
+                # Importação condicional - apenas quando necessário
+    try:
+        from data_collector.sinergia_analyzer import SinergiaAnalyzer
+    except (ImportError, NameError) as e:
+        logger.warning(f"SinergiaAnalyzer não disponível: {e}")
+        SinergiaAnalyzer = None
                 from data_collector.cnae_analyzer import CNAEAnalyzer
                 
                 # Carregar CNAE se disponível
@@ -1706,9 +1721,11 @@ try:
     from data_collector.sinergia_analyzer import SinergiaAnalyzer
     from data_collector.cnae_analyzer import CNAEAnalyzer
     SINERGIA_AVAILABLE = True
-except ImportError:
+except (ImportError, NameError) as e:
     SINERGIA_AVAILABLE = False
-    logger.warning("Módulos de sinergia não disponíveis")
+    SinergiaAnalyzer = None
+    CNAEAnalyzer = None
+    logger.warning(f"Módulos de sinergia não disponíveis: {e}")
 
 
 @app.post("/coletar-empresas-mdic")
