@@ -95,8 +95,11 @@ async def status_analise(db: Session = Depends(get_db)):
             EmpresasRecomendadas.provavel_exportador == 1
         ).scalar() or 0
         
-        # Última atualização
-        ultima_analise = db.query(func.max(EmpresasRecomendadas.data_analise)).scalar()
+        # Última atualização (usar data_atualizacao se disponível)
+        try:
+            ultima_analise = db.query(func.max(EmpresasRecomendadas.data_atualizacao)).scalar()
+        except:
+            ultima_analise = None
         
         return {
             "status": "executada",
