@@ -55,13 +55,37 @@ if not database_url or database_url == "":
     db_path = settings.data_dir / "database" / "comex.db"
     database_url = f"sqlite:///{db_path.absolute()}"
 
-# Criar engine do SQLAlchemy
-engine = create_engine(
-    database_url,
-    connect_args={"check_same_thread": False} if "sqlite" in database_url else {},
-    echo=settings.debug,
-    pool_pre_ping=True,  # Verifica conexões antes de usar
-)
+# Criar engine do SQLAlchemy com tratamento de erro
+try:
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False} if "sqlite" in database_url else {},
+        echo=settings.debug,
+        pool_pre_ping=True,  # Verifica conexões antes de usar
+    )
+except (ValueError, Exception) as e:
+    import warnings
+    # Se for erro de parsing de URL (porta inválida), usar SQLite como fallback
+    if "invalid literal" in str(e) or "port" in str(e).lower() or "int()" in str(e):
+        warnings.warn(
+            f"⚠️ DATABASE_URL inválida detectada (erro ao parsear: {str(e)[:100]}). "
+            f"Usando SQLite local como fallback. "
+            f"Configure uma URL válida no formato: postgresql://user:pass@host:port/db",
+            UserWarning
+        )
+        # Fallback para SQLite
+        db_path = settings.data_dir / "database" / "comex.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        database_url = f"sqlite:///{db_path.absolute()}"
+        engine = create_engine(
+            database_url,
+            connect_args={"check_same_thread": False},
+            echo=settings.debug,
+            pool_pre_ping=True,
+        )
+    else:
+        # Re-raise outros erros
+        raise
 
 # Criar SessionLocal
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
