@@ -2231,6 +2231,8 @@ def _buscar_empresas_importadoras_recomendadas(limite: int = 10):
         return empresas
     except Exception as e:
         logger.debug(f"Erro ao buscar empresas importadoras: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
         return []
 
 
@@ -2286,6 +2288,8 @@ def _buscar_empresas_exportadoras_recomendadas(limite: int = 10):
         return empresas
     except Exception as e:
         logger.debug(f"Erro ao buscar empresas exportadoras: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
         return []
 
 

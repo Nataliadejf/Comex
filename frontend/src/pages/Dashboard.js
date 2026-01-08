@@ -268,14 +268,31 @@ const Dashboard = () => {
         errorMessage = err.message || 'Erro desconhecido';
       }
       
-      setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
-      console.error('❌ Erro completo:', err);
-      console.error('❌ Detalhes:', {
-        message: err.message,
-        response: err.response?.data,
-        status: err.response?.status,
-        url: err.config?.url
-      });
+      // Não mostrar erro se for apenas falta de dados (404 ou banco vazio)
+      if (err.response?.status === 404 || err.response?.status === 200) {
+        // Banco pode estar vazio, não é um erro crítico
+        setError(null);
+        setStats({
+          volume_importacoes: 0,
+          volume_exportacoes: 0,
+          valor_total_usd: 0,
+          principais_ncms: [],
+          principais_paises: [],
+          registros_por_mes: {},
+          valores_por_mes: {},
+          pesos_por_mes: {}
+        });
+      } else {
+        // Erro real de conexão ou servidor
+        setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+        console.error('❌ Erro completo:', err);
+        console.error('❌ Detalhes:', {
+          message: err.message,
+          response: err.response?.data,
+          status: err.response?.status,
+          url: err.config?.url
+        });
+      }
       
       // Em caso de erro, manter dados anteriores se existirem
       setStats((prevStats) => prevStats || null);

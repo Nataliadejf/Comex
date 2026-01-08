@@ -13,14 +13,14 @@ if (Test-Path $envPath) {
     Get-Content $envPath
 } else {
     Write-Host "   ⚠️ Arquivo .env não encontrado. Criando..." -ForegroundColor Yellow
-    "REACT_APP_API_URL=https://comex-tsba.onrender.com" | Out-File -FilePath $envPath -Encoding UTF8
+    "REACT_APP_API_URL=https://comex-4.onrender.com" | Out-File -FilePath $envPath -Encoding UTF8
     Write-Host "   ✅ Arquivo .env criado" -ForegroundColor Green
 }
 
 Write-Host ""
 Write-Host "[2/4] Verificando se backend está acessível no Render..." -ForegroundColor Yellow
 try {
-    $response = Invoke-WebRequest -Uri "https://comex-tsba.onrender.com/health" -TimeoutSec 10 -UseBasicParsing
+    $response = Invoke-WebRequest -Uri "https://comex-4.onrender.com/health" -TimeoutSec 10 -UseBasicParsing
     Write-Host "   ✅ Backend está acessível (Status: $($response.StatusCode))" -ForegroundColor Green
     Write-Host "   Resposta:" -ForegroundColor Gray
     $response.Content
@@ -41,7 +41,7 @@ if (Test-Path $envPath) {
         Write-Host "   ✅ Variável REACT_APP_API_URL encontrada" -ForegroundColor Green
     } else {
         Write-Host "   ⚠️ Variável não encontrada. Adicionando..." -ForegroundColor Yellow
-        "REACT_APP_API_URL=https://comex-tsba.onrender.com" | Add-Content -Path $envPath -Encoding UTF8
+        "REACT_APP_API_URL=https://comex-4.onrender.com" | Add-Content -Path $envPath -Encoding UTF8
         Write-Host "   ✅ Variável adicionada" -ForegroundColor Green
     }
 }

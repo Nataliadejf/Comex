@@ -114,10 +114,15 @@ export const dashboardAPI = {
       // Sempre usar objeto de parâmetros
       const params = paramsObj || {};
 
-      // Verificar saúde do backend primeiro
-      const isHealthy = await checkBackendHealth();
-      if (!isHealthy) {
-        throw new Error(`Backend não está acessível em ${API_BASE_URL}. Verifique se o servidor está rodando.`);
+      // Verificar saúde do backend primeiro (não bloqueante)
+      try {
+        const isHealthy = await checkBackendHealth();
+        if (!isHealthy) {
+          console.warn('⚠️ Backend health check falhou, mas continuando...');
+        }
+      } catch (healthError) {
+        console.warn('⚠️ Erro no health check, mas continuando:', healthError.message);
+        // Não bloquear, apenas logar o aviso
       }
 
       const urlParams = new URLSearchParams();
@@ -202,38 +207,63 @@ export const ncmAPI = {
 // API de Empresas Recomendadas
 export const empresasRecomendadasAPI = {
   getEmpresasRecomendadas: async (limite = 100, tipo = null, uf = null, ncm = null) => {
-    const params = { limite };
-    if (tipo) params.tipo = tipo;
-    if (uf) params.uf = uf;
-    if (ncm) params.ncm = ncm;
-    const response = await api.get('/dashboard/empresas-recomendadas', { params });
-    return response.data;
+    try {
+      const params = { limite };
+      if (tipo) params.tipo = tipo;
+      if (uf) params.uf = uf;
+      if (ncm) params.ncm = ncm;
+      const response = await api.get('/dashboard/empresas-recomendadas', { params });
+      return response.data || { success: false, data: [] };
+    } catch (error) {
+      console.warn('⚠️ Erro ao buscar empresas recomendadas:', error.message);
+      return { success: false, data: [], message: 'Arquivo não encontrado ou vazio' };
+    }
   },
   
   getEmpresasImportadoras: async (limite = 10) => {
-    const response = await api.get('/dashboard/empresas-importadoras', { params: { limite } });
-    return response.data;
+    try {
+      const response = await api.get('/dashboard/empresas-importadoras', { params: { limite } });
+      return response.data || { success: false, data: [] };
+    } catch (error) {
+      console.warn('⚠️ Erro ao buscar empresas importadoras:', error.message);
+      return { success: false, data: [] };
+    }
   },
   
   getEmpresasExportadoras: async (limite = 10) => {
-    const response = await api.get('/dashboard/empresas-exportadoras', { params: { limite } });
-    return response.data;
+    try {
+      const response = await api.get('/dashboard/empresas-exportadoras', { params: { limite } });
+      return response.data || { success: false, data: [] };
+    } catch (error) {
+      console.warn('⚠️ Erro ao buscar empresas exportadoras:', error.message);
+      return { success: false, data: [] };
+    }
   },
 };
 
 // API de Dados ComexStat
 export const comexstatAPI = {
   getDadosComexstat: async () => {
-    const response = await api.get('/dashboard/dados-comexstat');
-    return response.data;
+    try {
+      const response = await api.get('/dashboard/dados-comexstat');
+      return response.data || { success: false, data: null };
+    } catch (error) {
+      console.warn('⚠️ Erro ao buscar dados ComexStat:', error.message);
+      return { success: false, data: null, message: 'Arquivo não encontrado' };
+    }
   },
   
   getDadosNCM: async (limite = 100, uf = null, tipo = null) => {
-    const params = { limite };
-    if (uf) params.uf = uf;
-    if (tipo) params.tipo = tipo;
-    const response = await api.get('/dashboard/dados-ncm-comexstat', { params });
-    return response.data;
+    try {
+      const params = { limite };
+      if (uf) params.uf = uf;
+      if (tipo) params.tipo = tipo;
+      const response = await api.get('/dashboard/dados-ncm-comexstat', { params });
+      return response.data || { success: false, data: [] };
+    } catch (error) {
+      console.warn('⚠️ Erro ao buscar dados NCM ComexStat:', error.message);
+      return { success: false, data: [] };
+    }
   },
 };
 

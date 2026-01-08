@@ -8,7 +8,7 @@ echo.
 echo [1/5] Verificando arquivo .env do frontend...
 if not exist "frontend\.env" (
     echo    ⚠️ Arquivo .env não encontrado. Criando...
-    echo REACT_APP_API_URL=https://comex-tsba.onrender.com > frontend\.env
+    echo REACT_APP_API_URL=https://comex-4.onrender.com > frontend\.env
     echo    ✅ Arquivo .env criado
 ) else (
     echo    ✅ Arquivo .env encontrado
@@ -18,7 +18,7 @@ if not exist "frontend\.env" (
 
 echo.
 echo [2/5] Verificando se backend está acessível no Render...
-curl -s -o nul -w "Status: %%{http_code}\n" https://comex-tsba.onrender.com/health
+curl -s -o nul -w "Status: %%{http_code}\n" https://comex-4.onrender.com/health
 if %errorlevel% equ 0 (
     echo    ✅ Backend está acessível
 ) else (
@@ -36,7 +36,7 @@ if %errorlevel% equ 0 (
     echo    ✅ Variável REACT_APP_API_URL encontrada
 ) else (
     echo    ⚠️ Variável não encontrada. Adicionando...
-    echo REACT_APP_API_URL=https://comex-tsba.onrender.com >> frontend\.env
+    echo REACT_APP_API_URL=https://comex-4.onrender.com >> frontend\.env
     echo    ✅ Variável adicionada
 )
 
@@ -52,7 +52,7 @@ if %errorlevel% equ 0 (
 
 echo.
 echo [5/5] Resumo da configuração:
-echo    Backend URL: https://comex-tsba.onrender.com
+echo    Backend URL: https://comex-4.onrender.com
 echo    Frontend URL: http://localhost:3000
 echo.
 echo ============================================================

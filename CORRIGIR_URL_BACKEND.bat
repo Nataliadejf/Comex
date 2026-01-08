@@ -5,10 +5,10 @@ echo CORREÇÃO DA URL DO BACKEND NO FRONTEND
 echo ============================================================
 echo.
 echo Atualizando frontend\.env para usar:
-echo https://comex-tsba.onrender.com
+echo https://comex-4.onrender.com
 echo.
 
-echo REACT_APP_API_URL=https://comex-tsba.onrender.com > frontend\.env
+echo REACT_APP_API_URL=https://comex-4.onrender.com > frontend\.env
 
 echo ✅ Arquivo .env atualizado!
 echo.
