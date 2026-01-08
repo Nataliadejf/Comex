@@ -547,12 +547,12 @@ const Dashboard = () => {
     });
 
   // Dados para gráfico combinado (FOB e Peso) - usar dados reais
-  const tendenciasData = Object.entries(stats.valores_por_mes || {})
+  const tendenciasData = Object.entries(statsFinal.valores_por_mes || {})
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([mes]) => {
       // Usar dados reais de valores_por_mes e pesos_por_mes
-      const valorMensal = stats.valores_por_mes?.[mes] || 0;
-      const pesoMensal = stats.pesos_por_mes?.[mes] || 0;
+      const valorMensal = statsFinal.valores_por_mes?.[mes] || 0;
+      const pesoMensal = statsFinal.pesos_por_mes?.[mes] || 0;
       // Formato do backend é "YYYY-MM", converter para formato legível
       const [ano, mesNum] = mes.split('-');
       const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
@@ -583,10 +583,10 @@ const Dashboard = () => {
       }
     };
     
-    if (stats) {
+    if (statsFinal) {
       loadEmpresasRecomendadas();
     }
-  }, [stats]);
+  }, [statsFinal]);
 
   // Top Importadores (usando empresas recomendadas se disponível, senão países)
   const topImportadores = (() => {
