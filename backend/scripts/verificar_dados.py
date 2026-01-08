@@ -21,7 +21,10 @@ os.chdir(backend_dir)
 sys.path.insert(0, str(backend_dir))
 
 from database.database import SessionLocal, engine
-from database.models import ComercioExterior, Empresa, CNAEHierarquia
+from database.models import (
+    ComercioExterior, Empresa, CNAEHierarquia, 
+    OperacaoComex, EmpresasRecomendadas, TipoOperacao
+)
 
 def verificar_tabelas():
     """Verifica se as tabelas existem e quantos registros têm."""
@@ -161,6 +164,42 @@ def verificar_tabelas():
             logger.info(f"   Total de registros: {total_cnae}")
         except Exception as e:
             logger.error(f"❌ Erro ao consultar CNAEHierarquia: {e}")
+        
+        # Contar registros em OperacaoComex (tabela antiga)
+        try:
+            total_op = db.query(func.count(OperacaoComex.id)).scalar()
+            logger.info(f"\n📊 Tabela OperacaoComex:")
+            logger.info(f"   Total de registros: {total_op}")
+            
+            if total_op > 0:
+                imp_op = db.query(func.count(OperacaoComex.id)).filter(
+                    OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO
+                ).scalar()
+                exp_op = db.query(func.count(OperacaoComex.id)).filter(
+                    OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO
+                ).scalar()
+                logger.info(f"   - Importações: {imp_op}")
+                logger.info(f"   - Exportações: {exp_op}")
+        except Exception as e:
+            logger.debug(f"Tabela OperacaoComex não encontrada ou erro: {e}")
+        
+        # Contar registros em EmpresasRecomendadas
+        try:
+            total_rec = db.query(func.count(EmpresasRecomendadas.id)).scalar()
+            logger.info(f"\n⭐ Tabela EmpresasRecomendadas:")
+            logger.info(f"   Total de empresas: {total_rec}")
+            
+            if total_rec > 0:
+                imp_rec = db.query(func.count(EmpresasRecomendadas.id)).filter(
+                    EmpresasRecomendadas.provavel_importador == 1
+                ).scalar()
+                exp_rec = db.query(func.count(EmpresasRecomendadas.id)).filter(
+                    EmpresasRecomendadas.provavel_exportador == 1
+                ).scalar()
+                logger.info(f"   - Prováveis importadoras: {imp_rec}")
+                logger.info(f"   - Prováveis exportadoras: {exp_rec}")
+        except Exception as e:
+            logger.debug(f"Tabela EmpresasRecomendadas não encontrada ou erro: {e}")
         
         logger.info("\n" + "="*80)
         

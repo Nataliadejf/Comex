@@ -284,3 +284,56 @@ class CNAEHierarquia(Base):
     def __repr__(self):
         return f"<CNAEHierarquia(id={self.id}, cnae={self.cnae}, setor={self.setor})>"
 
+
+class EmpresasRecomendadas(Base):
+    """
+    Tabela consolidada com análise de empresas prováveis importadoras e exportadoras.
+    Relaciona dados de ComercioExterior, Empresa e OperacaoComex.
+    """
+    __tablename__ = "empresas_recomendadas"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Identificação da empresa
+    cnpj = Column(String(14), nullable=True, index=True)
+    nome = Column(String(255), nullable=False, index=True)
+    cnae = Column(String(10), nullable=True, index=True)
+    estado = Column(String(2), nullable=True, index=True)
+    
+    # Classificação
+    tipo_principal = Column(String(20), nullable=False, index=True, comment="importadora, exportadora, ambos")
+    provavel_importador = Column(Integer, default=0, nullable=False, comment="1=sim, 0=não")
+    provavel_exportador = Column(Integer, default=0, nullable=False, comment="1=sim, 0=não")
+    
+    # Dados financeiros consolidados
+    valor_total_importacao_usd = Column(Float, default=0.0, nullable=False)
+    valor_total_exportacao_usd = Column(Float, default=0.0, nullable=False)
+    volume_total_importacao_kg = Column(Float, default=0.0, nullable=False)
+    volume_total_exportacao_kg = Column(Float, default=0.0, nullable=False)
+    
+    # NCMs relacionados (separados por vírgula)
+    ncms_importacao = Column(Text, nullable=True, comment="NCMs importados separados por vírgula")
+    ncms_exportacao = Column(Text, nullable=True, comment="NCMs exportados separados por vírgula")
+    
+    # Contadores
+    total_operacoes_importacao = Column(Integer, default=0, nullable=False)
+    total_operacoes_exportacao = Column(Integer, default=0, nullable=False)
+    
+    # Score de participação (0-100)
+    peso_participacao = Column(Float, default=0.0, nullable=False, index=True)
+    
+    # Metadados
+    data_analise = Column(DateTime, default=datetime.utcnow, nullable=False)
+    data_atualizacao = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    __table_args__ = (
+        Index('idx_emp_rec_tipo', 'tipo_principal'),
+        Index('idx_emp_rec_prov_imp', 'provavel_importador'),
+        Index('idx_emp_rec_prov_exp', 'provavel_exportador'),
+        Index('idx_emp_rec_peso', 'peso_participacao'),
+        Index('idx_emp_rec_cnpj', 'cnpj'),
+    )
+    
+    def __repr__(self):
+        return f"<EmpresasRecomendadas(id={self.id}, nome={self.nome}, tipo={self.tipo_principal}, peso={self.peso_participacao})>"
+

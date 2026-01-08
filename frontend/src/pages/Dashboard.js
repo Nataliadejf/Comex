@@ -234,13 +234,41 @@ const Dashboard = () => {
       
       // Aceitar dados mesmo se estiverem vazios (banco pode não ter dados ainda)
       if (response.data) {
-        setStats(response.data);
+        // Verificar se os dados estão realmente vazios
+        const dadosVazios = (
+          (!response.data.volume_importacoes || response.data.volume_importacoes === 0) &&
+          (!response.data.volume_exportacoes || response.data.volume_exportacoes === 0) &&
+          (!response.data.valor_total_usd || response.data.valor_total_usd === 0) &&
+          (!response.data.principais_ncms || response.data.principais_ncms.length === 0) &&
+          (!response.data.principais_paises || response.data.principais_paises.length === 0)
+        );
+        
+        if (dadosVazios) {
+          console.log('⚠️ Dados vazios recebidos do backend');
+          // Definir stats vazio mas válido
+          setStats({
+            volume_importacoes: 0,
+            volume_exportacoes: 0,
+            valor_total_usd: 0,
+            valor_total_importacoes: null,
+            valor_total_exportacoes: null,
+            principais_ncms: [],
+            principais_paises: [],
+            registros_por_mes: {},
+            valores_por_mes: {},
+            pesos_por_mes: {}
+          });
+        } else {
+          setStats(response.data);
+        }
       } else {
         // Fallback: definir stats vazio se resposta não tiver data
         setStats({
           volume_importacoes: 0,
           volume_exportacoes: 0,
           valor_total_usd: 0,
+          valor_total_importacoes: null,
+          valor_total_exportacoes: null,
           principais_ncms: [],
           principais_paises: [],
           registros_por_mes: {},
@@ -458,7 +486,16 @@ const Dashboard = () => {
     setMeses(24);
   };
 
-  if (loading && !stats) {
+  // Não mostrar loading infinito - se não houver dados, mostrar mensagem
+  const dadosVazios = stats && (
+    (!stats.volume_importacoes || stats.volume_importacoes === 0) &&
+    (!stats.volume_exportacoes || stats.volume_exportacoes === 0) &&
+    (!stats.valor_total_usd || stats.valor_total_usd === 0) &&
+    (!stats.principais_ncms || stats.principais_ncms.length === 0) &&
+    (!stats.principais_paises || stats.principais_paises.length === 0)
+  );
+  
+  if (loading && !stats && !dadosVazios) {
     return (
       <div style={{ textAlign: 'center', padding: '50px' }}>
         <Spin size="large" />

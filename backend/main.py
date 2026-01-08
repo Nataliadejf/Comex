@@ -797,6 +797,72 @@ async def get_dashboard_stats(
         except Exception as e:
             logger.debug(f"Erro ao carregar dados do Excel: {e}")
     
+    # PRIMEIRO: Tentar usar tabela consolidada EmpresasRecomendadas (mais eficiente)
+    try:
+        from database.models import EmpresasRecomendadas
+        
+        total_emp_rec = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
+        if total_emp_rec > 0:
+            logger.info(f"Usando tabela consolidada EmpresasRecomendadas ({total_emp_rec} empresas)")
+            
+            # Buscar empresas prováveis importadoras e exportadoras
+            empresas_imp_rec = db.query(
+                EmpresasRecomendadas.nome,
+                EmpresasRecomendadas.valor_total_importacao_usd,
+                EmpresasRecomendadas.volume_total_importacao_kg,
+                EmpresasRecomendadas.peso_participacao
+            ).filter(
+                EmpresasRecomendadas.provavel_importador == 1
+            ).order_by(
+                EmpresasRecomendadas.peso_participacao.desc()
+            ).limit(10).all()
+            
+            empresas_exp_rec = db.query(
+                EmpresasRecomendadas.nome,
+                EmpresasRecomendadas.valor_total_exportacao_usd,
+                EmpresasRecomendadas.volume_total_exportacao_kg,
+                EmpresasRecomendadas.peso_participacao
+            ).filter(
+                EmpresasRecomendadas.provavel_exportador == 1
+            ).order_by(
+                EmpresasRecomendadas.peso_participacao.desc()
+            ).limit(10).all()
+            
+            # Calcular totais
+            valor_total_imp = sum(float(emp.valor_total_importacao_usd or 0) for emp in empresas_imp_rec)
+            valor_total_exp = sum(float(emp.valor_total_exportacao_usd or 0) for emp in empresas_exp_rec)
+            volume_imp = sum(float(emp.volume_total_importacao_kg or 0) for emp in empresas_imp_rec)
+            volume_exp = sum(float(emp.volume_total_exportacao_kg or 0) for emp in empresas_exp_rec)
+            
+            if valor_total_imp > 0 or valor_total_exp > 0:
+                valor_total = valor_total_imp + valor_total_exp
+                
+                # Usar empresas recomendadas como principais países (temporário)
+                principais_paises_list = [
+                    {
+                        "pais": emp.nome[:50],
+                        "valor_total": float(emp.valor_total_importacao_usd or 0),
+                        "total_operacoes": 0,
+                        "tipo": "IMPORTADORA"
+                    }
+                    for emp in empresas_imp_rec[:5]
+                ] + [
+                    {
+                        "pais": emp.nome[:50],
+                        "valor_total": float(emp.valor_total_exportacao_usd or 0),
+                        "total_operacoes": 0,
+                        "tipo": "EXPORTADORA"
+                    }
+                    for emp in empresas_exp_rec[:5]
+                ]
+                
+                principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
+                principais_paises_list = principais_paises_list[:10]
+                
+                logger.info(f"✅ Dados carregados da tabela consolidada: {len(empresas_imp_rec)} importadoras, {len(empresas_exp_rec)} exportadoras")
+    except Exception as e:
+        logger.debug(f"Erro ao buscar EmpresasRecomendadas: {e}")
+    
     # Se ainda não houver dados, tentar usar as novas tabelas (ComercioExterior e Empresa)
     if valor_total == 0 and not principais_ncms_list:
         try:
