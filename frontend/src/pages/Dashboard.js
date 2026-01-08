@@ -641,35 +641,39 @@ const Dashboard = () => {
 
   // Dados para gráfico de linha de importadores/exportadores ao longo do tempo
   // Usar dados reais de valores_por_mes distribuídos proporcionalmente
-  const importadoresTempoData = Object.entries(stats.valores_por_mes || {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([mes]) => {
-      const [ano, mesNum] = mes.split('-');
-      const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-      const valorTotalMes = stats.valores_por_mes?.[mes] || 0;
-      const data = { mes: mesFormatado };
-      topImportadores.forEach((imp, idx) => {
-        // Distribuir proporcionalmente ao percentual de cada importador
-        const percentual = imp.percentual / 100;
-        data[`imp_${idx}`] = valorTotalMes * percentual;
-      });
-      return data;
-    });
+  const importadoresTempoData = stats && stats.valores_por_mes
+    ? Object.entries(stats.valores_por_mes)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([mes]) => {
+          const [ano, mesNum] = mes.split('-');
+          const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
+          const valorTotalMes = stats.valores_por_mes?.[mes] || 0;
+          const data = { mes: mesFormatado };
+          topImportadores.forEach((imp, idx) => {
+            // Distribuir proporcionalmente ao percentual de cada importador
+            const percentual = (imp.percentual || 0) / 100;
+            data[`imp_${idx}`] = valorTotalMes * percentual;
+          });
+          return data;
+        })
+    : [];
 
-  const exportadoresTempoData = Object.entries(stats.valores_por_mes || {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([mes]) => {
-      const [ano, mesNum] = mes.split('-');
-      const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-      const valorTotalMes = stats.valores_por_mes?.[mes] || 0;
-      const data = { mes: mesFormatado };
-      topExportadores.forEach((exp, idx) => {
-        // Distribuir proporcionalmente ao percentual de cada exportador
-        const percentual = exp.percentual / 100;
-        data[`exp_${idx}`] = valorTotalMes * percentual;
-      });
-      return data;
-    });
+  const exportadoresTempoData = stats && stats.valores_por_mes
+    ? Object.entries(stats.valores_por_mes)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([mes]) => {
+          const [ano, mesNum] = mes.split('-');
+          const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
+          const valorTotalMes = stats.valores_por_mes?.[mes] || 0;
+          const data = { mes: mesFormatado };
+          topExportadores.forEach((exp, idx) => {
+            // Distribuir proporcionalmente ao percentual de cada exportador
+            const percentual = (exp.percentual || 0) / 100;
+            data[`exp_${idx}`] = valorTotalMes * percentual;
+          });
+          return data;
+        })
+    : [];
 
   // Formatar valores
   const formatCurrency = (value) => {
