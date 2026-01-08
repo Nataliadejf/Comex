@@ -1899,7 +1899,7 @@ async def analisar_sinergias_estado(
     """
     Analisa sinergias de importação/exportação por estado.
     """
-    if not SINERGIA_AVAILABLE:
+    if not SINERGIA_AVAILABLE or SinergiaAnalyzer is None:
         raise HTTPException(status_code=501, detail="Módulo de sinergia não disponível")
     
     try:
@@ -2061,7 +2061,7 @@ async def dashboard_sinergias_estado(
     """
     Endpoint otimizado para dashboard - sinergias por estado.
     """
-    if not SINERGIA_AVAILABLE:
+    if not SINERGIA_AVAILABLE or SinergiaAnalyzer is None:
         raise HTTPException(status_code=501, detail="Módulo de sinergia não disponível")
     
     try:
