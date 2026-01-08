@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Data
+*.db
+*.sqlite
+*.sqlite3
+comex_data/
+backend/data/*.xlsx
+backend/data/*.csv
+
+# Node
+node_modules/
+frontend/build/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Documentation
+*.md
+!README.md
+
+# Scripts de desenvolvimento
+*.bat
+*.ps1
+*.sh
+
