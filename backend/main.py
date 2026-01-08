@@ -1047,15 +1047,31 @@ async def get_dashboard_stats(
         except Exception as e:
             logger.debug(f"Erro ao buscar dados das novas tabelas: {e}")
     
+    # Se não houver dados, retornar resposta vazia rapidamente (não travar)
+    if valor_total == 0 and not principais_ncms_list and not principais_paises_list:
+        logger.info("Nenhum dado encontrado, retornando resposta vazia")
+        return DashboardStats(
+            volume_importacoes=0.0,
+            volume_exportacoes=0.0,
+            valor_total_usd=0.0,
+            valor_total_importacoes=None,
+            valor_total_exportacoes=None,
+            principais_ncms=[],
+            principais_paises=[],
+            registros_por_mes={},
+            valores_por_mes={},
+            pesos_por_mes={}
+        )
+    
     stats_response = DashboardStats(
         volume_importacoes=float(volume_imp),
         volume_exportacoes=float(volume_exp),
         valor_total_usd=float(valor_total),
         valor_total_importacoes=float(valor_total_imp) if valor_total_imp else None,
         valor_total_exportacoes=float(valor_total_exp) if valor_total_exp else None,
-        principais_ncms=principais_ncms_list,
-        principais_paises=principais_paises_list,
-        registros_por_mes=registros_dict,
+        principais_ncms=principais_ncms_list if principais_ncms_list else [],
+        principais_paises=principais_paises_list if principais_paises_list else [],
+        registros_por_mes=registros_dict if registros_dict else {},
         valores_por_mes=valores_por_mes_dict if valores_por_mes_dict else {},
         pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {}
     )
