@@ -37,6 +37,9 @@ numpy==1.24.3
 pandas==2.0.3
 openpyxl==3.1.2
 
+# Database migrations (opcional, mas recomendado)
+# alembic==1.13.1  # Descomente se precisar de migrations
+
 # NOTA CRÍTICA: 
 # - Versões compatíveis com Python 3.11.8 (forçar no Render)
 # - Nenhuma dependência transitiva deve requerer Rust

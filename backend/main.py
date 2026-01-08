@@ -13,7 +13,11 @@ import uvicorn
 from loguru import logger
 
 from config import settings
-from database import get_db, init_db, OperacaoComex, TipoOperacao, ViaTransporte
+from database import get_db, init_db
+from database.models import (
+    OperacaoComex, TipoOperacao, ViaTransporte,
+    ComercioExterior, Empresa, CNAEHierarquia
+)
 from data_collector import DataCollector
 
 # Import opcional do router de exportação

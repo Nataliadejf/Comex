@@ -193,3 +193,94 @@ class AprovacaoCadastro(Base):
     def __repr__(self):
         return f"<AprovacaoCadastro(id={self.id}, usuario_id={self.usuario_id}, status={self.status})>"
 
+
+class ComercioExterior(Base):
+    """
+    Modelo para dados de comércio exterior (importação/exportação).
+    """
+    __tablename__ = "comercio_exterior"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tipo = Column(String(20), nullable=False, index=True, comment="importacao ou exportacao")
+    ncm = Column(String(8), nullable=False, index=True)
+    descricao_ncm = Column(Text, nullable=True)
+    estado = Column(String(2), nullable=True, index=True)
+    pais = Column(String(100), nullable=True, index=True)
+    valor_usd = Column(Float, nullable=False)
+    peso_kg = Column(Float, nullable=True)
+    quantidade = Column(Float, nullable=True)
+    data = Column(Date, nullable=False, index=True)
+    mes = Column(Integer, nullable=False, index=True, comment="1-12")
+    ano = Column(Integer, nullable=False, index=True)
+    mes_referencia = Column(String(7), nullable=False, index=True, comment="YYYY-MM")
+    
+    # Metadados
+    data_importacao = Column(DateTime, default=datetime.utcnow, nullable=False)
+    arquivo_origem = Column(String(255), nullable=True)
+    
+    __table_args__ = (
+        Index('idx_comercio_tipo_data', 'tipo', 'data'),
+        Index('idx_comercio_ncm_tipo', 'ncm', 'tipo'),
+        Index('idx_comercio_estado_tipo', 'estado', 'tipo'),
+        Index('idx_comercio_mes_ano', 'mes', 'ano'),
+    )
+    
+    def __repr__(self):
+        return f"<ComercioExterior(id={self.id}, tipo={self.tipo}, ncm={self.ncm}, data={self.data})>"
+
+
+class Empresa(Base):
+    """
+    Modelo para empresas importadoras e exportadoras.
+    """
+    __tablename__ = "empresas"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String(255), nullable=False, index=True)
+    cnpj = Column(String(14), nullable=True, unique=True, index=True)
+    cnae = Column(String(10), nullable=True, index=True)
+    estado = Column(String(2), nullable=True, index=True)
+    tipo = Column(String(20), nullable=False, index=True, comment="importadora, exportadora, ambos")
+    valor_importacao = Column(Float, default=0.0, nullable=False)
+    valor_exportacao = Column(Float, default=0.0, nullable=False)
+    
+    # Metadados
+    data_importacao = Column(DateTime, default=datetime.utcnow, nullable=False)
+    arquivo_origem = Column(String(255), nullable=True)
+    
+    __table_args__ = (
+        Index('idx_empresa_tipo', 'tipo'),
+        Index('idx_empresa_cnae', 'cnae'),
+        Index('idx_empresa_estado', 'estado'),
+    )
+    
+    def __repr__(self):
+        return f"<Empresa(id={self.id}, nome={self.nome}, tipo={self.tipo})>"
+
+
+class CNAEHierarquia(Base):
+    """
+    Modelo para hierarquia CNAE (Setor → Segmento → Ramo → Categoria).
+    """
+    __tablename__ = "cnae_hierarquia"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    cnae = Column(String(10), unique=True, nullable=False, index=True)
+    descricao = Column(Text, nullable=True)
+    setor = Column(String(100), nullable=True, index=True)
+    segmento = Column(String(100), nullable=True, index=True)
+    ramo = Column(String(100), nullable=True, index=True)
+    categoria = Column(String(100), nullable=True, index=True)
+    
+    # Metadados
+    data_importacao = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    __table_args__ = (
+        Index('idx_cnae_setor', 'setor'),
+        Index('idx_cnae_segmento', 'segmento'),
+        Index('idx_cnae_ramo', 'ramo'),
+    )
+    
+    def __repr__(self):
+        return f"<CNAEHierarquia(id={self.id}, cnae={self.cnae}, setor={self.setor})>"
+
