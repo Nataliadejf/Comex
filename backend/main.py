@@ -797,6 +797,151 @@ async def get_dashboard_stats(
         except Exception as e:
             logger.debug(f"Erro ao carregar dados do Excel: {e}")
     
+    # Se ainda não houver dados, tentar usar as novas tabelas (ComercioExterior e Empresa)
+    if valor_total == 0 and not principais_ncms_list:
+        try:
+            logger.info("Tentando buscar dados das novas tabelas (ComercioExterior e Empresa)")
+            data_corte = datetime.now() - timedelta(days=30 * meses)
+            
+            # Volumes e valores das novas tabelas
+            importacoes = db.query(func.sum(ComercioExterior.valor_usd)).filter(
+                ComercioExterior.tipo == 'importacao',
+                ComercioExterior.data >= data_corte.date()
+            ).scalar() or 0.0
+            
+            exportacoes = db.query(func.sum(ComercioExterior.valor_usd)).filter(
+                ComercioExterior.tipo == 'exportacao',
+                ComercioExterior.data >= data_corte.date()
+            ).scalar() or 0.0
+            
+            peso_imp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                ComercioExterior.tipo == 'importacao',
+                ComercioExterior.data >= data_corte.date()
+            ).scalar() or 0.0
+            
+            peso_exp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                ComercioExterior.tipo == 'exportacao',
+                ComercioExterior.data >= data_corte.date()
+            ).scalar() or 0.0
+            
+            if importacoes > 0 or exportacoes > 0:
+                # Top NCMs
+                top_ncms_novo = db.query(
+                    ComercioExterior.ncm,
+                    ComercioExterior.descricao_ncm,
+                    func.sum(ComercioExterior.valor_usd).label('valor_total')
+                ).filter(
+                    ComercioExterior.data >= data_corte.date()
+                ).group_by(
+                    ComercioExterior.ncm,
+                    ComercioExterior.descricao_ncm
+                ).order_by(
+                    func.sum(ComercioExterior.valor_usd).desc()
+                ).limit(10).all()
+                
+                principais_ncms_list = [
+                    {
+                        "ncm": ncm,
+                        "descricao": desc or "",
+                        "valor_total": float(valor)
+                    }
+                    for ncm, desc, valor in top_ncms_novo
+                ]
+                
+                # Top Estados
+                top_estados_novo = db.query(
+                    ComercioExterior.estado,
+                    func.sum(ComercioExterior.valor_usd).label('valor_total')
+                ).filter(
+                    ComercioExterior.data >= data_corte.date(),
+                    ComercioExterior.estado.isnot(None)
+                ).group_by(
+                    ComercioExterior.estado
+                ).order_by(
+                    func.sum(ComercioExterior.valor_usd).desc()
+                ).limit(10).all()
+                
+                principais_paises_list = [
+                    {
+                        "pais": estado or "N/A",
+                        "valor_total": float(valor),
+                        "total_operacoes": 0,
+                        "tipo": "GERAL"
+                    }
+                    for estado, valor in top_estados_novo
+                ]
+                
+                # Valores por mês
+                valores_por_mes_novo = db.query(
+                    ComercioExterior.mes,
+                    ComercioExterior.ano,
+                    func.sum(ComercioExterior.valor_usd).label('valor_total')
+                ).filter(
+                    ComercioExterior.data >= data_corte.date()
+                ).group_by(
+                    ComercioExterior.mes,
+                    ComercioExterior.ano
+                ).order_by(
+                    ComercioExterior.ano,
+                    ComercioExterior.mes
+                ).all()
+                
+                valores_por_mes_dict = {
+                    f"{ano}-{mes:02d}": float(valor)
+                    for mes, ano, valor in valores_por_mes_novo
+                }
+                
+                # Pesos por mês
+                pesos_por_mes_novo = db.query(
+                    ComercioExterior.mes,
+                    ComercioExterior.ano,
+                    func.sum(ComercioExterior.peso_kg).label('peso_total')
+                ).filter(
+                    ComercioExterior.data >= data_corte.date()
+                ).group_by(
+                    ComercioExterior.mes,
+                    ComercioExterior.ano
+                ).order_by(
+                    ComercioExterior.ano,
+                    ComercioExterior.mes
+                ).all()
+                
+                pesos_por_mes_dict = {
+                    f"{ano}-{mes:02d}": float(peso) if peso else 0.0
+                    for mes, ano, peso in pesos_por_mes_novo
+                }
+                
+                # Registros por mês
+                registros_por_mes_novo = db.query(
+                    ComercioExterior.mes,
+                    ComercioExterior.ano,
+                    func.count(ComercioExterior.id).label('count')
+                ).filter(
+                    ComercioExterior.data >= data_corte.date()
+                ).group_by(
+                    ComercioExterior.mes,
+                    ComercioExterior.ano
+                ).order_by(
+                    ComercioExterior.ano,
+                    ComercioExterior.mes
+                ).all()
+                
+                registros_dict = {
+                    f"{ano}-{mes:02d}": int(count)
+                    for mes, ano, count in registros_por_mes_novo
+                }
+                
+                # Atualizar valores
+                valor_total_imp = float(importacoes)
+                valor_total_exp = float(exportacoes)
+                volume_imp = float(peso_imp)
+                volume_exp = float(peso_exp)
+                valor_total = float(importacoes + exportacoes)
+                
+                logger.info(f"✅ Dados carregados das novas tabelas: {len(principais_ncms_list)} NCMs, {valor_total:.2f} USD total")
+        except Exception as e:
+            logger.debug(f"Erro ao buscar dados das novas tabelas: {e}")
+    
     stats_response = DashboardStats(
         volume_importacoes=float(volume_imp),
         volume_exportacoes=float(volume_exp),
