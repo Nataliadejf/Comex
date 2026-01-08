@@ -1,71 +1,108 @@
 @echo off
-chcp 65001 >nul
-echo ============================================================
-echo 🔄 REINICIANDO TUDO (BACKEND + FRONTEND)
-echo ============================================================
+echo ========================================
+echo   REINICIANDO BACKEND E FRONTEND
+echo ========================================
 echo.
 
-cd /d "%~dp0"
-
-REM Parar tudo primeiro
-echo 1️⃣ Parando processos existentes...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000 ^| findstr LISTENING') do (
-    echo Parando processo backend (PID: %%a)...
-    taskkill /F /PID %%a >nul 2>&1
-)
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3000 ^| findstr LISTENING') do (
-    echo Parando processo frontend (PID: %%a)...
-    taskkill /F /PID %%a >nul 2>&1
-)
-
-timeout /t 3 /nobreak >nul
-
+REM Parar todos os processos relacionados
+echo [1/5] Parando processos existentes...
+taskkill /F /IM node.exe 2>nul
+taskkill /F /IM python.exe 2>nul
+taskkill /F /IM uvicorn.exe 2>nul
+timeout /t 2 /nobreak >nul
+echo Processos parados!
 echo.
-echo 2️⃣ Iniciando Backend...
-echo.
-start "Backend - Comex Analyzer" cmd /k "cd /d %~dp0backend && if exist venv\Scripts\activate.bat (call venv\Scripts\activate.bat && echo ✅ Ambiente virtual ativado && echo. && echo Aguarde alguns segundos... && timeout /t 2 /nobreak >nul && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000) else (echo ❌ Ambiente virtual não encontrado! && pause)"
 
-echo Aguardando backend inicializar...
-timeout /t 8 /nobreak >nul
-
-echo.
-echo 3️⃣ Verificando se backend está respondendo...
-curl -s http://localhost:8000/health >nul 2>&1
-if errorlevel 1 (
-    echo ⚠️ Backend ainda não está respondendo, aguarde mais alguns segundos...
-    timeout /t 5 /nobreak >nul
+REM Verificar se o ambiente virtual existe
+echo [2/5] Verificando ambiente virtual do backend...
+cd backend
+if exist venv\Scripts\activate.bat (
+    echo Ambiente virtual encontrado!
 ) else (
-    echo ✅ Backend está respondendo!
+    echo AVISO: Ambiente virtual nao encontrado!
+    echo Criando ambiente virtual...
+    python -m venv venv
+    echo Ambiente virtual criado!
 )
-
+cd ..
 echo.
-echo 4️⃣ Iniciando Frontend...
-echo.
-cd /d "%~dp0frontend"
 
-REM Garantir que .env existe
-if not exist ".env" (
+REM Verificar arquivo .env do backend
+echo [3/5] Verificando configuracoes do backend...
+cd backend
+if exist .env (
+    echo Arquivo .env encontrado!
+) else (
+    echo AVISO: Arquivo .env nao encontrado!
+    echo Criando arquivo .env basico...
+    (
+        echo DATABASE_URL=sqlite:///./comex.db
+        echo COMEX_STAT_API_URL=https://comexstat.mdic.gov.br
+        echo SECRET_KEY=your-secret-key-here
+        echo ENVIRONMENT=development
+        echo DEBUG=true
+    ) > .env
+    echo Arquivo .env criado!
+)
+cd ..
+echo.
+
+REM Verificar arquivo .env do frontend
+echo [4/5] Verificando configuracoes do frontend...
+cd frontend
+if exist .env (
+    echo Arquivo .env encontrado!
+    echo Conteudo do .env:
+    type .env
+) else (
+    echo AVISO: Arquivo .env nao encontrado!
     echo Criando arquivo .env...
     echo REACT_APP_API_URL=http://localhost:8000 > .env
+    echo Arquivo .env criado!
 )
+cd ..
+echo.
 
-if not exist "node_modules" (
-    echo ⚠️ node_modules não encontrado. Instalando dependências...
-    call npm install
-)
+REM Iniciar backend em nova janela
+echo [5/5] Iniciando backend e frontend...
+echo.
+echo ========================================
+echo   BACKEND sera iniciado em nova janela
+echo   FRONTEND sera iniciado nesta janela
+echo ========================================
+echo.
+echo Aguarde alguns segundos...
+echo.
 
-start "Frontend - Comex Analyzer" cmd /k "cd /d %~dp0frontend && echo ✅ Frontend iniciando... && echo. && echo Aguarde alguns segundos para o React compilar... && echo. && npm start"
+REM Iniciar backend em nova janela
+cd backend
+start "Comex Backend" cmd /k "venv\Scripts\activate.bat && echo Backend iniciando... && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000"
+cd ..
 
+REM Aguardar backend iniciar
+timeout /t 5 /nobreak >nul
+
+REM Iniciar frontend nesta janela
+cd frontend
 echo.
-echo ============================================================
-echo ✅ REINICIAÇÃO CONCLUÍDA!
-echo ============================================================
+echo ========================================
+echo   FRONTEND INICIANDO...
+echo ========================================
 echo.
-echo Backend: http://localhost:8000
-echo Frontend: http://localhost:3000
+echo Aguarde alguns segundos para o servidor iniciar...
+echo Depois acesse: http://localhost:3000
 echo.
-echo Aguarde alguns segundos para ambos inicializarem completamente.
-echo Depois, recarregue a página do navegador (Ctrl+F5).
+echo Backend rodando em: http://localhost:8000
 echo.
-pause
+echo Pressione Ctrl+C para parar o frontend
+echo (O backend continuara rodando na outra janela)
+echo.
+echo ========================================
+echo.
+
+npm startata
+
+
+
+
 

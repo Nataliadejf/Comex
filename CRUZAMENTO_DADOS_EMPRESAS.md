@@ -209,3 +209,5 @@ print(f"Empresas únicas: {stats['empresas_unicas']}")
 
 **Última atualização**: 06/01/2026
 
+
+

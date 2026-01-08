@@ -85,7 +85,20 @@ class MDICCSVCollector:
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             ) as response:
                 if response.status == 200:
+                    # Verificar Content-Type para garantir que é CSV, não HTML
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if 'html' in content_type:
+                        logger.warning(f"⚠️ URL retornou HTML em vez de CSV: {url} (Content-Type: {content_type})")
+                        return False
+                    
                     content = await response.read()
+                    
+                    # Verificar se o conteúdo não é HTML (começa com <!DOCTYPE ou <html)
+                    content_start = content[:100].decode('utf-8', errors='ignore').strip().lower()
+                    if content_start.startswith('<!doctype') or content_start.startswith('<html'):
+                        logger.warning(f"⚠️ Arquivo baixado parece ser HTML, não CSV: {url}")
+                        return False
+                    
                     if len(content) > 100:  # Arquivo válido
                         filepath.write_bytes(content)
                         logger.success(f"✅ Baixado: {filepath.name} ({len(content):,} bytes)")
@@ -93,7 +106,7 @@ class MDICCSVCollector:
                     else:
                         logger.warning(f"Arquivo muito pequeno: {len(content)} bytes")
                 else:
-                    logger.warning(f"Status {response.status} para {url}")
+                    logger.warning(f"Status {response.status} para {url} - arquivo não baixado")
         except Exception as e:
             logger.error(f"Erro ao baixar {url}: {e}")
         finally:
@@ -246,7 +259,28 @@ class MDICCSVCollector:
                 logger.error(f"Não foi possível ler {filepath}")
                 return []
             
+            # Verificar se o conteúdo não é HTML
+            content_start = content[:200].strip().lower()
+            if content_start.startswith('<!doctype') or content_start.startswith('<html'):
+                logger.error(f"⚠️ Arquivo parece ser HTML, não CSV: {filepath.name}")
+                logger.error(f"Primeiras linhas: {content[:500]}")
+                return []
+            
             # Ler CSV
+            reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+            
+            # Verificar se o reader tem campos válidos (não é HTML)
+            if not reader.fieldnames:
+                logger.warning(f"⚠️ CSV sem cabeçalhos válidos: {filepath.name}")
+                return []
+            
+            # Verificar se os campos não são tags HTML
+            first_field = list(reader.fieldnames)[0] if reader.fieldnames else ""
+            if first_field and ('<' in first_field or 'html' in first_field.lower()):
+                logger.error(f"⚠️ CSV parece conter HTML: {filepath.name} (primeiro campo: {first_field})")
+                return []
+            
+            # Resetar o reader após verificação
             reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
             
             for row in reader:
@@ -255,7 +289,11 @@ class MDICCSVCollector:
                 for key, value in row.items():
                     if key:
                         key_normalized = key.strip().lower().replace(' ', '_').replace('-', '_')
-                        registro[key_normalized] = value.strip() if value else None
+                        # Tratar valores: manter como string, None para vazios
+                        if value:
+                            registro[key_normalized] = value.strip()
+                        else:
+                            registro[key_normalized] = None
                 
                 if registro:  # Só adicionar se não estiver vazio
                     registros.append(registro)

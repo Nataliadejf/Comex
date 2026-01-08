@@ -10,3 +10,5 @@ python scripts\aprovar_cadastro.py
 
 pause
 
+
+

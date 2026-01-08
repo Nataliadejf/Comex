@@ -112,3 +112,8 @@ Após o deploy funcionar, você pode:
 - Fazer commit e push: `git push origin main`
 - Render fará deploy automático! ✨
 
+
+
+
+
+

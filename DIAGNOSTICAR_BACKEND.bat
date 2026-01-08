@@ -23,3 +23,5 @@ python backend\scripts\diagnosticar_backend.py
 echo.
 pause
 
+
+

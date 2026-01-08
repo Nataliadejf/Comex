@@ -168,3 +168,8 @@ O arquivo `render.yaml` na raiz do projeto contém:
 - [ ] Health check retornando OK
 - [ ] Deploy automático funcionando
 
+
+
+
+
+

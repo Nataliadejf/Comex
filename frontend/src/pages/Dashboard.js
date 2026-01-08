@@ -24,7 +24,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI } from '../services/api';
+import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI } from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
 
@@ -60,6 +60,12 @@ const Dashboard = () => {
   const [sugestoesEmpresas, setSugestoesEmpresas] = useState([]);
   const [loadingSinergias, setLoadingSinergias] = useState(false);
   const [loadingSugestoes, setLoadingSugestoes] = useState(false);
+  
+  // Estados para empresas recomendadas e dados ComexStat
+  const [empresasRecomendadas, setEmpresasRecomendadas] = useState([]);
+  const [loadingEmpresasRecomendadas, setLoadingEmpresasRecomendadas] = useState(false);
+  const [dadosComexstat, setDadosComexstat] = useState(null);
+  const [loadingDadosComexstat, setLoadingDadosComexstat] = useState(false);
 
   // Função debounce simples
   const debounce = (func, wait) => {
@@ -299,6 +305,38 @@ const Dashboard = () => {
     }
   }, []);
 
+  // Função para carregar empresas recomendadas
+  const loadEmpresasRecomendadas = useCallback(async () => {
+    setLoadingEmpresasRecomendadas(true);
+    try {
+      const data = await empresasRecomendadasAPI.getEmpresasRecomendadas(100);
+      if (data.success && data.data) {
+        setEmpresasRecomendadas(data.data);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar empresas recomendadas:', error);
+      setEmpresasRecomendadas([]);
+    } finally {
+      setLoadingEmpresasRecomendadas(false);
+    }
+  }, []);
+
+  // Função para carregar dados ComexStat
+  const loadDadosComexstat = useCallback(async () => {
+    setLoadingDadosComexstat(true);
+    try {
+      const data = await comexstatAPI.getDadosComexstat();
+      if (data.success && data.data) {
+        setDadosComexstat(data.data);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar dados ComexStat:', error);
+      setDadosComexstat(null);
+    } finally {
+      setLoadingDadosComexstat(false);
+    }
+  }, []);
+
   // Carregar sinergias e sugestões ao montar componente
   useEffect(() => {
     // Carregar sinergias
@@ -313,10 +351,16 @@ const Dashboard = () => {
 
     // Carregar sugestões
     loadSugestoesEmpresas();
+    
+    // Carregar empresas recomendadas
+    loadEmpresasRecomendadas();
+    
+    // Carregar dados ComexStat
+    loadDadosComexstat();
 
     // Carregar sinergias após um pequeno delay para não sobrecarregar
     setTimeout(loadSinergias, 2000);
-  }, [loadSugestoesEmpresas]);
+  }, [loadSugestoesEmpresas, loadEmpresasRecomendadas, loadDadosComexstat]);
 
   const handleSearch = () => {
     loadDashboardData();
@@ -470,29 +514,84 @@ const Dashboard = () => {
       };
     });
 
-  // Top Importadores (usando países para importação)
-  const topImportadores = stats.principais_paises
-    ?.filter((_, idx) => idx < 5)
-    .map((pais, idx) => ({
-      ...pais,
-      cor: COLORS[idx % COLORS.length],
-      nome: pais.pais || 'N/A',
-      fob: pais.valor_total || 0,
-      peso: (stats.volume_importacoes * (pais.valor_total / stats.valor_total_usd)) || 0,
-      percentual: ((pais.valor_total / stats.valor_total_usd) * 100) || 0,
-    })) || [];
+  // Estados para empresas importadoras/exportadoras recomendadas
+  const [empresasImportadorasRecomendadas, setEmpresasImportadorasRecomendadas] = useState([]);
+  const [empresasExportadorasRecomendadas, setEmpresasExportadorasRecomendadas] = useState([]);
+  
+  // Carregar empresas recomendadas quando stats carregar
+  useEffect(() => {
+    const loadEmpresasRecomendadas = async () => {
+      try {
+        // Carregar empresas importadoras
+        const impData = await empresasRecomendadasAPI.getEmpresasImportadoras(10);
+        if (impData.success && impData.data) {
+          setEmpresasImportadorasRecomendadas(impData.data);
+        }
+        
+        // Carregar empresas exportadoras
+        const expData = await empresasRecomendadasAPI.getEmpresasExportadoras(10);
+        if (expData.success && expData.data) {
+          setEmpresasExportadorasRecomendadas(expData.data);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar empresas recomendadas:', error);
+      }
+    };
+    
+    if (stats) {
+      loadEmpresasRecomendadas();
+    }
+  }, [stats]);
 
-  // Top Exportadores (usando países para exportação)
-  const topExportadores = stats.principais_paises
-    ?.filter((_, idx) => idx < 5)
-    .map((pais, idx) => ({
-      ...pais,
-      cor: COLORS[idx % COLORS.length],
-      nome: pais.pais || 'N/A',
-      fob: pais.valor_total || 0,
-      peso: (stats.volume_exportacoes * (pais.valor_total / stats.valor_total_usd)) || 0,
-      percentual: ((pais.valor_total / stats.valor_total_usd) * 100) || 0,
-    })) || [];
+  // Top Importadores (usando empresas recomendadas se disponível, senão países)
+  const topImportadores = empresasImportadorasRecomendadas.length > 0
+    ? empresasImportadorasRecomendadas
+        .slice(0, 5)
+        .map((empresa, idx) => ({
+          ...empresa,
+          cor: COLORS[idx % COLORS.length],
+          nome: empresa.pais || empresa.razao_social || 'N/A',
+          fob: empresa.valor_total || 0,
+          peso: empresa.peso_participacao || 0,
+          percentual: stats.valor_total_usd > 0 
+            ? ((empresa.valor_total / stats.valor_total_usd) * 100) 
+            : 0,
+        }))
+    : stats.principais_paises
+        ?.filter((_, idx) => idx < 5)
+        .map((pais, idx) => ({
+          ...pais,
+          cor: COLORS[idx % COLORS.length],
+          nome: pais.pais || 'N/A',
+          fob: pais.valor_total || 0,
+          peso: (stats.volume_importacoes * (pais.valor_total / stats.valor_total_usd)) || 0,
+          percentual: ((pais.valor_total / stats.valor_total_usd) * 100) || 0,
+        })) || [];
+
+  // Top Exportadores (usando empresas recomendadas se disponível, senão países)
+  const topExportadores = empresasExportadorasRecomendadas.length > 0
+    ? empresasExportadorasRecomendadas
+        .slice(0, 5)
+        .map((empresa, idx) => ({
+          ...empresa,
+          cor: COLORS[idx % COLORS.length],
+          nome: empresa.pais || empresa.razao_social || 'N/A',
+          fob: empresa.valor_total || 0,
+          peso: empresa.peso_participacao || 0,
+          percentual: stats.valor_total_usd > 0 
+            ? ((empresa.valor_total / stats.valor_total_usd) * 100) 
+            : 0,
+        }))
+    : stats.principais_paises
+        ?.filter((_, idx) => idx < 5)
+        .map((pais, idx) => ({
+          ...pais,
+          cor: COLORS[idx % COLORS.length],
+          nome: pais.pais || 'N/A',
+          fob: pais.valor_total || 0,
+          peso: (stats.volume_exportacoes * (pais.valor_total / stats.valor_total_usd)) || 0,
+          percentual: ((pais.valor_total / stats.valor_total_usd) * 100) || 0,
+        })) || [];
 
   // Dados para gráfico de linha de importadores/exportadores ao longo do tempo
   // Usar dados reais de valores_por_mes distribuídos proporcionalmente
@@ -1391,6 +1490,156 @@ const Dashboard = () => {
           </Card>
         </Col>
       </Row>
+      
+      {/* Seção de Empresas Recomendadas */}
+      <Row gutter={16} style={{ marginTop: 16 }}>
+        <Col span={24}>
+          <Card
+            title="Empresas Recomendadas"
+            extra={
+              <Button 
+                size="small" 
+                icon={<ReloadOutlined />}
+                onClick={loadEmpresasRecomendadas}
+                loading={loadingEmpresasRecomendadas}
+              >
+                Atualizar
+              </Button>
+            }
+          >
+            <Spin spinning={loadingEmpresasRecomendadas}>
+              {empresasRecomendadas.length > 0 ? (
+                <Table
+                  size="small"
+                  dataSource={empresasRecomendadas}
+                  rowKey={(record, index) => `${record.CNPJ}-${record['NCM Relacionado']}-${index}`}
+                  pagination={{ pageSize: 10 }}
+                  scroll={{ x: 1200 }}
+                  columns={[
+                    {
+                      title: 'CNPJ',
+                      dataIndex: 'CNPJ',
+                      key: 'cnpj',
+                      width: 150,
+                    },
+                    {
+                      title: 'Razão Social',
+                      dataIndex: 'Razão Social',
+                      key: 'razao_social',
+                      ellipsis: true,
+                    },
+                    {
+                      title: 'Estado',
+                      dataIndex: 'Estado',
+                      key: 'estado',
+                      width: 100,
+                    },
+                    {
+                      title: 'NCM',
+                      dataIndex: 'NCM Relacionado',
+                      key: 'ncm',
+                      width: 120,
+                    },
+                    {
+                      title: 'Importado (R$)',
+                      dataIndex: 'Importado (R$)',
+                      key: 'importado',
+                      width: 150,
+                      render: (valor) => valor ? `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-',
+                      align: 'right',
+                    },
+                    {
+                      title: 'Exportado (R$)',
+                      dataIndex: 'Exportado (R$)',
+                      key: 'exportado',
+                      width: 150,
+                      render: (valor) => valor ? `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-',
+                      align: 'right',
+                    },
+                    {
+                      title: 'Peso',
+                      dataIndex: 'Peso Participação (0-100)',
+                      key: 'peso',
+                      width: 100,
+                      render: (valor) => {
+                        const color = valor > 50 ? 'green' : valor > 20 ? 'orange' : 'default';
+                        return <Tag color={color}>{valor.toFixed(1)}</Tag>;
+                      },
+                      sorter: (a, b) => a['Peso Participação (0-100)'] - b['Peso Participação (0-100)'],
+                    },
+                    {
+                      title: 'Sugestão',
+                      dataIndex: 'Sugestão',
+                      key: 'sugestao',
+                      width: 150,
+                      render: (text) => {
+                        const color = text === 'CLIENTE_POTENCIAL' ? 'blue' : 'green';
+                        return <Tag color={color}>{text}</Tag>;
+                      },
+                    },
+                  ]}
+                />
+              ) : (
+                <div style={{ textAlign: 'center', padding: 20 }}>
+                  <Button 
+                    type="primary" 
+                    onClick={loadEmpresasRecomendadas}
+                    loading={loadingEmpresasRecomendadas}
+                  >
+                    Carregar Empresas Recomendadas
+                  </Button>
+                </div>
+              )}
+            </Spin>
+          </Card>
+        </Col>
+      </Row>
+      
+      {/* Seção de Dados ComexStat */}
+      {dadosComexstat && (
+        <Row gutter={16} style={{ marginTop: 16 }}>
+          <Col span={12}>
+            <Card title="Resumo Importações ComexStat" loading={loadingDadosComexstat}>
+              {dadosComexstat.importacoes && (
+                <>
+                  <Statistic
+                    title="Valor Total (BRL)"
+                    value={dadosComexstat.importacoes.valor_total_brl || 0}
+                    prefix="R$"
+                    precision={2}
+                    valueStyle={{ color: '#cf1322' }}
+                  />
+                  <Divider />
+                  <Statistic
+                    title="Total de Registros"
+                    value={dadosComexstat.importacoes.total_registros || 0}
+                  />
+                </>
+              )}
+            </Card>
+          </Col>
+          <Col span={12}>
+            <Card title="Resumo Exportações ComexStat" loading={loadingDadosComexstat}>
+              {dadosComexstat.exportacoes && (
+                <>
+                  <Statistic
+                    title="Valor Total (BRL)"
+                    value={dadosComexstat.exportacoes.valor_total_brl || 0}
+                    prefix="R$"
+                    precision={2}
+                    valueStyle={{ color: '#3f8600' }}
+                  />
+                  <Divider />
+                  <Statistic
+                    title="Total de Registros"
+                    value={dadosComexstat.exportacoes.total_registros || 0}
+                  />
+                </>
+              )}
+            </Card>
+          </Col>
+        </Row>
+      )}
     </div>
   );
 };

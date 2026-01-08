@@ -204,3 +204,8 @@ Se encontrar problemas:
 3. Verifique variáveis de ambiente
 4. Me envie os erros que encontrar!
 
+
+
+
+
+

@@ -13,6 +13,15 @@ from .mdic_csv_collector import MDICCSVCollector
 from .transformer import DataTransformer
 from .cnae_analyzer import CNAEAnalyzer
 from .empresas_mdic_scraper import EmpresasMDICScraper
+from config import settings
+
+# Import opcional do scraper automático
+try:
+    from .comexstat_scraper import ComexStatScraper
+    COMEXSTAT_SCRAPER_AVAILABLE = True
+except ImportError:
+    COMEXSTAT_SCRAPER_AVAILABLE = False
+    logger.warning("Scraper automático do ComexStat não disponível (requer Selenium)")
 
 
 class EnrichedDataCollector:
@@ -25,6 +34,15 @@ class EnrichedDataCollector:
         self.transformer = DataTransformer()
         self.cnae_analyzer = None
         self.empresas_scraper = EmpresasMDICScraper()
+        
+        # Inicializar scraper automático se disponível
+        self.comexstat_scraper = None
+        if COMEXSTAT_SCRAPER_AVAILABLE:
+            try:
+                self.comexstat_scraper = ComexStatScraper()
+                logger.info("✅ Scraper automático do ComexStat disponível")
+            except Exception as e:
+                logger.warning(f"Scraper automático não pôde ser inicializado: {e}")
         
         # Tentar carregar CNAE
         try:
@@ -69,9 +87,76 @@ class EnrichedDataCollector:
             tabelas = await self.csv_collector.download_correlation_tables()
             stats["tabelas_correlacao"] = {k: str(v) for k, v in tabelas.items()}
             
-            # 2. Baixar dados mensais
-            logger.info(f"Baixando dados dos últimos {meses} meses...")
-            arquivos = await self.csv_collector.download_recent_months(meses)
+            # 2. Buscar arquivos CSV existentes primeiro
+            arquivos = []
+            
+            # Lista de diretórios possíveis para procurar arquivos CSV
+            possiveis_diretorios = [
+                # Diretório data/raw na raiz do workspace
+                Path(__file__).parent.parent.parent.parent / "data" / "raw",
+                # Diretório data/raw relativo ao projeto_comex
+                Path(__file__).parent.parent.parent / "data" / "raw",
+                # Diretório raw dentro de data_dir configurado
+                settings.data_dir / "raw",
+                # Diretório mdic_csv do coletor
+                self.csv_collector.data_dir,
+            ]
+            
+            # Remover duplicatas e verificar existência
+            diretorios_unicos = []
+            for dir_path in possiveis_diretorios:
+                if dir_path.exists() and dir_path not in diretorios_unicos:
+                    diretorios_unicos.append(dir_path)
+            
+            # Buscar arquivos CSV em cada diretório
+            arquivos_encontrados = set()  # Usar set para evitar duplicatas
+            for dir_path in diretorios_unicos:
+                logger.info(f"Procurando arquivos CSV em {dir_path}...")
+                csv_files = list(dir_path.glob("*.csv"))
+                # Filtrar apenas arquivos IMP_ ou EXP_ (arquivos de operações)
+                csv_files = [f for f in csv_files if f.stem.startswith(("IMP_", "EXP_"))]
+                if csv_files:
+                    logger.info(f"✅ Encontrados {len(csv_files)} arquivos CSV em {dir_path}")
+                    arquivos_encontrados.update(csv_files)
+            
+            arquivos = list(arquivos_encontrados)
+            
+            # Se não encontrou arquivos existentes, tentar baixar
+            if not arquivos:
+                logger.info(f"Nenhum arquivo CSV encontrado. Tentando baixar dados...")
+                
+                # Tentar primeiro com o coletor CSV tradicional
+                try:
+                    arquivos = await self.csv_collector.download_recent_months(meses)
+                    if not arquivos:
+                        logger.warning("Coletor CSV tradicional não retornou arquivos")
+                except Exception as e:
+                    logger.warning(f"Erro no coletor CSV tradicional: {e}")
+                
+                # Se ainda não tem arquivos, tentar scraper automático
+                if not arquivos and self.comexstat_scraper:
+                    logger.info("Tentando usar scraper automático do ComexStat...")
+                    try:
+                        arquivos_baixados = self.comexstat_scraper.baixar_meses_recentes(
+                            meses=min(meses, 6),  # Limitar a 6 meses por vez
+                            tipo_operacao="Ambos",
+                            headless=True
+                        )
+                        if arquivos_baixados:
+                            arquivos = arquivos_baixados
+                            logger.success(f"✅ {len(arquivos)} arquivo(s) baixado(s) via scraper automático")
+                    except Exception as e:
+                        logger.error(f"Erro no scraper automático: {e}")
+                        logger.info("💡 Certifique-se de que Selenium e ChromeDriver estão instalados")
+                
+                if not arquivos:
+                    logger.error("⚠️ Não foi possível baixar arquivos CSV")
+                    logger.info("💡 Opções:")
+                    logger.info("   1. Baixe manualmente do site e coloque em data/raw/")
+                    logger.info("   2. Instale Selenium e ChromeDriver para download automático")
+                    logger.info("   3. Verifique se as URLs do MDIC estão corretas")
+            else:
+                logger.info(f"✅ Total de {len(arquivos)} arquivos CSV para processar")
             
             # 3. Processar cada arquivo
             for filepath in arquivos:
@@ -165,16 +250,16 @@ class EnrichedDataCollector:
         
         for registro in registros:
             try:
-                        # Verificar se já existe (usar chave única: NCM + Data + Tipo + País + UF)
-                        existing = db.query(OperacaoComex).filter(
-                            and_(
-                                OperacaoComex.ncm == registro.get("ncm"),
-                                OperacaoComex.data_operacao == registro.get("data_operacao"),
-                                OperacaoComex.tipo_operacao == registro.get("tipo_operacao"),
-                                OperacaoComex.pais_origem_destino == registro.get("pais_origem_destino"),
-                                OperacaoComex.uf == registro.get("uf")
-                            )
-                        ).first()
+                # Verificar se já existe (usar chave única: NCM + Data + Tipo + País + UF)
+                existing = db.query(OperacaoComex).filter(
+                    and_(
+                        OperacaoComex.ncm == registro.get("ncm"),
+                        OperacaoComex.data_operacao == registro.get("data_operacao"),
+                        OperacaoComex.tipo_operacao == registro.get("tipo_operacao"),
+                        OperacaoComex.pais_origem_destino == registro.get("pais_origem_destino"),
+                        OperacaoComex.uf == registro.get("uf")
+                    )
+                ).first()
                 
                 if existing:
                     # Atualizar registro existente
@@ -214,8 +299,11 @@ class EnrichedDataCollector:
             # Criar índice por CNPJ e Razão Social
             empresas_index = {}
             for emp in empresas_mdic:
-                cnpj = emp.get("cnpj", "").replace(".", "").replace("/", "").replace("-", "")
-                razao_social = emp.get("razao_social", "").upper().strip()
+                cnpj_raw = emp.get("cnpj", "") or ""
+                cnpj = str(cnpj_raw).replace(".", "").replace("/", "").replace("-", "")
+                
+                razao_social_raw = emp.get("razao_social", "") or ""
+                razao_social = str(razao_social_raw).upper().strip()
                 
                 if cnpj:
                     empresas_index[cnpj] = emp
@@ -345,8 +433,10 @@ class EnrichedDataCollector:
                 }
                 
                 # Buscar empresa no MDIC
+                empresa_nome_str = str(empresa_nome or "").upper()
                 for emp in empresas_mdic:
-                    if emp.get("razao_social", "").upper() == empresa_nome.upper():
+                    emp_razao = str(emp.get("razao_social", "") or "").upper()
+                    if emp_razao == empresa_nome_str:
                         sugestao.update({
                             "cnpj": emp.get("cnpj"),
                             "uf": emp.get("uf"),

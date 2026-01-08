@@ -1,6 +1,7 @@
 """
 Transformador de dados brutos para formato do banco de dados.
 """
+import math
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from loguru import logger
@@ -12,6 +13,37 @@ class DataTransformer:
     """
     Transforma dados brutos (API ou CSV) para formato do banco de dados.
     """
+    
+    @staticmethod
+    def _safe_str(value: Any, default: str = "") -> str:
+        """
+        Converte valor para string de forma segura, tratando None, NaN e outros tipos.
+        
+        Args:
+            value: Valor a ser convertido
+            default: Valor padrão se conversão falhar ou for inválida
+        
+        Returns:
+            String segura para usar com métodos como .upper() ou .lower()
+        """
+        if value is None:
+            return default
+        
+        # Tratar NaN (float)
+        if isinstance(value, float):
+            if math.isnan(value):
+                return default
+            # Converter float para string (ex: 123.0 -> "123")
+            if value.is_integer():
+                return str(int(value))
+            return str(value)
+        
+        # Para outros tipos, converter para string
+        try:
+            result = str(value).strip()
+            return result if result else default
+        except (ValueError, TypeError, AttributeError):
+            return default
     
     def transform_api_data(
         self,
@@ -123,12 +155,39 @@ class DataTransformer:
         """
         try:
             # Mapear campos (ajustar conforme estrutura real dos dados)
+            # Extrair UF de forma segura - SEMPRE converter para string antes de .upper()
+            uf_raw = self._extract_string(record, "uf", "estado", "")
+            uf_value = self._safe_str(uf_raw, "").upper()[:2] if uf_raw else ""
+            
+            # Extrair CNPJ de forma segura - SEMPRE converter para string antes de operações
+            cnpj_imp_value = ""
+            if tipo == "Importação":
+                cnpj_imp_raw = self._extract_string(
+                    record, 
+                    "cnpj_importador", "cnpj_imp", "cnpj_importador", ""
+                )
+                cnpj_imp_str = self._safe_str(cnpj_imp_raw, "")
+                cnpj_imp_value = cnpj_imp_str.replace('.', '').replace('/', '').replace('-', '')[:14]
+            
+            cnpj_exp_value = ""
+            if tipo == "Exportação":
+                cnpj_exp_raw = self._extract_string(
+                    record, 
+                    "cnpj_exportador", "cnpj_exp", "cnpj_exportador", ""
+                )
+                cnpj_exp_str = self._safe_str(cnpj_exp_raw, "")
+                cnpj_exp_value = cnpj_exp_str.replace('.', '').replace('/', '').replace('-', '')[:14]
+            
+            # Extrair arquivo_origem de forma segura
+            arquivo_origem_raw = record.get("arquivo_origem") or ""
+            arquivo_origem_value = self._safe_str(arquivo_origem_raw, "")
+            
             transformed = {
                 "ncm": self._extract_ncm(record),
                 "descricao_produto": self._extract_string(record, "descricao", "produto", ""),
                 "tipo_operacao": TipoOperacao.IMPORTACAO if tipo == "Importação" else TipoOperacao.EXPORTACAO,
                 "pais_origem_destino": self._extract_string(record, "pais", "pais_origem", "pais_destino", ""),
-                "uf": self._extract_string(record, "uf", "estado", "").upper()[:2],
+                "uf": uf_value,
                 "porto_aeroporto": self._extract_string(record, "porto", "aeroporto", ""),
                 "via_transporte": self._extract_via_transporte(record),
                 "valor_fob": self._extract_float(record, "valor_fob", "fob", "valor", 0.0),
@@ -140,7 +199,7 @@ class DataTransformer:
                 "unidade_medida_estatistica": self._extract_string(record, "unidade", "unidade_medida", ""),
                 "data_operacao": self._extract_date(record, mes),
                 "mes_referencia": mes,
-                "arquivo_origem": record.get("arquivo_origem", ""),
+                "arquivo_origem": arquivo_origem_value,
                 # Campos de empresa
                 "razao_social_importador": self._extract_string(
                     record, 
@@ -152,14 +211,8 @@ class DataTransformer:
                     "razao_social_exportador", "razao_social_exp", "exportador", 
                     "nome_exportador", "empresa_exportadora", ""
                 ) if tipo == "Exportação" else None,
-                "cnpj_importador": self._extract_string(
-                    record, 
-                    "cnpj_importador", "cnpj_imp", "cnpj_importador", ""
-                ).replace('.', '').replace('/', '').replace('-', '')[:14] if tipo == "Importação" else None,
-                "cnpj_exportador": self._extract_string(
-                    record, 
-                    "cnpj_exportador", "cnpj_exp", "cnpj_exportador", ""
-                ).replace('.', '').replace('/', '').replace('-', '')[:14] if tipo == "Exportação" else None,
+                "cnpj_importador": cnpj_imp_value if tipo == "Importação" else None,
+                "cnpj_exportador": cnpj_exp_value if tipo == "Exportação" else None,
             }
             
             # Validações básicas
@@ -179,15 +232,25 @@ class DataTransformer:
     
     def _extract_ncm(self, record: Dict[str, Any]) -> str:
         """Extrai NCM do registro."""
-        ncm = (
+        ncm_value = (
             record.get("ncm") or
             record.get("NCM") or
             record.get("codigo_ncm") or
             ""
         )
         
+        # Converter para string, tratando floats especialmente
+        if isinstance(ncm_value, float):
+            if math.isnan(ncm_value):
+                ncm_value = ""
+            else:
+                # Converter float para int primeiro para evitar decimais
+                ncm_value = str(int(ncm_value)) if ncm_value.is_integer() else str(int(ncm_value))
+        else:
+            ncm_value = str(ncm_value)
+        
         # Garantir 8 dígitos
-        ncm = str(ncm).replace(".", "").replace("-", "").strip()
+        ncm = ncm_value.replace(".", "").replace("-", "").strip()
         if len(ncm) > 8:
             ncm = ncm[:8]
         elif len(ncm) < 8:
@@ -203,9 +266,20 @@ class DataTransformer:
     ) -> str:
         """Extrai string do registro usando múltiplas chaves possíveis."""
         for key in keys:
-            value = record.get(key) or record.get(key.upper()) or record.get(key.lower())
-            if value:
-                return str(value).strip()
+            # Tentar diferentes variações da chave
+            value = None
+            for key_variant in [key, key.upper(), key.lower(), key.capitalize()]:
+                if key_variant in record:
+                    value = record[key_variant]
+                    break
+            
+            if value is None:
+                continue
+                
+            # Usar função auxiliar para conversão segura
+            result = self._safe_str(value, "")
+            if result:  # Só retornar se não estiver vazio
+                return result
         return default
     
     def _extract_float(
@@ -260,12 +334,24 @@ class DataTransformer:
     
     def _extract_via_transporte(self, record: Dict[str, Any]) -> ViaTransporte:
         """Extrai via de transporte do registro."""
-        via = (
-            record.get("via") or
-            record.get("via_transporte") or
-            record.get("modal") or
-            ""
-        ).lower()
+        via_value = None
+        
+        # Tentar diferentes chaves
+        for key in ["via", "via_transporte", "modal", "VIA", "VIA_TRANSPORTE", "MODAL"]:
+            if key in record:
+                via_value = record[key]
+                break
+        
+        # Se não encontrou, tentar com variações
+        if via_value is None:
+            for key in ["via", "via_transporte", "modal"]:
+                value = record.get(key) or record.get(key.upper()) or record.get(key.lower())
+                if value is not None and value != "":
+                    via_value = value
+                    break
+        
+        # Converter para string de forma segura ANTES de usar .lower()
+        via = self._safe_str(via_value, "").lower()
         
         via_mapping = {
             "marítima": ViaTransporte.MARITIMA,

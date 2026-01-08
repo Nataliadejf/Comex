@@ -148,3 +148,5 @@ Se aparecer erro como `ModuleNotFoundError: No module named 'pydantic_settings'`
 **Commit**: `14bbb31`
 **Status**: ✅ Correções aplicadas e commitadas
 
+
+

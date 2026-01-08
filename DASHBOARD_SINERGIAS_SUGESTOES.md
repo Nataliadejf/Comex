@@ -208,3 +208,5 @@ Configurados em `backend/utils/scheduler.py`:
 
 **Última atualização**: 06/01/2026
 
+
+

@@ -160,3 +160,5 @@ fetch('https://comex-backend-wjco.onrender.com/aprovar-cadastro', {
 
 **Última atualização**: 05/01/2026
 
+
+

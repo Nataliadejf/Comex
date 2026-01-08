@@ -201,3 +201,5 @@ Se encontrar problemas:
 
 **Recomendação**: Comece executando `EXECUTAR_COLETA_ENRIQUECIDA.bat` e aguarde a conclusão antes de testar o dashboard.
 
+
+

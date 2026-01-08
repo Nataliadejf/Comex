@@ -23,3 +23,5 @@ python backend\scripts\avaliar_metodo.py
 echo.
 pause
 
+
+

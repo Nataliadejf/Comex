@@ -248,3 +248,5 @@ class CNAEAnalyzer:
             "arquivo": str(self.arquivo_cnae)
         }
 
+
+

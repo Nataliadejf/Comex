@@ -105,3 +105,5 @@ Após o backend voltar a funcionar:
 
 **Última atualização**: 05/01/2026
 
+
+

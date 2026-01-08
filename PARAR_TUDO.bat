@@ -1,37 +1,38 @@
 @echo off
-chcp 65001 >nul
-echo ============================================================
-echo 🛑 PARANDO TODOS OS PROCESSOS
-echo ============================================================
+echo ========================================
+echo   PARANDO BACKEND E FRONTEND
+echo ========================================
 echo.
 
-echo Parando processos na porta 8000 (Backend)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000 ^| findstr LISTENING') do (
-    echo    Encerrando processo %%a
-    taskkill /F /PID %%a >nul 2>&1
+echo Parando todos os processos...
+taskkill /F /IM node.exe 2>nul
+if %errorlevel% == 0 (
+    echo Frontend parado!
+) else (
+    echo Nenhum processo do frontend encontrado.
 )
 
-echo Parando processos na porta 3000 (Frontend)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3000 ^| findstr LISTENING') do (
-    echo    Encerrando processo %%a
-    taskkill /F /PID %%a >nul 2>&1
+taskkill /F /IM python.exe 2>nul
+if %errorlevel% == 0 (
+    echo Backend parado!
+) else (
+    echo Nenhum processo do backend encontrado.
 )
+
+taskkill /F /IM uvicorn.exe 2>nul
 
 echo.
-echo Parando processos Node.js...
-taskkill /F /IM node.exe >nul 2>&1
-
-echo Parando processos Python relacionados...
-for /f "tokens=2" %%a in ('tasklist ^| findstr python') do (
-    taskkill /F /PID %%a >nul 2>&1
-)
-
+echo Aguardando processos finalizarem...
 timeout /t 2 /nobreak >nul
 
 echo.
-echo ============================================================
-echo ✅ PROCESSOS PARADOS!
-echo ============================================================
+echo ========================================
+echo   TODOS OS PROCESSOS FORAM PARADOS
+echo ========================================
 echo.
 pause
+
+
+
+
 

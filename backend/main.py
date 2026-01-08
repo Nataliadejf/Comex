@@ -684,6 +684,22 @@ async def get_dashboard_stats(
         for pais, total_valor, total_operacoes in principais_paises
     ]
     
+    # Se não houver países no banco, tentar usar empresas recomendadas
+    if not principais_paises_list:
+        try:
+            # Buscar empresas importadoras e exportadoras recomendadas
+            empresas_imp = _buscar_empresas_importadoras_recomendadas(5)
+            empresas_exp = _buscar_empresas_exportadoras_recomendadas(5)
+            
+            principais_paises_list.extend(empresas_imp)
+            principais_paises_list.extend(empresas_exp)
+            
+            # Ordenar por valor total e limitar
+            principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
+            principais_paises_list = principais_paises_list[:10]
+        except Exception as e:
+            logger.debug(f"Erro ao buscar empresas recomendadas para países: {e}")
+    
     # Registros por mês com valores FOB e peso
     registros_por_mes_query = db.query(
         OperacaoComex.mes_referencia,
@@ -711,6 +727,71 @@ async def get_dashboard_stats(
         mes: float(peso_total) if peso_total else 0.0
         for mes, _, _, peso_total in registros_por_mes_query
     }
+    
+    # Se não houver dados no banco, tentar usar dados do Excel
+    if valor_total == 0 and not principais_ncms_list:
+        try:
+            import json
+            from pathlib import Path
+            
+            arquivo_resumo = Path(__file__).parent.parent / "data" / "resumo_dados_comexstat.json"
+            if arquivo_resumo.exists():
+                with open(arquivo_resumo, 'r', encoding='utf-8') as f:
+                    resumo_excel = json.load(f)
+                
+                # Usar dados do Excel para popular o dashboard
+                if resumo_excel.get('importacoes'):
+                    valor_total_imp = resumo_excel['importacoes'].get('valor_total_usd', 0)
+                    volume_imp = resumo_excel['importacoes'].get('total_registros', 0) * 1000  # Estimativa
+                
+                if resumo_excel.get('exportacoes'):
+                    valor_total_exp = resumo_excel['exportacoes'].get('valor_total_usd', 0)
+                    volume_exp = resumo_excel['exportacoes'].get('total_registros', 0) * 1000  # Estimativa
+                
+                valor_total = valor_total_imp + valor_total_exp
+                
+                # Criar registros por mês baseado no Excel (distribuir ao longo de 12 meses)
+                registros_dict = {}
+                valores_por_mes_dict = {}
+                pesos_por_mes_dict = {}
+                
+                meses_2025 = [f"2025-{str(i).zfill(2)}" for i in range(1, 13)]
+                total_registros_imp = resumo_excel.get('importacoes', {}).get('total_registros', 0)
+                total_registros_exp = resumo_excel.get('exportacoes', {}).get('total_registros', 0)
+                
+                for mes in meses_2025:
+                    registros_dict[mes] = int((total_registros_imp + total_registros_exp) / 12)
+                    valores_por_mes_dict[mes] = float((valor_total_imp + valor_total_exp) / 12)
+                    pesos_por_mes_dict[mes] = float((volume_imp + volume_exp) / 12)
+                
+                # Top NCMs do Excel
+                arquivo_ncm = Path(__file__).parent.parent / "data" / "dados_ncm_comexstat.json"
+                if arquivo_ncm.exists():
+                    with open(arquivo_ncm, 'r', encoding='utf-8') as f:
+                        dados_ncm = json.load(f)
+                    
+                    # Agrupar por NCM e ordenar
+                    ncms_agrupados = {}
+                    for item in dados_ncm:
+                        ncm = item.get('ncm', '')
+                        if ncm:
+                            if ncm not in ncms_agrupados:
+                                ncms_agrupados[ncm] = {
+                                    'ncm': ncm,
+                                    'descricao': item.get('descricao', ''),
+                                    'valor_total': 0,
+                                    'total_operacoes': 0
+                                }
+                            ncms_agrupados[ncm]['valor_total'] += item.get('valor_importacao_usd', 0) + item.get('valor_exportacao_usd', 0)
+                            ncms_agrupados[ncm]['total_operacoes'] += 1
+                    
+                    principais_ncms_list = sorted(
+                        ncms_agrupados.values(),
+                        key=lambda x: x['valor_total'],
+                        reverse=True
+                    )[:10]
+        except Exception as e:
+            logger.debug(f"Erro ao carregar dados do Excel: {e}")
     
     stats_response = DashboardStats(
         volume_importacoes=float(volume_imp),
@@ -2037,6 +2118,288 @@ async def dashboard_sugestoes_empresas(
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro ao buscar sugestões: {str(e)}")
+
+
+@app.get("/dashboard/empresas-recomendadas")
+async def get_empresas_recomendadas(
+    limite: int = Query(default=100, ge=1, le=5000),
+    tipo: Optional[str] = Query(default=None, description="Filtrar por tipo: CLIENTE_POTENCIAL ou FORNECEDOR_POTENCIAL"),
+    uf: Optional[str] = Query(default=None),
+    ncm: Optional[str] = Query(default=None)
+):
+    """
+    Retorna lista de empresas recomendadas para o dashboard.
+    """
+    try:
+        import json
+        from pathlib import Path
+        
+        arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.xlsx"
+        
+        if not arquivo_empresas.exists():
+            # Tentar CSV como fallback
+            arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.csv"
+            if not arquivo_empresas.exists():
+                return {
+                    "success": False,
+                    "message": "Arquivo de empresas recomendadas não encontrado",
+                    "data": []
+                }
+        
+        import pandas as pd
+        
+        if arquivo_empresas.suffix == '.xlsx':
+            df = pd.read_excel(arquivo_empresas)
+        else:
+            df = pd.read_csv(arquivo_empresas, encoding='utf-8-sig')
+        
+        # Aplicar filtros
+        if tipo:
+            df = df[df['Sugestão'] == tipo]
+        if uf:
+            df = df[df['Estado'] == uf]
+        if ncm:
+            df = df[df['NCM Relacionado'] == ncm]
+        
+        # Limitar resultados
+        df = df.head(limite)
+        
+        # Converter para dict
+        empresas = df.to_dict('records')
+        
+        return {
+            "success": True,
+            "total": len(empresas),
+            "data": empresas
+        }
+    except Exception as e:
+        logger.error(f"Erro ao buscar empresas recomendadas: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar empresas recomendadas: {str(e)}")
+
+
+def _buscar_empresas_importadoras_recomendadas(limite: int = 10):
+    """
+    Função auxiliar síncrona para buscar empresas importadoras recomendadas.
+    """
+    try:
+        import pandas as pd
+        from pathlib import Path
+        
+        arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.xlsx"
+        
+        if not arquivo_empresas.exists():
+            arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.csv"
+            if not arquivo_empresas.exists():
+                return []
+        
+        if arquivo_empresas.suffix == '.xlsx':
+            df = pd.read_excel(arquivo_empresas)
+        else:
+            df = pd.read_csv(arquivo_empresas, encoding='utf-8-sig')
+        
+        # Filtrar empresas que importam (têm valor de importação > 0)
+        df_importadoras = df[
+            (df['Importado (R$)'].notna()) & 
+            (df['Importado (R$)'] > 0)
+        ].copy()
+        
+        # Agrupar por empresa (CNPJ) e somar valores
+        df_agrupado = df_importadoras.groupby('CNPJ').agg({
+            'Razão Social': 'first',
+            'Nome Fantasia': 'first',
+            'Estado': 'first',
+            'Importado (R$)': 'sum',
+            'Peso Participação (0-100)': 'max'
+        }).reset_index()
+        
+        # Ordenar por valor de importação
+        df_agrupado = df_agrupado.sort_values('Importado (R$)', ascending=False).head(limite)
+        
+        # Converter para formato esperado pelo dashboard
+        empresas = []
+        for _, row in df_agrupado.iterrows():
+            empresas.append({
+                "pais": row['Razão Social'] or row['Nome Fantasia'],
+                "valor_total": float(row['Importado (R$)']) / 5.0,  # Converter BRL para USD
+                "total_operacoes": 1,
+                "uf": row.get('Estado', ''),
+                "peso_participacao": float(row.get('Peso Participação (0-100)', 0))
+            })
+        
+        return empresas
+    except Exception as e:
+        logger.debug(f"Erro ao buscar empresas importadoras: {e}")
+        return []
+
+
+def _buscar_empresas_exportadoras_recomendadas(limite: int = 10):
+    """
+    Função auxiliar síncrona para buscar empresas exportadoras recomendadas.
+    """
+    try:
+        import pandas as pd
+        from pathlib import Path
+        
+        arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.xlsx"
+        
+        if not arquivo_empresas.exists():
+            arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.csv"
+            if not arquivo_empresas.exists():
+                return []
+        
+        if arquivo_empresas.suffix == '.xlsx':
+            df = pd.read_excel(arquivo_empresas)
+        else:
+            df = pd.read_csv(arquivo_empresas, encoding='utf-8-sig')
+        
+        # Filtrar empresas que exportam (têm valor de exportação > 0)
+        df_exportadoras = df[
+            (df['Exportado (R$)'].notna()) & 
+            (df['Exportado (R$)'] > 0)
+        ].copy()
+        
+        # Agrupar por empresa (CNPJ) e somar valores
+        df_agrupado = df_exportadoras.groupby('CNPJ').agg({
+            'Razão Social': 'first',
+            'Nome Fantasia': 'first',
+            'Estado': 'first',
+            'Exportado (R$)': 'sum',
+            'Peso Participação (0-100)': 'max'
+        }).reset_index()
+        
+        # Ordenar por valor de exportação
+        df_agrupado = df_agrupado.sort_values('Exportado (R$)', ascending=False).head(limite)
+        
+        # Converter para formato esperado pelo dashboard
+        empresas = []
+        for _, row in df_agrupado.iterrows():
+            empresas.append({
+                "pais": row['Razão Social'] or row['Nome Fantasia'],
+                "valor_total": float(row['Exportado (R$)']) / 5.0,  # Converter BRL para USD
+                "total_operacoes": 1,
+                "uf": row.get('Estado', ''),
+                "peso_participacao": float(row.get('Peso Participação (0-100)', 0))
+            })
+        
+        return empresas
+    except Exception as e:
+        logger.debug(f"Erro ao buscar empresas exportadoras: {e}")
+        return []
+
+
+@app.get("/dashboard/empresas-importadoras")
+async def get_empresas_importadoras_recomendadas(
+    limite: int = Query(default=10, ge=1, le=100)
+):
+    """
+    Retorna empresas recomendadas que são importadoras (para seção "Prováveis Importadores").
+    """
+    empresas = _buscar_empresas_importadoras_recomendadas(limite)
+    return {
+        "success": True,
+        "data": empresas
+    }
+
+
+@app.get("/dashboard/empresas-exportadoras")
+async def get_empresas_exportadoras_recomendadas(
+    limite: int = Query(default=10, ge=1, le=100)
+):
+    """
+    Retorna empresas recomendadas que são exportadoras (para seção "Prováveis Exportadores").
+    """
+    empresas = _buscar_empresas_exportadoras_recomendadas(limite)
+    return {
+        "success": True,
+        "data": empresas
+    }
+
+
+@app.get("/dashboard/dados-comexstat")
+async def get_dados_comexstat():
+    """
+    Retorna resumo dos dados do arquivo Excel ComexStat.
+    """
+    try:
+        import json
+        from pathlib import Path
+        
+        arquivo_resumo = Path(__file__).parent.parent / "data" / "resumo_dados_comexstat.json"
+        
+        if not arquivo_resumo.exists():
+            return {
+                "success": False,
+                "message": "Arquivo de resumo não encontrado. Execute o script de processamento primeiro.",
+                "data": None
+            }
+        
+        with open(arquivo_resumo, 'r', encoding='utf-8') as f:
+            resumo = json.load(f)
+        
+        return {
+            "success": True,
+            "data": resumo
+        }
+    except Exception as e:
+        logger.error(f"Erro ao buscar dados ComexStat: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar dados: {str(e)}")
+
+
+@app.get("/dashboard/dados-ncm-comexstat")
+async def get_dados_ncm_comexstat(
+    limite: int = Query(default=100, ge=1, le=1000),
+    uf: Optional[str] = Query(default=None),
+    tipo: Optional[str] = Query(default=None, description="importacao ou exportacao")
+):
+    """
+    Retorna dados agregados por NCM do arquivo Excel ComexStat.
+    """
+    try:
+        import json
+        from pathlib import Path
+        
+        arquivo_ncm = Path(__file__).parent.parent / "data" / "dados_ncm_comexstat.json"
+        
+        if not arquivo_ncm.exists():
+            return {
+                "success": False,
+                "message": "Arquivo de dados NCM não encontrado. Execute o script de processamento primeiro.",
+                "data": []
+            }
+        
+        with open(arquivo_ncm, 'r', encoding='utf-8') as f:
+            dados_ncm = json.load(f)
+        
+        # Aplicar filtros
+        if uf:
+            dados_ncm = [d for d in dados_ncm if d.get('uf') == uf]
+        
+        if tipo == 'importacao':
+            dados_ncm = [d for d in dados_ncm if d.get('valor_importacao_usd', 0) > 0]
+        elif tipo == 'exportacao':
+            dados_ncm = [d for d in dados_ncm if d.get('valor_exportacao_usd', 0) > 0]
+        
+        # Ordenar por valor total e limitar
+        dados_ncm.sort(
+            key=lambda x: x.get('valor_importacao_usd', 0) + x.get('valor_exportacao_usd', 0),
+            reverse=True
+        )
+        dados_ncm = dados_ncm[:limite]
+        
+        return {
+            "success": True,
+            "total": len(dados_ncm),
+            "data": dados_ncm
+        }
+    except Exception as e:
+        logger.error(f"Erro ao buscar dados NCM: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar dados NCM: {str(e)}")
 
 
 if __name__ == "__main__":

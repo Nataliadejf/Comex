@@ -142,8 +142,7 @@ Popular o dashboard com dados reais de todos os NCMs da API oficial do Comex Sta
 - Procure por:
   - `Coletando dados gerais (todos os NCMs)...`
   - `Coletando 2024-01 - Importação...`
-  - `✓ X registros salvos para 2024-01 - Importação`
-  - `Coletando 2024-01 - Exportação...`
+  - `✓ X registros salvos partação...`
   - `✓ X registros salvos para 2024-01 - Exportação`
 
 ### 4.3. Verificar Erros (se houver)
@@ -240,7 +239,8 @@ Popular o dashboard com dados reais de todos os NCMs da API oficial do Comex Sta
 
 ---
 
-## 🎯 Próximos Passos Após Coleta
+## 🎯 Próximos Passos Após Cora 2024-01 - Importação`
+  - `Coletando 2024-01 - Expoleta
 
 - ✅ Dashboard funcionando com dados reais
 - ✅ Autocomplete de empresas funcionando
@@ -250,4 +250,6 @@ Popular o dashboard com dados reais de todos os NCMs da API oficial do Comex Sta
 ---
 
 **Última atualização**: 05/01/2026
+
+
 

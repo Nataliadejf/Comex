@@ -175,3 +175,5 @@ frontend/build
 
 **Última atualização**: 05/01/2026
 
+
+

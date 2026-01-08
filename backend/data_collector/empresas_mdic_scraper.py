@@ -239,3 +239,5 @@ class EmpresasMDICScraper:
         logger.info(f"✅ Total de empresas coletadas: {len(todas_empresas)}")
         return todas_empresas
 
+
+

@@ -89,3 +89,5 @@ fetch('https://comex-backend-wjco.onrender.com/coletar-dados-ncms', {
 
 **Última atualização**: 05/01/2026
 
+
+

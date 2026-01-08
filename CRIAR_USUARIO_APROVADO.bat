@@ -10,3 +10,5 @@ python scripts\criar_usuario_aprovado.py
 
 pause
 
+
+

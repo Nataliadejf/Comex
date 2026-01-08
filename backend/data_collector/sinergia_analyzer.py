@@ -299,3 +299,5 @@ class SinergiaAnalyzer:
         else:
             return "Empresa sem operações registradas - potencial para iniciar comércio exterior"
 
+
+

@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { Layout, Menu, Button, Space, message } from 'antd';
+import { Layout, Menu, Button, Space, Dropdown } from 'antd';
 import {
   DashboardOutlined,
   SearchOutlined,
-  BarChartOutlined,
-  SyncOutlined,
   LogoutOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { message } from 'antd';
 
 const { Header, Sider } = Layout;
 
@@ -39,6 +39,22 @@ const AppLayout = ({ children }) => {
     message.success('Logout realizado com sucesso!');
     navigate('/login');
   };
+
+  const userMenuItems = [
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: 'Sair',
+    },
+  ];
+
+  const handleUserMenuClick = ({ key }) => {
+    if (key === 'logout') {
+      handleLogout();
+    }
+  };
+
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -86,14 +102,16 @@ const AppLayout = ({ children }) => {
           <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>
             Análise de Comércio Exterior
           </h1>
-          <Button
-            type="primary"
-            danger
-            icon={<LogoutOutlined />}
-            onClick={handleLogout}
-          >
-            Sair
-          </Button>
+          <Space>
+            <Dropdown 
+              menu={{ items: userMenuItems, onClick: handleUserMenuClick }} 
+              placement="bottomRight"
+            >
+              <Button type="text" icon={<UserOutlined />}>
+                {user.nome_completo || user.email || 'Usuário'}
+              </Button>
+            </Dropdown>
+          </Space>
         </Header>
         {children}
       </Layout>

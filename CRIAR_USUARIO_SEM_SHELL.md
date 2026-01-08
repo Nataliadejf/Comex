@@ -132,3 +132,5 @@ curl https://comex-backend-wjco.onrender.com/cadastros-pendentes
 
 **Última atualização**: 05/01/2026
 
+
+

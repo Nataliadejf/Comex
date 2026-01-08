@@ -115,3 +115,5 @@ asyncio.run(testar())
 
 **Execute `TESTAR_COLETA.bat` e envie o resultado completo do erro!**
 
+
+

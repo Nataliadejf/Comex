@@ -26,3 +26,5 @@ echo Use a URL do serviço que retornar {"status":"healthy"} ou similar.
 echo.
 pause
 
+
+

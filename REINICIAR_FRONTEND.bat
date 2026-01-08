@@ -19,7 +19,7 @@ if exist .env (
 ) else (
     echo AVISO: Arquivo .env nao encontrado!
     echo Criando arquivo .env...
-    echo REACT_APP_API_URL=https://comex-tsba.onrender.com > .env
+    echo REACT_APP_API_URL=http://localhost:8000 > .env
 )
 
 echo.
@@ -32,4 +32,7 @@ echo Pressione Ctrl+C para parar o servidor
 echo.
 
 npm start
+
+
+
 

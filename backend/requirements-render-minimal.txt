@@ -28,3 +28,8 @@ loguru==0.7.2
 # - openpyxl, reportlab (não essenciais para API básica)
 # - pytest (não necessário em produção)
 
+
+
+
+
+

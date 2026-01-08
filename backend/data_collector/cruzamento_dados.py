@@ -210,3 +210,5 @@ class CruzamentoDados:
             "empresas_unicas": len(empresas_unicas),
         }
 
+
+

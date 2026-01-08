@@ -112,3 +112,5 @@ Se você deixou `DATABASE_URL` vazio:
 
 **Última atualização**: 05/01/2026
 
+
+

@@ -115,3 +115,5 @@ O sistema já está configurado! Mas você pode ajustar:
 
 **Última atualização**: 05/01/2026
 
+
+

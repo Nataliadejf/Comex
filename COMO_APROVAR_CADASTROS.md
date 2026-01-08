@@ -119,3 +119,5 @@ Para implementar envio real de email:
 **Email do administrador**: nataliadejesus2@gmail.com
 **Última atualização**: 05/01/2026
 
+
+

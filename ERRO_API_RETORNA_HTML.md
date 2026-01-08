@@ -93,3 +93,5 @@ O Comex Stat pode não ter uma API REST pública. Nesse caso:
 
 **Última atualização**: 05/01/2026
 
+
+

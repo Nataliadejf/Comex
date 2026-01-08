@@ -175,3 +175,5 @@ Para obter a URL correta e documentação da API oficial:
 
 **Última atualização**: 05/01/2026
 
+
+

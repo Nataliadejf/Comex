@@ -199,6 +199,44 @@ export const ncmAPI = {
   getAnalise: (ncm) => api.get(`/ncm/${ncm}/analise`),
 };
 
+// API de Empresas Recomendadas
+export const empresasRecomendadasAPI = {
+  getEmpresasRecomendadas: async (limite = 100, tipo = null, uf = null, ncm = null) => {
+    const params = { limite };
+    if (tipo) params.tipo = tipo;
+    if (uf) params.uf = uf;
+    if (ncm) params.ncm = ncm;
+    const response = await api.get('/dashboard/empresas-recomendadas', { params });
+    return response.data;
+  },
+  
+  getEmpresasImportadoras: async (limite = 10) => {
+    const response = await api.get('/dashboard/empresas-importadoras', { params: { limite } });
+    return response.data;
+  },
+  
+  getEmpresasExportadoras: async (limite = 10) => {
+    const response = await api.get('/dashboard/empresas-exportadoras', { params: { limite } });
+    return response.data;
+  },
+};
+
+// API de Dados ComexStat
+export const comexstatAPI = {
+  getDadosComexstat: async () => {
+    const response = await api.get('/dashboard/dados-comexstat');
+    return response.data;
+  },
+  
+  getDadosNCM: async (limite = 100, uf = null, tipo = null) => {
+    const params = { limite };
+    if (uf) params.uf = uf;
+    if (tipo) params.tipo = tipo;
+    const response = await api.get('/dashboard/dados-ncm-comexstat', { params });
+    return response.data;
+  },
+};
+
 export const coletaAPI = {
   coletarDados: () => api.post('/coletar-dados'),
 };

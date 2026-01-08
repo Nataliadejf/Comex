@@ -85,3 +85,5 @@ O sistema tem um scraper que pode baixar dados do portal web, mas requer:
 
 **Última atualização**: 05/01/2026
 
+
+

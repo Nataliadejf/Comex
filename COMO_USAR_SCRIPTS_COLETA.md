@@ -219,3 +219,5 @@ Os scripts salvam arquivos em `comex_data/logs/`:
 
 **Última atualização**: 05/01/2026
 
+
+

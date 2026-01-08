@@ -215,3 +215,5 @@ Após configurar o PostgreSQL:
 
 **Última atualização**: 05/01/2026
 
+
+

@@ -131,3 +131,5 @@ fetch('https://comex-backend-wjco.onrender.com/popular-dados-exemplo', {
 
 **Última atualização**: 05/01/2026
 
+
+

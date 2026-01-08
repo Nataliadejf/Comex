@@ -242,3 +242,5 @@ Nenhuma configuração adicional necessária. O sistema usa:
 
 **Última atualização**: 06/01/2026
 
+
+

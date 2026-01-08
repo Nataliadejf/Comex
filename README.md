@@ -1,261 +1,188 @@
-# 🚀 Comex Analyzer - Sistema de Análise de Comércio Exterior
+# Comex Analyzer
 
-Sistema completo para análise de dados do comércio exterior brasileiro, desenvolvido com Python (FastAPI) e React (Electron).
+Sistema desktop para análise de dados do comércio exterior brasileiro (Comex Stat).
 
-## 📋 Índice
+## 📋 Descrição
 
-- [Funcionalidades](#-funcionalidades)
-- [Tecnologias](#-tecnologias)
-- [Instalação](#-instalação)
-- [Como Popular com Dados](#-como-popular-com-dados)
-- [Uso](#-uso)
-- [Estrutura do Projeto](#-estrutura-do-projeto)
-- [Documentação](#-documentação)
+Aplicação desktop desenvolvida em Python (FastAPI) + Electron + React para coleta, armazenamento e análise de dados públicos do Portal Comex Stat do MDIC.
 
-## ✨ Funcionalidades
+## 🚀 Tecnologias
 
-### Dashboard Principal
-- ✅ Métricas principais (Volume, Valor Total, Operações)
-- ✅ Gráficos interativos (Evolução temporal, Top NCMs, Top Países)
-- ✅ Filtros avançados (Período, NCM, Tipo, Empresa)
-- ✅ Exportação de relatórios (Excel)
-- ✅ Design moderno inspirado em Logcomex
+- **Backend**: Python 3.11+, FastAPI, SQLAlchemy
+- **Frontend**: Electron, React, Recharts, Ant Design
+- **Banco de Dados**: SQLite (local)
+- **Processamento**: Pandas, NumPy
 
-### Busca Avançada
-- ✅ Filtros múltiplos (NCM, Período, Tipo, País, UF, Via, Valores)
-- ✅ Paginação de resultados
-- ✅ Exportação de tabelas
+## 📁 Estrutura do Projeto
 
-### Análise por NCM
-- ✅ Histórico de preços médios
-- ✅ Principais importadores/exportadores
-- ✅ Evolução temporal
-- ✅ Variação de volume
+```
+comex_analyzer/
+├── backend/              # API FastAPI
+├── frontend/             # Aplicação Electron + React
+├── data_collector/       # Módulo de coleta de dados
+├── database/             # Modelos e migrações
+├── utils/                # Utilitários
+├── tests/                # Testes unitários
+└── docs/                 # Documentação
+```
 
-## 🛠 Tecnologias
-
-### Backend
-- **Python 3.11+**
-- **FastAPI** - Framework web
-- **SQLAlchemy** - ORM
-- **Pandas** - Processamento de dados
-- **SQLite** - Banco de dados local
-
-### Frontend
-- **React 18**
-- **Electron** - Aplicação desktop
-- **Ant Design** - Componentes UI
-- **Recharts** - Gráficos
-- **Axios** - Cliente HTTP
-
-## 📦 Instalação
-
-### Pré-requisitos
-- Python 3.11+
-- Node.js 18+
-- npm ou yarn
+## 🛠️ Instalação
 
 ### Backend
 
-```powershell
+```bash
 cd backend
-
-# Criar ambiente virtual
 python -m venv venv
-
-# Ativar ambiente virtual
-.\venv\Scripts\Activate.ps1
-
-# Instalar dependências
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ### Frontend
 
-```powershell
+```bash
 cd frontend
-
-# Instalar dependências
 npm install
 ```
 
-## 📊 Como Popular com Dados
+## ▶️ Execução
 
-### Método Recomendado: Download Manual de CSV
+### Backend
 
-1. **Baixe arquivos CSV** do portal Comex Stat:
-   - URL: https://comexstat.mdic.gov.br/
-   - Arquivos: `EXP_2025.csv` e `IMP_2025.csv`
-   - Salve em: `D:\comex\2025\` ou `D:\NatFranca\raw\`
-
-2. **Processe os arquivos**:
-   ```powershell
-   cd backend
-   .\venv\Scripts\Activate.ps1
-   python scripts/process_files.py
-   ```
-
-3. **Verifique os dados**:
-   ```powershell
-   python -c "from database import get_db, OperacaoComex; from sqlalchemy import func; db = next(get_db()); print(f'Registros: {db.query(func.count(OperacaoComex.id)).scalar():,}')"
-   ```
-
-📖 **Guia completo**: Veja `PASSO_A_PASSO_POPULAR_DADOS.md`
-
-## 🚀 Uso
-
-### Iniciar Backend
-
-```powershell
+```bash
 cd backend
-.\venv\Scripts\Activate.ps1
-python run.py
-```
-
-Backend estará disponível em: **http://localhost:8000**
-
-### Iniciar Frontend
-
-```powershell
-cd frontend
-npm start
-```
-
-Frontend estará disponível em: **http://localhost:3000**
-
-### Acessar Dashboard
-
-Abra o navegador em: **http://localhost:3000**
-
-## 📁 Estrutura do Projeto
-
-```
-projeto_comex/
-├── backend/
-│   ├── main.py                 # Aplicação FastAPI
-│   ├── config.py               # Configurações
-│   ├── database/               # Modelos e conexão DB
-│   ├── data_collector/         # Coleta de dados
-│   │   ├── api_client.py      # Cliente API Comex Stat
-│   │   ├── transformer.py     # Transformação de dados
-│   │   └── collector.py       # Coletor principal
-│   ├── scripts/                # Scripts utilitários
-│   │   ├── process_files.py   # Processar CSV
-│   │   └── recriar_banco.py   # Recriar banco
-│   └── utils/                  # Utilitários
-├── frontend/
-│   ├── src/
-│   │   ├── pages/              # Páginas
-│   │   │   ├── Dashboard.js   # Dashboard principal
-│   │   │   └── BuscaAvancada.js
-│   │   ├── components/         # Componentes
-│   │   └── services/           # API client
-│   └── package.json
-└── docs/                        # Documentação
-```
-
-## 📖 Documentação
-
-- **`PASSO_A_PASSO_POPULAR_DADOS.md`** - Como popular o dashboard
-- **`COMO_POPULAR_DASHBOARD.md`** - Guia completo de coleta de dados
-- **`DASHBOARD_LOGCOMEX_STYLE.md`** - Design do dashboard
-- **`RESUMO_ALTERACOES.md`** - Histórico de alterações
-
-## 🔧 Configuração
-
-### Variáveis de Ambiente
-
-Crie `.env` na pasta `backend`:
-
-```env
-# Diretório de dados
-DATA_DIR=D:\NatFranca
-
-# Database
-DATABASE_URL=sqlite:///D:/NatFranca/database/comex.db
-
-# API Comex Stat (opcional)
-COMEX_STAT_API_URL=https://api-comexstat.mdic.gov.br
-COMEX_STAT_API_KEY=sua_chave_aqui
+python main.py
 ```
 
 ### Frontend
 
-Crie `.env` na pasta `frontend`:
-
-```env
-REACT_APP_API_URL=http://localhost:8000
+```bash
+cd frontend
+npm start
 ```
+
+## 📊 Funcionalidades
+
+- ✅ Coleta automática de dados do Comex Stat
+- ✅ Dashboard com métricas principais
+- ✅ Busca avançada com múltiplos filtros
+- ✅ Análise detalhada por NCM
+- ✅ Exportação de relatórios (Excel, CSV, PDF)
+- ✅ Gráficos interativos
+- ✅ Atualização incremental de dados
+
+## 📚 Documentação
+
+- **[Guia de Instalação](INSTALL.md)** - Instruções detalhadas de instalação
+- **[Início Rápido](QUICKSTART.md)** - Comece em 5 minutos
+- **[Documentação da API](docs/API.md)** - Referência completa da API
+- **[Arquitetura](docs/ARQUITETURA.md)** - Visão técnica do sistema
+- **[Changelog](CHANGELOG.md)** - Histórico de versões
 
 ## 🎯 Funcionalidades Principais
 
-### Dashboard
-- Filtros: Período, NCM, Tipo de Operação, Nome da Empresa
-- Métricas: Volume, Valor Total, Operações
-- Gráficos: Evolução temporal, Top NCMs, Top Países
-- Exportação: Relatório completo em Excel
+### 1. Coleta de Dados
+- Verificação automática de API oficial do Comex Stat
+- Fallback para download automatizado via Selenium
+- Coleta dos últimos 3 meses
+- Atualização incremental (evita duplicatas)
+- Sistema de retry em caso de falha
 
-### Busca Avançada
-- Filtros múltiplos com paginação
-- Resultados em tabela
-- Exportação de dados
+### 2. Dashboard
+- Cards com métricas principais:
+  - Volume total de importações/exportações
+  - Valor total movimentado (USD)
+  - Principais NCMs e países
+- Gráficos interativos:
+  - Evolução temporal (linha)
+  - Distribuição por NCM (pizza)
+  - Top países (barras)
 
-### Identificação de Importador/Exportador
-- Campos `is_importacao` e `is_exportacao`
-- Filtros claros por tipo de operação
+### 3. Busca Avançada
+- Filtros múltiplos:
+  - NCM (8 dígitos)
+  - Período (data início/fim)
+  - Tipo de operação
+  - País
+  - UF
+  - Via de transporte
+  - Faixa de valor FOB
+  - Faixa de peso
+- Paginação de resultados
+- Exportação de resultados
 
-## 📊 Banco de Dados
+### 4. Análise por NCM
+- Estatísticas detalhadas
+- Histórico de preços médios
+- Principais importadores/exportadores
+- Evolução temporal
+- Variação de volume
 
-- **Localização**: `D:\NatFranca\database\comex.db`
-- **Tipo**: SQLite
-- **Tabelas principais**:
-  - `operacoes_comex` - Operações de comércio exterior
-  - `ncm_info` - Informações sobre NCMs
-  - `coleta_log` - Logs de coletas
+### 5. Exportação
+- Excel (.xlsx)
+- CSV (.csv)
+- PDF (.pdf) - opcional
 
-## 🔄 Scripts Úteis
+## 🔒 Segurança e Privacidade
 
-### Processar Arquivos CSV
-```powershell
-python scripts/process_files.py
+- ✅ Utiliza apenas dados públicos do Portal Comex Stat
+- ✅ Não faz scraping de sites privados
+- ✅ Dados armazenados localmente
+- ✅ Sem envio de dados para servidores externos
+
+## ⚠️ Observações Importantes
+
+### Sobre Logcomex.com
+- Este projeto utiliza **apenas** Logcomex.com como referência visual/UX
+- **NÃO** faz scraping de dados da Logcomex
+- **NÃO** acessa APIs privadas
+- **NÃO** baixa arquivos da Logcomex
+- Use apenas como inspiração de design
+
+### Portal Comex Stat
+- Dados públicos do MDIC
+- Estrutura do portal pode mudar (scraper pode precisar ajustes)
+- API oficial pode não estar disponível (fallback implementado)
+
+## 🛠️ Desenvolvimento
+
+### Estrutura de Pastas
+
 ```
-
-### Recriar Banco de Dados
-```powershell
-python scripts/recriar_banco.py
-```
-
-### Adicionar Campos de Identificação
-```powershell
-python scripts/adicionar_campos_importador_exportador.py
-```
-
-## 🐛 Troubleshooting
-
-### Dashboard não carrega dados
-1. Verifique se há dados no banco
-2. Execute `python scripts/process_files.py`
-3. Reinicie o backend
-
-### Erro ao processar CSV
-1. Verifique se o arquivo está no formato correto
-2. Confirme que está em `D:\comex\2025\` ou `D:\NatFranca\raw\`
-3. Verifique logs em `D:\NatFranca\logs\`
-
-### Banco corrompido
-```powershell
-python scripts/recriar_banco.py
-python scripts/process_files.py
+comex_analyzer/
+├── backend/                 # Backend Python
+│   ├── api/                 # Endpoints da API
+│   ├── data_collector/      # Coleta de dados
+│   ├── database/            # Modelos e DB
+│   ├── utils/               # Utilitários
+│   └── main.py              # Aplicação principal
+├── frontend/                # Frontend React + Electron
+│   ├── src/
+│   │   ├── components/      # Componentes React
+│   │   ├── pages/           # Páginas principais
+│   │   └── services/        # Serviços API
+│   └── public/              # Arquivos públicos
+├── docs/                    # Documentação
+└── D:\comex_data\           # Dados (criado automaticamente)
+    ├── raw/                 # Dados brutos
+    ├── processed/           # Dados processados
+    ├── database/            # Banco SQLite
+    ├── exports/             # Relatórios exportados
+    └── logs/                # Logs do sistema
 ```
 
 ## 📝 Licença
 
-Este projeto é de uso interno.
+Este projeto utiliza apenas dados públicos do Portal Comex Stat.
 
-## 👥 Autor
+## 🤝 Contribuindo
 
-Desenvolvido para análise de dados do comércio exterior brasileiro.
+Contribuições são bem-vindas! Por favor:
+1. Faça fork do projeto
+2. Crie uma branch para sua feature
+3. Commit suas mudanças
+4. Abra um Pull Request
 
----
+## 📧 Suporte
 
-**Última atualização**: Janeiro 2025
+Para questões e suporte, consulte a documentação ou abra uma issue no repositório.
+
