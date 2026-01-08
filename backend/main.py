@@ -799,8 +799,6 @@ async def get_dashboard_stats(
     
     # PRIMEIRO: Tentar usar tabela consolidada EmpresasRecomendadas (mais eficiente)
     try:
-        from database.models import EmpresasRecomendadas
-        
         total_emp_rec = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
         if total_emp_rec > 0:
             logger.info(f"Usando tabela consolidada EmpresasRecomendadas ({total_emp_rec} empresas)")
