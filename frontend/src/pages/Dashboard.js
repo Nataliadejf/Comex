@@ -534,7 +534,7 @@ const Dashboard = () => {
   }
 
   // Preparar dados para gráficos
-  const evolucaoData = Object.entries(stats.registros_por_mes || {})
+  const evolucaoData = Object.entries(statsFinal.registros_por_mes || {})
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([mes, count]) => {
       // Formato do backend é "YYYY-MM", converter para formato legível
