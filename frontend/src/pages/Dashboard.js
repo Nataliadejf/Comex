@@ -590,14 +590,14 @@ const Dashboard = () => {
 
   // Top Importadores (usando empresas recomendadas se disponível, senão países)
   const topImportadores = (() => {
-    if (!stats) return [];
+    if (!statsFinal) return [];
     
     if (empresasImportadorasRecomendadas.length > 0) {
       return empresasImportadorasRecomendadas
         .slice(0, 5)
         .map((empresa, idx) => {
           const valorTotal = empresa.valor_total || empresa.importado_rs || 0;
-          const valorTotalUsd = stats.valor_total_usd || 1;
+          const valorTotalUsd = statsFinal.valor_total_usd || 1;
           return {
             cor: COLORS[idx % COLORS.length],
             nome: String(empresa.pais || empresa.razao_social || empresa.nome || 'N/A'),
@@ -608,17 +608,17 @@ const Dashboard = () => {
         });
     }
     
-    if (stats.principais_paises && Array.isArray(stats.principais_paises)) {
-      return stats.principais_paises
+    if (principaisPaises && Array.isArray(principaisPaises)) {
+      return principaisPaises
         .filter((_, idx) => idx < 5)
         .map((pais, idx) => {
           const valorTotal = pais.valor_total || 0;
-          const valorTotalUsd = stats.valor_total_usd || 1;
+          const valorTotalUsd = statsFinal.valor_total_usd || 1;
           return {
             cor: COLORS[idx % COLORS.length],
             nome: String(pais.pais || 'N/A'),
             fob: Number(valorTotal) || 0,
-            peso: Number((stats.volume_importacoes || 0) * (valorTotal / valorTotalUsd)) || 0,
+            peso: Number((statsFinal.volume_importacoes || 0) * (valorTotal / valorTotalUsd)) || 0,
             percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
           };
         });
@@ -629,14 +629,14 @@ const Dashboard = () => {
 
   // Top Exportadores (usando empresas recomendadas se disponível, senão países)
   const topExportadores = (() => {
-    if (!stats) return [];
+    if (!statsFinal) return [];
     
     if (empresasExportadorasRecomendadas.length > 0) {
       return empresasExportadorasRecomendadas
         .slice(0, 5)
         .map((empresa, idx) => {
           const valorTotal = empresa.valor_total || empresa.exportado_rs || 0;
-          const valorTotalUsd = stats.valor_total_usd || 1;
+          const valorTotalUsd = statsFinal.valor_total_usd || 1;
           return {
             cor: COLORS[idx % COLORS.length],
             nome: String(empresa.pais || empresa.razao_social || empresa.nome || 'N/A'),
@@ -647,17 +647,17 @@ const Dashboard = () => {
         });
     }
     
-    if (stats.principais_paises && Array.isArray(stats.principais_paises)) {
-      return stats.principais_paises
+    if (principaisPaises && Array.isArray(principaisPaises)) {
+      return principaisPaises
         .filter((_, idx) => idx < 5)
         .map((pais, idx) => {
           const valorTotal = pais.valor_total || 0;
-          const valorTotalUsd = stats.valor_total_usd || 1;
+          const valorTotalUsd = statsFinal.valor_total_usd || 1;
           return {
             cor: COLORS[idx % COLORS.length],
             nome: String(pais.pais || 'N/A'),
             fob: Number(valorTotal) || 0,
-            peso: Number((stats.volume_exportacoes || 0) * (valorTotal / valorTotalUsd)) || 0,
+            peso: Number((statsFinal.volume_exportacoes || 0) * (valorTotal / valorTotalUsd)) || 0,
             percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
           };
         });
@@ -668,13 +668,13 @@ const Dashboard = () => {
 
   // Dados para gráfico de linha de importadores/exportadores ao longo do tempo
   // Usar dados reais de valores_por_mes distribuídos proporcionalmente
-  const importadoresTempoData = stats && stats.valores_por_mes
-    ? Object.entries(stats.valores_por_mes)
+  const importadoresTempoData = statsFinal && statsFinal.valores_por_mes
+    ? Object.entries(statsFinal.valores_por_mes)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([mes]) => {
           const [ano, mesNum] = mes.split('-');
           const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-          const valorTotalMes = stats.valores_por_mes?.[mes] || 0;
+          const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
           const data = { mes: mesFormatado };
           topImportadores.forEach((imp, idx) => {
             // Distribuir proporcionalmente ao percentual de cada importador
@@ -685,13 +685,13 @@ const Dashboard = () => {
         })
     : [];
 
-  const exportadoresTempoData = stats && stats.valores_por_mes
-    ? Object.entries(stats.valores_por_mes)
+  const exportadoresTempoData = statsFinal && statsFinal.valores_por_mes
+    ? Object.entries(statsFinal.valores_por_mes)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([mes]) => {
           const [ano, mesNum] = mes.split('-');
           const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-          const valorTotalMes = stats.valores_por_mes?.[mes] || 0;
+          const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
           const data = { mes: mesFormatado };
           topExportadores.forEach((exp, idx) => {
             // Distribuir proporcionalmente ao percentual de cada exportador
@@ -865,7 +865,7 @@ const Dashboard = () => {
                 <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatCurrency(
                     tipoOperacao === 'Exportação' ? 0 : 
-                    (stats.valor_total_importacoes ?? (tipoOperacao === null ? stats.valor_total_usd : 0))
+                    (statsFinal.valor_total_importacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
@@ -892,7 +892,7 @@ const Dashboard = () => {
                   Quantidade em Peso
                 </div>
                 <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
-                  {formatWeight(stats.volume_importacoes || 0)} KG
+                  {formatWeight(statsFinal.volume_importacoes || 0)} KG
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
                   Peso total transportado no período
@@ -920,7 +920,7 @@ const Dashboard = () => {
                 <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatCurrency(
                     tipoOperacao === 'Importação' ? 0 : 
-                    (stats.valor_total_exportacoes ?? (tipoOperacao === null ? stats.valor_total_usd : 0))
+                    (statsFinal.valor_total_exportacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
@@ -980,7 +980,7 @@ const Dashboard = () => {
                     VER MAIS
                   </Button>
                   <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
-                    Top {topImportadores.length} do total de {stats.principais_paises?.length || 0}
+                    Top {topImportadores.length} do total de {principaisPaises?.length || 0}
                   </div>
                 </div>
               </>
@@ -1078,7 +1078,7 @@ const Dashboard = () => {
                     VER MAIS
                   </Button>
                   <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
-                    Top {topExportadores.length} do total de {stats.principais_paises?.length || 0}
+                    Top {topExportadores.length} do total de {principaisPaises?.length || 0}
                   </div>
                 </div>
               </>
@@ -1198,10 +1198,10 @@ const Dashboard = () => {
             <div style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
               Valor total importado por NCM
             </div>
-            {stats.principais_ncms && stats.principais_ncms.length > 0 ? (
+            {principaisNcms && principaisNcms.length > 0 ? (
               <div>
-                {stats.principais_ncms.slice(0, 5).map((ncm, idx) => {
-                  const percentual = (ncm.valor_total / stats.valor_total_usd) * 100;
+                {principaisNcms.slice(0, 5).map((ncm, idx) => {
+                  const percentual = (ncm.valor_total / statsFinal.valor_total_usd) * 100;
                   return (
                     <div key={idx} style={{ marginBottom: '16px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
