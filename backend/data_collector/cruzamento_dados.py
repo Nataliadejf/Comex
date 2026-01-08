@@ -172,7 +172,10 @@ class CruzamentoDados:
             if resultado["empresa_identificada"]:
                 identificadas += 1
         
-        logger.info(f"✅ {identificadas}/{len(operacoes)} operações identificadas com empresas ({identificadas/len(operacoes)*100:.1f}%)")
+        if len(operacoes) > 0:
+            logger.info(f"✅ {identificadas}/{len(operacoes)} operações identificadas com empresas ({identificadas/len(operacoes)*100:.1f}%)")
+        else:
+            logger.info(f"✅ {identificadas} operações identificadas (nenhuma operação para processar)")
         
         return resultados
     
