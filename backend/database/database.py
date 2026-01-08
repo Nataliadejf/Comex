@@ -13,11 +13,44 @@ from .models import Base
 # Obter DATABASE_URL do ambiente ou usar configuração padrão
 database_url = os.getenv("DATABASE_URL") or settings.database_url
 
+# Validar formato da URL antes de usar
+def is_valid_database_url(url):
+    """Valida se a URL do banco de dados está no formato correto."""
+    if not url or url == "":
+        return False
+    
+    # Verificar se é uma URL válida (deve começar com sqlite:// ou postgresql:// ou postgres://)
+    if url.startswith("sqlite:///"):
+        return True
+    
+    if url.startswith("postgresql://") or url.startswith("postgres://"):
+        # Verificar se tem formato básico: postgresql://user:pass@host:port/db
+        if "@" not in url or ":" not in url:
+            return False
+        # Verificar se não é apenas um hash/ID
+        if len(url) < 50:  # URLs válidas têm pelo menos 50 caracteres
+            return False
+        return True
+    
+    return False
+
 # Render usa postgres://, mas SQLAlchemy precisa de postgresql://
 if database_url and database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 
-# Se não tiver DATABASE_URL, usar SQLite local
+# Validar URL antes de usar
+if database_url and not is_valid_database_url(database_url):
+    import warnings
+    warnings.warn(
+        f"⚠️ DATABASE_URL inválida detectada: '{database_url[:50]}...' "
+        f"(tamanho: {len(database_url)}). "
+        f"Usando SQLite local como fallback. "
+        f"Configure uma URL válida no formato: postgresql://user:pass@host:port/db",
+        UserWarning
+    )
+    database_url = None
+
+# Se não tiver DATABASE_URL válida, usar SQLite local
 if not database_url or database_url == "":
     db_path = settings.data_dir / "database" / "comex.db"
     database_url = f"sqlite:///{db_path.absolute()}"
