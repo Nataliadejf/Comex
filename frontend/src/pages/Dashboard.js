@@ -219,6 +219,7 @@ const Dashboard = () => {
       const response = await dashboardAPI.getStats(params);
       
       console.log('✅ Dados recebidos:', response.data);
+      console.log('📊 Estrutura dos dados:', JSON.stringify(response.data, null, 2));
       
       // Validar se a resposta é válida
       if (!response || !response.data) {
@@ -561,54 +562,82 @@ const Dashboard = () => {
   }, [stats]);
 
   // Top Importadores (usando empresas recomendadas se disponível, senão países)
-  const topImportadores = empresasImportadorasRecomendadas.length > 0
-    ? empresasImportadorasRecomendadas
+  const topImportadores = (() => {
+    if (!stats) return [];
+    
+    if (empresasImportadorasRecomendadas.length > 0) {
+      return empresasImportadorasRecomendadas
         .slice(0, 5)
-        .map((empresa, idx) => ({
-          ...empresa,
-          cor: COLORS[idx % COLORS.length],
-          nome: empresa.pais || empresa.razao_social || 'N/A',
-          fob: empresa.valor_total || 0,
-          peso: empresa.peso_participacao || 0,
-          percentual: stats.valor_total_usd > 0 
-            ? ((empresa.valor_total / stats.valor_total_usd) * 100) 
-            : 0,
-        }))
-    : stats.principais_paises
-        ?.filter((_, idx) => idx < 5)
-        .map((pais, idx) => ({
-          ...pais,
-          cor: COLORS[idx % COLORS.length],
-          nome: pais.pais || 'N/A',
-          fob: pais.valor_total || 0,
-          peso: (stats.volume_importacoes * (pais.valor_total / stats.valor_total_usd)) || 0,
-          percentual: ((pais.valor_total / stats.valor_total_usd) * 100) || 0,
-        })) || [];
+        .map((empresa, idx) => {
+          const valorTotal = empresa.valor_total || empresa.importado_rs || 0;
+          const valorTotalUsd = stats.valor_total_usd || 1;
+          return {
+            cor: COLORS[idx % COLORS.length],
+            nome: String(empresa.pais || empresa.razao_social || empresa.nome || 'N/A'),
+            fob: Number(valorTotal) || 0,
+            peso: Number(empresa.peso_participacao || empresa.peso || 0) || 0,
+            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
+          };
+        });
+    }
+    
+    if (stats.principais_paises && Array.isArray(stats.principais_paises)) {
+      return stats.principais_paises
+        .filter((_, idx) => idx < 5)
+        .map((pais, idx) => {
+          const valorTotal = pais.valor_total || 0;
+          const valorTotalUsd = stats.valor_total_usd || 1;
+          return {
+            cor: COLORS[idx % COLORS.length],
+            nome: String(pais.pais || 'N/A'),
+            fob: Number(valorTotal) || 0,
+            peso: Number((stats.volume_importacoes || 0) * (valorTotal / valorTotalUsd)) || 0,
+            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
+          };
+        });
+    }
+    
+    return [];
+  })();
 
   // Top Exportadores (usando empresas recomendadas se disponível, senão países)
-  const topExportadores = empresasExportadorasRecomendadas.length > 0
-    ? empresasExportadorasRecomendadas
+  const topExportadores = (() => {
+    if (!stats) return [];
+    
+    if (empresasExportadorasRecomendadas.length > 0) {
+      return empresasExportadorasRecomendadas
         .slice(0, 5)
-        .map((empresa, idx) => ({
-          ...empresa,
-          cor: COLORS[idx % COLORS.length],
-          nome: empresa.pais || empresa.razao_social || 'N/A',
-          fob: empresa.valor_total || 0,
-          peso: empresa.peso_participacao || 0,
-          percentual: stats.valor_total_usd > 0 
-            ? ((empresa.valor_total / stats.valor_total_usd) * 100) 
-            : 0,
-        }))
-    : stats.principais_paises
-        ?.filter((_, idx) => idx < 5)
-        .map((pais, idx) => ({
-          ...pais,
-          cor: COLORS[idx % COLORS.length],
-          nome: pais.pais || 'N/A',
-          fob: pais.valor_total || 0,
-          peso: (stats.volume_exportacoes * (pais.valor_total / stats.valor_total_usd)) || 0,
-          percentual: ((pais.valor_total / stats.valor_total_usd) * 100) || 0,
-        })) || [];
+        .map((empresa, idx) => {
+          const valorTotal = empresa.valor_total || empresa.exportado_rs || 0;
+          const valorTotalUsd = stats.valor_total_usd || 1;
+          return {
+            cor: COLORS[idx % COLORS.length],
+            nome: String(empresa.pais || empresa.razao_social || empresa.nome || 'N/A'),
+            fob: Number(valorTotal) || 0,
+            peso: Number(empresa.peso_participacao || empresa.peso || 0) || 0,
+            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
+          };
+        });
+    }
+    
+    if (stats.principais_paises && Array.isArray(stats.principais_paises)) {
+      return stats.principais_paises
+        .filter((_, idx) => idx < 5)
+        .map((pais, idx) => {
+          const valorTotal = pais.valor_total || 0;
+          const valorTotalUsd = stats.valor_total_usd || 1;
+          return {
+            cor: COLORS[idx % COLORS.length],
+            nome: String(pais.pais || 'N/A'),
+            fob: Number(valorTotal) || 0,
+            peso: Number((stats.volume_exportacoes || 0) * (valorTotal / valorTotalUsd)) || 0,
+            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
+          };
+        });
+    }
+    
+    return [];
+  })();
 
   // Dados para gráfico de linha de importadores/exportadores ao longo do tempo
   // Usar dados reais de valores_por_mes distribuídos proporcionalmente
