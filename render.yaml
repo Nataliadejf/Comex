@@ -35,35 +35,9 @@ services:
       - key: DEBUG
         value: "false"
       
-      # Python
+      # Python - IMPORTANTE: Usar 3.11.8 para compatibilidade com versões antigas
       - key: PYTHON_VERSION
-        value: "3.11.0"
-    envVars:
-      # Database - Configure manualmente no Render Dashboard após criar PostgreSQL
-      - key: DATABASE_URL
-        sync: false
-      
-      # API Externa Comex Stat
-      - key: COMEX_STAT_API_URL
-        value: https://comexstat.mdic.gov.br
-      
-      - key: COMEX_STAT_API_KEY
-        value: ""
-      
-      # Secret Key para JWT
-      - key: SECRET_KEY
-        generateValue: true
-      
-      # Ambiente
-      - key: ENVIRONMENT
-        value: production
-      
-      - key: DEBUG
-        value: "false"
-      
-      # Python
-      - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: "3.11.8"
 
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"

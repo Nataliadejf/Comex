@@ -1,16 +1,16 @@
 # Requirements ULTRA minimalistas para Render.com
-# Apenas o essencial para a API funcionar
+# Versões compatíveis com Python 3.11 (forçar no Render)
 # SEM dependências que requerem compilação Rust ou C pesada
-# Versões ANTIGAS e ESTÁVEIS com wheels pré-compilados garantidos
+# Versões ESTÁVEIS com wheels pré-compilados garantidos
 
-# API Framework (versões antigas e estáveis)
+# API Framework (versões estáveis compatíveis com Python 3.11)
 fastapi==0.95.2
 uvicorn==0.22.0
 pydantic==1.10.7
 # pydantic-settings não existe para Pydantic v1 - usando BaseSettings do pydantic diretamente
 
-# Database (SQLAlchemy + driver PostgreSQL binário)
-sqlalchemy==1.4.46
+# Database (SQLAlchemy 1.4.x - última versão estável da série 1.4)
+sqlalchemy==1.4.48
 psycopg2-binary==2.9.6
 
 # HTTP Client (aiohttp é puramente Python, sem Rust - assíncrono)
@@ -28,16 +28,19 @@ schedule==1.2.0
 
 # Autenticação (versões que não requerem compilação Rust)
 PyJWT==2.8.0
-passlib==1.7.4
+passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 
 # Data processing (necessário para análise CNAE e empresas recomendadas)
+# IMPORTANTE: numpy deve ser instalado ANTES do pandas
+numpy==1.24.3
 pandas==2.0.3
 openpyxl==3.1.2
 
 # NOTA CRÍTICA: 
-# - Versões ANTIGAS usadas para garantir wheels pré-compilados
+# - Versões compatíveis com Python 3.11.8 (forçar no Render)
 # - Nenhuma dependência transitiva deve requerer Rust
+# - numpy instalado ANTES do pandas (dependência obrigatória)
 # - Se ainda falhar, pode ser necessário usar requests ao invés de httpx
 
 
