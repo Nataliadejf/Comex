@@ -803,7 +803,7 @@ async def get_dashboard_stats(
             logger.info("Tentando buscar dados das novas tabelas (ComercioExterior e Empresa)")
             data_corte = datetime.now() - timedelta(days=30 * meses)
             
-            # Volumes e valores das novas tabelas
+            # Primeiro tentar com filtro de data
             importacoes = db.query(func.sum(ComercioExterior.valor_usd)).filter(
                 ComercioExterior.tipo == 'importacao',
                 ComercioExterior.data >= data_corte.date()
@@ -824,15 +824,41 @@ async def get_dashboard_stats(
                 ComercioExterior.data >= data_corte.date()
             ).scalar() or 0.0
             
+            # Se não encontrou com filtro de data, tentar SEM filtro (buscar todos os dados)
+            if importacoes == 0 and exportacoes == 0:
+                logger.info("Nenhum dado encontrado com filtro de data, buscando todos os dados disponíveis...")
+                importacoes = db.query(func.sum(ComercioExterior.valor_usd)).filter(
+                    ComercioExterior.tipo == 'importacao'
+                ).scalar() or 0.0
+                
+                exportacoes = db.query(func.sum(ComercioExterior.valor_usd)).filter(
+                    ComercioExterior.tipo == 'exportacao'
+                ).scalar() or 0.0
+                
+                peso_imp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                    ComercioExterior.tipo == 'importacao'
+                ).scalar() or 0.0
+                
+                peso_exp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                    ComercioExterior.tipo == 'exportacao'
+                ).scalar() or 0.0
+                
+                # Se encontrou dados sem filtro, usar todos os dados (sem filtro de data)
+                if importacoes > 0 or exportacoes > 0:
+                    data_corte = None  # Remover filtro de data
+            
             if importacoes > 0 or exportacoes > 0:
                 # Top NCMs
-                top_ncms_novo = db.query(
+                query_ncms = db.query(
                     ComercioExterior.ncm,
                     ComercioExterior.descricao_ncm,
                     func.sum(ComercioExterior.valor_usd).label('valor_total')
-                ).filter(
-                    ComercioExterior.data >= data_corte.date()
-                ).group_by(
+                )
+                
+                if data_corte:
+                    query_ncms = query_ncms.filter(ComercioExterior.data >= data_corte.date())
+                
+                top_ncms_novo = query_ncms.group_by(
                     ComercioExterior.ncm,
                     ComercioExterior.descricao_ncm
                 ).order_by(
@@ -849,13 +875,17 @@ async def get_dashboard_stats(
                 ]
                 
                 # Top Estados
-                top_estados_novo = db.query(
+                query_estados = db.query(
                     ComercioExterior.estado,
                     func.sum(ComercioExterior.valor_usd).label('valor_total')
                 ).filter(
-                    ComercioExterior.data >= data_corte.date(),
                     ComercioExterior.estado.isnot(None)
-                ).group_by(
+                )
+                
+                if data_corte:
+                    query_estados = query_estados.filter(ComercioExterior.data >= data_corte.date())
+                
+                top_estados_novo = query_estados.group_by(
                     ComercioExterior.estado
                 ).order_by(
                     func.sum(ComercioExterior.valor_usd).desc()
@@ -872,13 +902,16 @@ async def get_dashboard_stats(
                 ]
                 
                 # Valores por mês
-                valores_por_mes_novo = db.query(
+                query_valores_mes = db.query(
                     ComercioExterior.mes,
                     ComercioExterior.ano,
                     func.sum(ComercioExterior.valor_usd).label('valor_total')
-                ).filter(
-                    ComercioExterior.data >= data_corte.date()
-                ).group_by(
+                )
+                
+                if data_corte:
+                    query_valores_mes = query_valores_mes.filter(ComercioExterior.data >= data_corte.date())
+                
+                valores_por_mes_novo = query_valores_mes.group_by(
                     ComercioExterior.mes,
                     ComercioExterior.ano
                 ).order_by(
@@ -892,13 +925,16 @@ async def get_dashboard_stats(
                 }
                 
                 # Pesos por mês
-                pesos_por_mes_novo = db.query(
+                query_pesos_mes = db.query(
                     ComercioExterior.mes,
                     ComercioExterior.ano,
                     func.sum(ComercioExterior.peso_kg).label('peso_total')
-                ).filter(
-                    ComercioExterior.data >= data_corte.date()
-                ).group_by(
+                )
+                
+                if data_corte:
+                    query_pesos_mes = query_pesos_mes.filter(ComercioExterior.data >= data_corte.date())
+                
+                pesos_por_mes_novo = query_pesos_mes.group_by(
                     ComercioExterior.mes,
                     ComercioExterior.ano
                 ).order_by(
@@ -912,13 +948,16 @@ async def get_dashboard_stats(
                 }
                 
                 # Registros por mês
-                registros_por_mes_novo = db.query(
+                query_registros_mes = db.query(
                     ComercioExterior.mes,
                     ComercioExterior.ano,
                     func.count(ComercioExterior.id).label('count')
-                ).filter(
-                    ComercioExterior.data >= data_corte.date()
-                ).group_by(
+                )
+                
+                if data_corte:
+                    query_registros_mes = query_registros_mes.filter(ComercioExterior.data >= data_corte.date())
+                
+                registros_por_mes_novo = query_registros_mes.group_by(
                     ComercioExterior.mes,
                     ComercioExterior.ano
                 ).order_by(
