@@ -66,6 +66,10 @@ const Dashboard = () => {
   const [loadingEmpresasRecomendadas, setLoadingEmpresasRecomendadas] = useState(false);
   const [dadosComexstat, setDadosComexstat] = useState(null);
   const [loadingDadosComexstat, setLoadingDadosComexstat] = useState(false);
+  
+  // Estados para empresas importadoras/exportadoras recomendadas (movido para cima para evitar erro React #310)
+  const [empresasImportadorasRecomendadas, setEmpresasImportadorasRecomendadas] = useState([]);
+  const [empresasExportadorasRecomendadas, setEmpresasExportadorasRecomendadas] = useState([]);
 
   // Função debounce simples
   const debounce = (func, wait) => {
@@ -531,10 +535,6 @@ const Dashboard = () => {
       };
     });
 
-  // Estados para empresas importadoras/exportadoras recomendadas
-  const [empresasImportadorasRecomendadas, setEmpresasImportadorasRecomendadas] = useState([]);
-  const [empresasExportadorasRecomendadas, setEmpresasExportadorasRecomendadas] = useState([]);
-  
   // Carregar empresas recomendadas quando stats carregar
   useEffect(() => {
     const loadEmpresasRecomendadas = async () => {
