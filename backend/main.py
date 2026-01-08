@@ -70,6 +70,14 @@ app.add_middleware(
 if EXPORT_ROUTER_AVAILABLE:
     app.include_router(export_router)
 
+# Router de análise de empresas
+try:
+    from api.analise_empresas import router as analise_router
+    app.include_router(analise_router)
+    logger.info("Router de análise de empresas incluído")
+except ImportError as e:
+    logger.warning(f"Router de análise de empresas não disponível: {e}")
+
 
 # Inicializar banco de dados na startup
 @app.on_event("startup")
