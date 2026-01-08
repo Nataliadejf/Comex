@@ -13,7 +13,9 @@ RUN pip install --upgrade pip setuptools wheel && \
 
 # Copiar código da aplicação
 COPY backend /app/backend
-COPY config.py /app/config.py 2>/dev/null || true
+
+# Copiar config.py se existir na raiz
+COPY config.py /app/ 2>/dev/null || echo "config.py não encontrado na raiz, usando do backend"
 
 # Criar diretório de dados se não existir
 RUN mkdir -p /app/backend/data
