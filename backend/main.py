@@ -1049,19 +1049,49 @@ async def get_dashboard_stats(
                 volume_exp = float(peso_exp)
                 valor_total = float(importacoes + exportacoes)
                 
+                logger.info("="*80)
+                logger.info("📊 TOTAIS DE COMÉRCIO EXTERIOR")
+                logger.info("="*80)
+                logger.info(f"💰 Total Importação (USD): ${valor_total_imp:,.2f}")
+                logger.info(f"💰 Total Exportação (USD): ${valor_total_exp:,.2f}")
+                logger.info(f"💰 Valor Total (USD): ${valor_total:,.2f}")
+                logger.info(f"📦 Volume Importação (kg): {volume_imp:,.2f}")
+                logger.info(f"📦 Volume Exportação (kg): {volume_exp:,.2f}")
+                logger.info(f"📊 Total de NCMs: {len(principais_ncms_list)}")
+                logger.info("="*80)
+                
                 logger.info(f"✅ Dados carregados das novas tabelas: {len(principais_ncms_list)} NCMs, {valor_total:.2f} USD total")
         except Exception as e:
             logger.debug(f"Erro ao buscar dados das novas tabelas: {e}")
     
+    # Garantir que valores sempre sejam calculados (mesmo que zero)
+    if valor_total_imp is None:
+        valor_total_imp = 0.0
+    if valor_total_exp is None:
+        valor_total_exp = 0.0
+    
+    # Log dos totais finais
+    logger.info("="*80)
+    logger.info("📊 RESUMO FINAL DO DASHBOARD")
+    logger.info("="*80)
+    logger.info(f"💰 Total Importação (USD): ${valor_total_imp:,.2f}")
+    logger.info(f"💰 Total Exportação (USD): ${valor_total_exp:,.2f}")
+    logger.info(f"💰 Valor Total (USD): ${valor_total:,.2f}")
+    logger.info(f"📦 Volume Importação (kg): {volume_imp:,.2f}")
+    logger.info(f"📦 Volume Exportação (kg): {volume_exp:,.2f}")
+    logger.info(f"📊 Total de NCMs: {len(principais_ncms_list)}")
+    logger.info(f"📊 Total de Países/Estados: {len(principais_paises_list)}")
+    logger.info("="*80)
+    
     # Se não houver dados, retornar resposta vazia rapidamente (não travar)
     if valor_total == 0 and not principais_ncms_list and not principais_paises_list:
-        logger.info("Nenhum dado encontrado, retornando resposta vazia")
+        logger.warning("⚠️ Nenhum dado encontrado, retornando resposta vazia")
         return DashboardStats(
             volume_importacoes=0.0,
             volume_exportacoes=0.0,
             valor_total_usd=0.0,
-            valor_total_importacoes=None,
-            valor_total_exportacoes=None,
+            valor_total_importacoes=0.0,
+            valor_total_exportacoes=0.0,
             principais_ncms=[],
             principais_paises=[],
             registros_por_mes={},
@@ -1073,8 +1103,8 @@ async def get_dashboard_stats(
         volume_importacoes=float(volume_imp),
         volume_exportacoes=float(volume_exp),
         valor_total_usd=float(valor_total),
-        valor_total_importacoes=float(valor_total_imp) if valor_total_imp else None,
-        valor_total_exportacoes=float(valor_total_exp) if valor_total_exp else None,
+        valor_total_importacoes=float(valor_total_imp) if valor_total_imp > 0 else 0.0,
+        valor_total_exportacoes=float(valor_total_exp) if valor_total_exp > 0 else 0.0,
         principais_ncms=principais_ncms_list if principais_ncms_list else [],
         principais_paises=principais_paises_list if principais_paises_list else [],
         registros_por_mes=registros_dict if registros_dict else {},
