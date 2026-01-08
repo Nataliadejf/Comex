@@ -1,5 +1,13 @@
 """
 Script para importar dados dos arquivos Excel para PostgreSQL.
+
+USO:
+    Localmente:
+        python backend/scripts/import_data.py
+    
+    No Render Shell:
+        cd /opt/render/project/src/backend
+        python scripts/import_data.py
 """
 import sys
 from pathlib import Path
@@ -7,7 +15,7 @@ import os
 import pandas as pd
 from datetime import datetime, date
 from loguru import logger
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 # Mudar para o diretório backend
 backend_dir = Path(__file__).parent.parent
@@ -281,31 +289,99 @@ def main():
     
     # Criar todas as tabelas
     logger.info("Criando/verificando tabelas no banco de dados...")
-    Base.metadata.create_all(bind=engine)
-    logger.success("✅ Tabelas criadas/verificadas")
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.success("✅ Tabelas criadas/verificadas")
+    except Exception as e:
+        logger.error(f"Erro ao criar tabelas: {e}")
+        # Tentar executar schema.sql diretamente
+        try:
+            schema_file = backend_dir / "database" / "schema.sql"
+            if schema_file.exists():
+                logger.info("Tentando executar schema.sql diretamente...")
+                with engine.connect() as conn:
+                    with open(schema_file, 'r', encoding='utf-8') as f:
+                        conn.execute(text(f.read()))
+                    conn.commit()
+                logger.success("✅ Tabelas criadas via schema.sql")
+        except Exception as e2:
+            logger.error(f"Erro ao executar schema.sql: {e2}")
+            raise
     
-    # Caminhos dos arquivos
+    # Caminhos dos arquivos (tentar múltiplos locais)
     base_dir = backend_dir.parent
-    arquivo_comex = base_dir / "comex_data" / "comexstat_csv" / "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"
-    arquivo_empresas = base_dir / "comex_data" / "comexstat_csv" / "Empresas Importadoras e Exportadoras.xlsx"
+    arquivo_comex = None
+    arquivo_empresas = None
+    
+    # Tentar caminhos locais primeiro
+    caminhos_comex = [
+        base_dir / "comex_data" / "comexstat_csv" / "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx",
+        backend_dir / "data" / "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx",
+        Path("/opt/render/project/src/comex_data/comexstat_csv/H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"),
+        Path("/opt/render/project/src/backend/data/H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"),
+    ]
+    
+    caminhos_empresas = [
+        base_dir / "comex_data" / "comexstat_csv" / "Empresas Importadoras e Exportadoras.xlsx",
+        backend_dir / "data" / "Empresas Importadoras e Exportadoras.xlsx",
+        Path("/opt/render/project/src/comex_data/comexstat_csv/Empresas Importadoras e Exportadoras.xlsx"),
+        Path("/opt/render/project/src/backend/data/Empresas Importadoras e Exportadoras.xlsx"),
+    ]
+    
+    for caminho in caminhos_comex:
+        if caminho.exists():
+            arquivo_comex = caminho
+            logger.info(f"✅ Arquivo Comex encontrado: {arquivo_comex}")
+            break
+    
+    for caminho in caminhos_empresas:
+        if caminho.exists():
+            arquivo_empresas = caminho
+            logger.info(f"✅ Arquivo Empresas encontrado: {arquivo_empresas}")
+            break
+    
+    if not arquivo_comex:
+        logger.warning("⚠️ Arquivo de comércio exterior não encontrado. Pulando importação...")
+        logger.info("Caminhos tentados:")
+        for caminho in caminhos_comex:
+            logger.info(f"  - {caminho}")
+    
+    if not arquivo_empresas:
+        logger.warning("⚠️ Arquivo de empresas não encontrado. Pulando importação...")
+        logger.info("Caminhos tentados:")
+        for caminho in caminhos_empresas:
+            logger.info(f"  - {caminho}")
     
     db = SessionLocal()
     
     try:
+        total_comex = 0
+        total_empresas = 0
+        
         # 1. Importar dados de comércio exterior
-        total_comex = importar_dados_comex(db, arquivo_comex)
+        if arquivo_comex:
+            total_comex = importar_dados_comex(db, arquivo_comex)
+        else:
+            logger.warning("⚠️ Pulando importação de comércio exterior (arquivo não encontrado)")
         
         # 2. Importar empresas
-        total_empresas = importar_empresas(db, arquivo_empresas)
+        if arquivo_empresas:
+            total_empresas = importar_empresas(db, arquivo_empresas)
+        else:
+            logger.warning("⚠️ Pulando importação de empresas (arquivo não encontrado)")
         
         # 3. Importar CNAE (opcional)
         # total_cnae = importar_cnae(db, arquivo_cnae)
         
         logger.info("="*80)
-        logger.success("✅ IMPORTAÇÃO CONCLUÍDA COM SUCESSO!")
+        logger.success("✅ IMPORTAÇÃO CONCLUÍDA!")
         logger.info(f"   - Registros de comércio exterior: {total_comex}")
         logger.info(f"   - Empresas: {total_empresas}")
         logger.info("="*80)
+        
+        if total_comex == 0 and total_empresas == 0:
+            logger.warning("⚠️ Nenhum dado foi importado. Verifique se os arquivos Excel estão nos caminhos corretos.")
+            logger.info("💡 Dica: Copie os arquivos Excel para backend/data/ ou comex_data/comexstat_csv/")
         
     except Exception as e:
         logger.error(f"❌ Erro durante importação: {e}")
