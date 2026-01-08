@@ -486,16 +486,8 @@ const Dashboard = () => {
     setMeses(24);
   };
 
-  // Não mostrar loading infinito - se não houver dados, mostrar mensagem
-  const dadosVazios = stats && (
-    (!stats.volume_importacoes || stats.volume_importacoes === 0) &&
-    (!stats.volume_exportacoes || stats.volume_exportacoes === 0) &&
-    (!stats.valor_total_usd || stats.valor_total_usd === 0) &&
-    (!stats.principais_ncms || stats.principais_ncms.length === 0) &&
-    (!stats.principais_paises || stats.principais_paises.length === 0)
-  );
-  
-  if (loading && !stats && !dadosVazios) {
+  // Não mostrar loading infinito - sempre mostrar o dashboard mesmo se vazio
+  if (loading && !stats) {
     return (
       <div style={{ textAlign: 'center', padding: '50px' }}>
         <Spin size="large" />
@@ -506,6 +498,21 @@ const Dashboard = () => {
     );
   }
 
+  // Garantir que stats sempre tenha estrutura válida
+  const statsFinal = stats || {
+    volume_importacoes: 0,
+    volume_exportacoes: 0,
+    valor_total_usd: 0,
+    valor_total_importacoes: 0,
+    valor_total_exportacoes: 0,
+    principais_ncms: [],
+    principais_paises: [],
+    registros_por_mes: {},
+    valores_por_mes: {},
+    pesos_por_mes: {}
+  };
+
+  // Se houver erro mas não tiver stats, mostrar erro mas continuar renderizando
   if (error && !stats) {
     return (
       <div style={{ padding: '20px' }}>
@@ -521,24 +528,7 @@ const Dashboard = () => {
             </Button>
           }
         />
-      </div>
-    );
-  }
-
-  if (!stats) {
-    return (
-      <div style={{ padding: '20px' }}>
-        <Alert 
-          message="Nenhum dado disponível" 
-          description="Não foi possível carregar os dados do dashboard. Verifique se o backend está rodando e tente novamente."
-          type="info" 
-          showIcon 
-          action={
-            <Button size="small" onClick={loadDashboardData}>
-              Recarregar
-            </Button>
-          }
-        />
+        {/* Continuar renderizando dashboard mesmo com erro */}
       </div>
     );
   }

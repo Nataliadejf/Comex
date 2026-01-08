@@ -2665,6 +2665,82 @@ async def get_dados_comexstat():
         raise HTTPException(status_code=500, detail=f"Erro ao buscar dados: {str(e)}")
 
 
+@app.get("/api/validar-dados-banco")
+async def validar_dados_banco(db: Session = Depends(get_db)):
+    """
+    Valida dados no banco e retorna estatísticas detalhadas.
+    """
+    from sqlalchemy import func
+    from database.models import ComercioExterior, Empresa, OperacaoComex
+    
+    try:
+        # ComercioExterior
+        total_comex = db.query(func.count(ComercioExterior.id)).scalar() or 0
+        
+        total_valor_imp = 0.0
+        total_valor_exp = 0.0
+        total_peso_imp = 0.0
+        total_peso_exp = 0.0
+        
+        if total_comex > 0:
+            total_valor_imp = db.query(func.sum(ComercioExterior.valor_usd)).filter(
+                ComercioExterior.tipo == 'importacao'
+            ).scalar() or 0.0
+            
+            total_valor_exp = db.query(func.sum(ComercioExterior.valor_usd)).filter(
+                ComercioExterior.tipo == 'exportacao'
+            ).scalar() or 0.0
+            
+            total_peso_imp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                ComercioExterior.tipo == 'importacao'
+            ).scalar() or 0.0
+            
+            total_peso_exp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                ComercioExterior.tipo == 'exportacao'
+            ).scalar() or 0.0
+        
+        # Empresas
+        total_empresas = db.query(func.count(Empresa.id)).scalar() or 0
+        
+        # OperacaoComex (tabela antiga)
+        total_ops = db.query(func.count(OperacaoComex.id)).scalar() or 0
+        
+        logger.info("="*80)
+        logger.info("📊 VALIDAÇÃO DE DADOS NO BANCO")
+        logger.info("="*80)
+        logger.info(f"📊 ComercioExterior: {total_comex:,} registros")
+        logger.info(f"💰 Total Importação (USD): ${total_valor_imp:,.2f}")
+        logger.info(f"💰 Total Exportação (USD): ${total_valor_exp:,.2f}")
+        logger.info(f"📦 Total Peso Importação (kg): {total_peso_imp:,.2f}")
+        logger.info(f"📦 Total Peso Exportação (kg): {total_peso_exp:,.2f}")
+        logger.info(f"🏢 Empresas: {total_empresas:,} registros")
+        logger.info(f"📋 OperacaoComex: {total_ops:,} registros")
+        logger.info("="*80)
+        
+        return {
+            "status": "ok",
+            "comercio_exterior": {
+                "total_registros": total_comex,
+                "total_valor_importacao_usd": float(total_valor_imp),
+                "total_valor_exportacao_usd": float(total_valor_exp),
+                "total_peso_importacao_kg": float(total_peso_imp),
+                "total_peso_exportacao_kg": float(total_peso_exp),
+            },
+            "empresas": {
+                "total": total_empresas
+            },
+            "operacoes_comex": {
+                "total": total_ops
+            },
+            "tem_dados": total_comex > 0 or total_empresas > 0 or total_ops > 0
+        }
+    except Exception as e:
+        logger.error(f"Erro ao validar dados: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro ao validar dados: {str(e)}")
+
+
 @app.get("/dashboard/dados-ncm-comexstat")
 async def get_dados_ncm_comexstat(
     limite: int = Query(default=100, ge=1, le=1000),
