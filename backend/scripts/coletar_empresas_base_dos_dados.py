@@ -22,7 +22,7 @@ os.chdir(backend_dir)
 sys.path.insert(0, str(backend_dir))
 
 logger.info("="*80)
-logger.info("COLETA DE EMPRESAS DA BASE DOS DADOS")
+logger.info("COLETA DE EMPRESAS DA BASE DOS DADOS - ANO 2021")
 logger.info("="*80)
 
 # Query SQL para executar no BigQuery
