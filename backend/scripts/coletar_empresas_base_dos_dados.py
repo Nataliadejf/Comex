@@ -70,6 +70,7 @@ LEFT JOIN (SELECT DISTINCT id_municipio,nome  FROM `basedosdados.br_bd_diretorio
     ON dados.id_municipio = diretorio_id_municipio.id_municipio
 LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf
     ON dados.sigla_uf = diretorio_sigla_uf.sigla
+WHERE dados.ano = 2021
 """
 
 
