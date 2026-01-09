@@ -260,23 +260,17 @@ def main():
         # Salvar em Excel
         data_dir = backend_dir / "data"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        arquivo_excel = data_dir / f"empresas_base_dos_dados_{timestamp}.xlsx"
+        arquivo_excel = data_dir / f"empresas_base_dos_dados_2021_{timestamp}.xlsx"
         salvar_dados_excel(df, arquivo_excel)
         
         # Salvar em CSV também
-        arquivo_csv = data_dir / f"empresas_base_dos_dados_{timestamp}.csv"
+        arquivo_csv = data_dir / f"empresas_base_dos_dados_2021_{timestamp}.csv"
         salvar_dados_csv(df, arquivo_csv)
         
-        # Perguntar se deseja importar para PostgreSQL
+        # Importar automaticamente para PostgreSQL (dados de 2021)
         logger.info("\n" + "="*80)
-        resposta = input("❓ Deseja importar os dados para PostgreSQL? (s/n): ")
-        
-        if resposta.lower() == 's':
-            importar_para_postgresql(df)
-        else:
-            logger.info("💡 Para importar depois, execute:")
-            logger.info(f"   python backend/scripts/importar_excel_local.py")
-            logger.info(f"   (usando o arquivo: {arquivo_excel.name})")
+        logger.info("🗄️ Importando dados de 2021 para PostgreSQL...")
+        importar_para_postgresql(df)
         
         logger.success("\n" + "="*80)
         logger.success("✅ COLETA CONCLUÍDA COM SUCESSO!")
