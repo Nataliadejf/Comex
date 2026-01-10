@@ -337,38 +337,58 @@ async def testar_google_cloud():
         if creds_env:
             resultado["credenciais_encontradas"] = True
             
-            if creds_env.startswith('{'):
+            if creds_env.strip().startswith('{'):
                 resultado["tipo_credenciais"] = "JSON string"
                 logger.info("Tentando parsear credenciais como JSON...")
+                logger.debug(f"Tamanho do JSON: {len(creds_env)} caracteres")
+                logger.debug(f"Primeiros 50 caracteres: {creds_env[:50]}")
+                
                 try:
-                    creds_dict = json.loads(creds_env)
+                    # Remover espaços em branco extras e quebras de linha
+                    creds_cleaned = creds_env.strip()
+                    # Tentar fazer parse do JSON
+                    creds_dict = json.loads(creds_cleaned)
                     resultado["projeto_id"] = creds_dict.get("project_id", "não encontrado")
-                    logger.info(f"JSON parseado com sucesso. Projeto ID: {resultado['projeto_id']}")
+                    logger.info(f"✅ JSON parseado com sucesso. Projeto ID: {resultado['projeto_id']}")
+                    
+                    # Verificar campos obrigatórios
+                    campos_obrigatorios = ["type", "project_id", "private_key", "client_email"]
+                    campos_faltando = [campo for campo in campos_obrigatorios if campo not in creds_dict]
+                    if campos_faltando:
+                        raise ValueError(f"Campos obrigatórios faltando: {campos_faltando}")
                     
                     from google.oauth2 import service_account
                     credentials = service_account.Credentials.from_service_account_info(creds_dict)
-                    logger.info("Credenciais criadas com sucesso")
+                    logger.info("✅ Credenciais criadas com sucesso")
                     
                     client = bigquery.Client(credentials=credentials)
                     resultado["conexao_testada"] = True
                     resultado["projeto_bigquery"] = client.project
-                    logger.info(f"Cliente BigQuery criado. Projeto: {client.project}")
+                    logger.info(f"✅ Cliente BigQuery criado. Projeto: {client.project}")
                     
                     # Testar conexão simples
+                    logger.info("Testando conexão com BigQuery...")
                     datasets = list(client.list_datasets(max_results=1))
                     resultado["teste_conexao"] = "sucesso"
+                    resultado["total_datasets"] = len(datasets)
                     resultado["mensagem"] = f"✅ Conexão com BigQuery estabelecida! Projeto: {client.project}"
-                    logger.success("Conexão com BigQuery testada com sucesso!")
+                    logger.success("✅ Conexão com BigQuery testada com sucesso!")
                     
                 except json.JSONDecodeError as e:
                     resultado["erro"] = f"Erro ao parsear JSON: {str(e)}"
                     resultado["status"] = "erro"
-                    logger.error(f"Erro ao parsear JSON: {e}")
-                    logger.debug(f"Primeiros 100 caracteres do JSON: {creds_env[:100]}")
+                    logger.error(f"❌ Erro ao parsear JSON: {e}")
+                    logger.error(f"Erro na linha {e.lineno}, coluna {e.colno}")
+                    logger.debug(f"Primeiros 200 caracteres do JSON: {creds_env[:200]}")
+                    logger.debug(f"Últimos 200 caracteres do JSON: {creds_env[-200:]}")
+                except ValueError as e:
+                    resultado["erro"] = f"Erro de validação: {str(e)}"
+                    resultado["status"] = "erro"
+                    logger.error(f"❌ Erro de validação: {e}")
                 except Exception as e:
                     resultado["erro"] = f"Erro ao conectar: {str(e)}"
                     resultado["status"] = "erro"
-                    logger.error(f"Erro ao conectar ao BigQuery: {e}")
+                    logger.error(f"❌ Erro ao conectar ao BigQuery: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
             else:
