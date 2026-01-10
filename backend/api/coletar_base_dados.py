@@ -72,8 +72,8 @@ def coletar_dados_bigquery():
         
         logger.info("🔌 Conectando ao BigQuery...")
         
-        # Verificar se GOOGLE_APPLICATION_CREDENTIALS está configurada
-        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        # Verificar se GOOGLE_APPLICATION_CREDENTIALS ou GOOGLE_APPLICATION_CREDENTIALS_JSON está configurada
+        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
         
         # Se for uma string JSON (configurada no Render como variável de ambiente)
         if creds_env and creds_env.startswith('{'):
@@ -83,12 +83,18 @@ def coletar_dados_bigquery():
                 from google.oauth2 import service_account
                 credentials = service_account.Credentials.from_service_account_info(creds_dict)
                 client = bigquery.Client(credentials=credentials)
+                logger.info("✅ Credenciais carregadas com sucesso")
             except Exception as e:
                 logger.warning(f"Erro ao parsear JSON de credenciais: {e}")
                 logger.info("Tentando usar cliente padrão...")
                 client = bigquery.Client()
+        elif creds_env:
+            # Se for um caminho de arquivo
+            logger.info(f"📋 Credenciais encontradas como caminho: {creds_env[:50]}...")
+            client = bigquery.Client()
         else:
             # Usar cliente padrão (procura arquivo ou variável de ambiente)
+            logger.info("📋 Usando cliente padrão do BigQuery")
             client = bigquery.Client()
         
         logger.info("📊 Executando query no BigQuery (ano 2021)...")
