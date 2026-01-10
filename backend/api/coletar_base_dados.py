@@ -297,3 +297,104 @@ async def coletar_empresas_base_dados(db: Session = Depends(get_db)):
             status_code=500,
             detail=f"Erro durante coleta: {str(e)}"
         )
+
+
+@router.get("/testar-google-cloud")
+async def testar_google_cloud():
+    """
+    Testa a conexão com Google Cloud BigQuery sem executar queries.
+    Útil para verificar se as credenciais estão configuradas corretamente.
+    """
+    try:
+        import os
+        import json
+        from google.cloud import bigquery
+        
+        logger.info("="*80)
+        logger.info("TESTE DE CONEXÃO COM GOOGLE CLOUD BIGQUERY")
+        logger.info("="*80)
+        
+        # Verificar variáveis de ambiente
+        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        
+        resultado = {
+            "status": "ok",
+            "credenciais_encontradas": False,
+            "tipo_credenciais": None,
+            "projeto_id": None,
+            "conexao_testada": False,
+            "erro": None
+        }
+        
+        if creds_env:
+            resultado["credenciais_encontradas"] = True
+            
+            if creds_env.startswith('{'):
+                resultado["tipo_credenciais"] = "JSON string"
+                try:
+                    creds_dict = json.loads(creds_env)
+                    resultado["projeto_id"] = creds_dict.get("project_id", "não encontrado")
+                    
+                    from google.oauth2 import service_account
+                    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                    client = bigquery.Client(credentials=credentials)
+                    resultado["conexao_testada"] = True
+                    resultado["projeto_bigquery"] = client.project
+                    
+                    # Testar conexão simples
+                    datasets = list(client.list_datasets(max_results=1))
+                    resultado["teste_conexao"] = "sucesso"
+                    resultado["mensagem"] = f"✅ Conexão com BigQuery estabelecida! Projeto: {client.project}"
+                    
+                except json.JSONDecodeError as e:
+                    resultado["erro"] = f"Erro ao parsear JSON: {str(e)}"
+                    resultado["status"] = "erro"
+                except Exception as e:
+                    resultado["erro"] = f"Erro ao conectar: {str(e)}"
+                    resultado["status"] = "erro"
+            else:
+                resultado["tipo_credenciais"] = "caminho de arquivo"
+                resultado["caminho"] = creds_env[:50] + "..." if len(creds_env) > 50 else creds_env
+                try:
+                    client = bigquery.Client()
+                    resultado["conexao_testada"] = True
+                    resultado["projeto_bigquery"] = client.project
+                    resultado["teste_conexao"] = "sucesso"
+                    resultado["mensagem"] = f"✅ Conexão com BigQuery estabelecida! Projeto: {client.project}"
+                except Exception as e:
+                    resultado["erro"] = f"Erro ao conectar: {str(e)}"
+                    resultado["status"] = "erro"
+        else:
+            resultado["status"] = "aviso"
+            resultado["mensagem"] = "⚠️ Nenhuma credencial encontrada. Verifique GOOGLE_APPLICATION_CREDENTIALS ou GOOGLE_APPLICATION_CREDENTIALS_JSON"
+            try:
+                # Tentar usar credenciais padrão
+                client = bigquery.Client()
+                resultado["conexao_testada"] = True
+                resultado["projeto_bigquery"] = client.project
+                resultado["teste_conexao"] = "sucesso"
+                resultado["mensagem"] = f"✅ Conexão estabelecida usando credenciais padrão! Projeto: {client.project}"
+                resultado["status"] = "ok"
+            except Exception as e:
+                resultado["erro"] = f"Erro ao conectar: {str(e)}"
+                resultado["status"] = "erro"
+                resultado["mensagem"] = f"❌ Erro ao conectar: {str(e)}"
+        
+        logger.info(f"Resultado do teste: {resultado['mensagem']}")
+        return resultado
+        
+    except ImportError:
+        return {
+            "status": "erro",
+            "mensagem": "❌ Biblioteca google-cloud-bigquery não instalada",
+            "erro": "ImportError: google.cloud.bigquery"
+        }
+    except Exception as e:
+        logger.error(f"❌ Erro no teste: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {
+            "status": "erro",
+            "mensagem": f"❌ Erro inesperado: {str(e)}",
+            "erro": str(e)
+        }
