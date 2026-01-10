@@ -11,6 +11,8 @@ from datetime import datetime
 from database import get_db
 from database.models import Empresa
 from sqlalchemy import func
+import json
+import os
 
 router = APIRouter(prefix="/api", tags=["coleta"])
 
