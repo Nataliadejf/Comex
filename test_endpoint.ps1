@@ -1,4 +1,4 @@
-tenparam(
+param(
     [string]$ServiceBaseUrl = $env:SERVICE_URL
 )
 
