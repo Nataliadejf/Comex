@@ -316,8 +316,8 @@ async def testar_google_cloud():
         logger.info("TESTE DE CONEXÃO COM GOOGLE CLOUD BIGQUERY")
         logger.info("="*80)
         
-        # Verificar variáveis de ambiente
-        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        # Verificar variáveis de ambiente (tentar ambas)
+        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         
         resultado = {
             "status": "ok",
@@ -325,35 +325,52 @@ async def testar_google_cloud():
             "tipo_credenciais": None,
             "projeto_id": None,
             "conexao_testada": False,
-            "erro": None
+            "erro": None,
+            "variaveis_verificadas": {
+                "GOOGLE_APPLICATION_CREDENTIALS": bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS")),
+                "GOOGLE_APPLICATION_CREDENTIALS_JSON": bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
+            }
         }
+        
+        logger.info(f"Variáveis encontradas: GOOGLE_APPLICATION_CREDENTIALS={bool(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))}, GOOGLE_APPLICATION_CREDENTIALS_JSON={bool(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))}")
         
         if creds_env:
             resultado["credenciais_encontradas"] = True
             
             if creds_env.startswith('{'):
                 resultado["tipo_credenciais"] = "JSON string"
+                logger.info("Tentando parsear credenciais como JSON...")
                 try:
                     creds_dict = json.loads(creds_env)
                     resultado["projeto_id"] = creds_dict.get("project_id", "não encontrado")
+                    logger.info(f"JSON parseado com sucesso. Projeto ID: {resultado['projeto_id']}")
                     
                     from google.oauth2 import service_account
                     credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                    logger.info("Credenciais criadas com sucesso")
+                    
                     client = bigquery.Client(credentials=credentials)
                     resultado["conexao_testada"] = True
                     resultado["projeto_bigquery"] = client.project
+                    logger.info(f"Cliente BigQuery criado. Projeto: {client.project}")
                     
                     # Testar conexão simples
                     datasets = list(client.list_datasets(max_results=1))
                     resultado["teste_conexao"] = "sucesso"
                     resultado["mensagem"] = f"✅ Conexão com BigQuery estabelecida! Projeto: {client.project}"
+                    logger.success("Conexão com BigQuery testada com sucesso!")
                     
                 except json.JSONDecodeError as e:
                     resultado["erro"] = f"Erro ao parsear JSON: {str(e)}"
                     resultado["status"] = "erro"
+                    logger.error(f"Erro ao parsear JSON: {e}")
+                    logger.debug(f"Primeiros 100 caracteres do JSON: {creds_env[:100]}")
                 except Exception as e:
                     resultado["erro"] = f"Erro ao conectar: {str(e)}"
                     resultado["status"] = "erro"
+                    logger.error(f"Erro ao conectar ao BigQuery: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
             else:
                 resultado["tipo_credenciais"] = "caminho de arquivo"
                 resultado["caminho"] = creds_env[:50] + "..." if len(creds_env) > 50 else creds_env
