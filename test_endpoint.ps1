@@ -11,12 +11,24 @@ $endpoint = "$ServiceBaseUrl/api/coletar-empresas-base-dados"
 Write-Host "Chamando $endpoint ..."
 
 try {
-    $resp = Invoke-RestMethod -Method Post -Uri $endpoint -TimeoutSec 120
+    Write-Host "⏳ Aguardando resposta (pode demorar vários minutos)..." -ForegroundColor Yellow
+    $resp = Invoke-RestMethod -Method Post -Uri $endpoint -TimeoutSec 300 -ErrorAction Stop
+    Write-Host "`n✅ Resposta recebida!" -ForegroundColor Green
     Write-Host "Resposta do endpoint:" -ForegroundColor Green
-    $json = $resp | ConvertTo-Json -Depth 5
-    Write-Host $json
+    if ($resp) {
+        $json = $resp | ConvertTo-Json -Depth 5
+        Write-Host $json
+    } else {
+        Write-Host "⚠️ Resposta vazia recebida" -ForegroundColor Yellow
+    }
 } catch {
-    Write-Host "Erro na requisição: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "`n❌ Erro na requisição:" -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($_.ErrorDetails) {
+        Write-Host "Detalhes:" -ForegroundColor Yellow
+        Write-Host $_.ErrorDetails.Message -ForegroundColor Yellow
+    }
+    Write-Host "`n💡 Dica: Verifique os logs do Render para mais detalhes" -ForegroundColor Cyan
     exit 1
 }
 
