@@ -12,7 +12,7 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 from database.database import SessionLocal
-from database.models import Empresa, ComercioExterior
+from database.models import Empresa, ComercioExterior, OperacaoComex
 from sqlalchemy import func
 
 logger.remove()
@@ -90,35 +90,66 @@ def correlacionar_empresas_operacoes():
         empresas = db.query(Empresa).all()
         logger.info(f"  ✅ Encontradas {len(empresas)} empresas")
         
-        # 4. Calcular distribuição proporcional por estado
-        # Se uma empresa está em um estado, ela recebe uma parte proporcional dos valores
+        # 4. Correlacionar empresas com operações
+        # Estratégia: Se empresa tem CNPJ, buscar operações por CNPJ
+        # Se não tem CNPJ, distribuir valores por estado/CNAE
         empresas_atualizadas = 0
         
+        logger.info("\n🔗 Correlacionando empresas com operações...")
+        
         for empresa in empresas:
-            if not empresa.estado:
-                continue
+            valor_imp_calculado = 0.0
+            valor_exp_calculado = 0.0
             
-            estado = empresa.estado.upper()
-            valores_estado = valores_por_estado.get(estado, {})
+            # Estratégia 1: Se empresa tem CNPJ, buscar em OperacaoComex
+            if empresa.cnpj and len(empresa.cnpj) == 14:
+                # Buscar importações por CNPJ
+                imp_cnpj = db.query(
+                    func.sum(OperacaoComex.valor_fob).label('valor_total')
+                ).filter(
+                    OperacaoComex.cnpj_importador == empresa.cnpj
+                ).scalar() or 0.0
+                
+                # Buscar exportações por CNPJ
+                exp_cnpj = db.query(
+                    func.sum(OperacaoComex.valor_fob).label('valor_total')
+                ).filter(
+                    OperacaoComex.cnpj_exportador == empresa.cnpj
+                ).scalar() or 0.0
+                
+                if imp_cnpj > 0 or exp_cnpj > 0:
+                    valor_imp_calculado = float(imp_cnpj)
+                    valor_exp_calculado = float(exp_cnpj)
+                    logger.debug(f"  ✅ {empresa.nome[:50]}: CNPJ encontrado - Imp: ${valor_imp_calculado:,.2f}, Exp: ${valor_exp_calculado:,.2f}")
             
-            # Contar quantas empresas do mesmo tipo existem no estado
-            empresas_mesmo_estado = db.query(func.count(Empresa.id)).filter(
-                Empresa.estado == estado
-            ).scalar() or 1
+            # Estratégia 2: Se não encontrou por CNPJ, usar distribuição por estado
+            if valor_imp_calculado == 0 and valor_exp_calculado == 0 and empresa.estado:
+                estado = empresa.estado.upper()
+                valores_estado = valores_por_estado.get(estado, {})
+                
+                # Contar empresas do mesmo tipo no estado
+                empresas_mesmo_tipo_estado = db.query(func.count(Empresa.id)).filter(
+                    Empresa.estado == estado,
+                    Empresa.tipo == empresa.tipo
+                ).scalar() or 1
+                
+                valor_imp_estado = valores_estado.get('importacao', {}).get('valor', 0.0)
+                valor_exp_estado = valores_estado.get('exportacao', {}).get('valor', 0.0)
+                
+                # Distribuir proporcionalmente apenas para empresas do tipo correto
+                if empresa.tipo in ['importadora', 'ambos'] and valor_imp_estado > 0:
+                    valor_imp_calculado = valor_imp_estado / empresas_mesmo_tipo_estado
+                
+                if empresa.tipo in ['exportadora', 'ambos'] and valor_exp_estado > 0:
+                    valor_exp_calculado = valor_exp_estado / empresas_mesmo_tipo_estado
+                
+                if valor_imp_calculado > 0 or valor_exp_calculado > 0:
+                    logger.debug(f"  📊 {empresa.nome[:50]}: Distribuição por estado - Imp: ${valor_imp_calculado:,.2f}, Exp: ${valor_exp_calculado:,.2f}")
             
-            # Distribuir valores proporcionalmente
-            # (Simplificado: dividir igualmente entre empresas do estado)
-            # Em produção, poderia usar CNAE ou outros critérios
-            
-            valor_imp_estado = valores_estado.get('importacao', {}).get('valor', 0.0)
-            valor_exp_estado = valores_estado.get('exportacao', {}).get('valor', 0.0)
-            
-            # Atualizar empresa apenas se houver valores no estado
-            if valor_imp_estado > 0 or valor_exp_estado > 0:
-                # Distribuir proporcionalmente (simplificado)
-                # Em produção, usar critérios mais sofisticados (CNAE, histórico, etc.)
-                empresa.valor_importacao = valor_imp_estado / empresas_mesmo_estado
-                empresa.valor_exportacao = valor_exp_estado / empresas_mesmo_estado
+            # Atualizar empresa se encontrou valores
+            if valor_imp_calculado > 0 or valor_exp_calculado > 0:
+                empresa.valor_importacao = valor_imp_calculado
+                empresa.valor_exportacao = valor_exp_calculado
                 empresas_atualizadas += 1
         
         db.commit()

@@ -272,6 +272,16 @@ async def coletar_empresas_base_dados(db: Session = Depends(get_db)):
         # Verificar total no banco após importação
         total_no_banco = db.query(func.count(Empresa.id)).scalar() or 0
         
+        # Tentar correlacionar empresas com operações existentes
+        logger.info("\n🔗 Tentando correlacionar empresas importadas com operações existentes...")
+        try:
+            from scripts.correlacionar_empresas_operacoes import correlacionar_empresas_operacoes
+            correlacionar_empresas_operacoes()
+            logger.success("✅ Correlação executada com sucesso!")
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível correlacionar automaticamente: {e}")
+            logger.info("💡 Execute manualmente: POST /api/analise/correlacionar-empresas-operacoes")
+        
         logger.success("="*80)
         logger.success("✅ COLETA E IMPORTAÇÃO CONCLUÍDA COM SUCESSO!")
         logger.success("="*80)

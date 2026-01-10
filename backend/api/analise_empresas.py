@@ -173,3 +173,60 @@ async def verificar_dados(db: Session = Depends(get_db)):
             status_code=500,
             detail=f"Erro ao verificar dados: {str(e)}"
         )
+
+
+@router.post("/correlacionar-empresas-operacoes")
+async def executar_correlacao_empresas_operacoes(db: Session = Depends(get_db)):
+    """
+    Correlaciona empresas da tabela 'empresas' com operações de 'comercio_exterior' e 'operacoes_comex'.
+    Atualiza valores de importação/exportação nas empresas baseado nas operações.
+    
+    Exemplo de uso:
+        POST https://comex-backend-wjco.onrender.com/api/analise/correlacionar-empresas-operacoes
+    """
+    try:
+        logger.info("="*80)
+        logger.info("INICIANDO CORRELAÇÃO DE EMPRESAS COM OPERAÇÕES VIA API")
+        logger.info("="*80)
+        
+        # Adicionar backend ao path
+        backend_dir = Path(__file__).parent.parent
+        sys.path.insert(0, str(backend_dir))
+        
+        # Importar função de correlação
+        from scripts.correlacionar_empresas_operacoes import correlacionar_empresas_operacoes
+        
+        # Executar correlação
+        correlacionar_empresas_operacoes()
+        
+        # Verificar resultado
+        from database.models import Empresa
+        total_empresas = db.query(func.count(Empresa.id)).scalar() or 0
+        empresas_com_valor_imp = db.query(func.count(Empresa.id)).filter(
+            Empresa.valor_importacao > 0
+        ).scalar() or 0
+        empresas_com_valor_exp = db.query(func.count(Empresa.id)).filter(
+            Empresa.valor_exportacao > 0
+        ).scalar() or 0
+        
+        total_valor_imp = db.query(func.sum(Empresa.valor_importacao)).scalar() or 0.0
+        total_valor_exp = db.query(func.sum(Empresa.valor_exportacao)).scalar() or 0.0
+        
+        return {
+            "success": True,
+            "message": "Correlação executada com sucesso",
+            "total_empresas": total_empresas,
+            "empresas_com_importacao": empresas_com_valor_imp,
+            "empresas_com_exportacao": empresas_com_valor_exp,
+            "total_valor_importacao_usd": float(total_valor_imp),
+            "total_valor_exportacao_usd": float(total_valor_exp),
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao executar correlação: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao executar correlação: {str(e)}"
+        )
