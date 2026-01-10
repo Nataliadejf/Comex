@@ -74,9 +74,17 @@ if EXPORT_ROUTER_AVAILABLE:
 try:
     from api.analise_empresas import router as analise_router
     app.include_router(analise_router)
-    logger.info("Router de análise de empresas incluído")
+    logger.info("✅ Router de análise de empresas incluído")
 except ImportError as e:
     logger.warning(f"Router de análise de empresas não disponível: {e}")
+
+# Router de coleta da Base dos Dados
+try:
+    from api.coletar_base_dados import router as coletar_router
+    app.include_router(coletar_router)
+    logger.info("✅ Router de coleta Base dos Dados incluído")
+except ImportError as e:
+    logger.warning(f"Router de coleta Base dos Dados não disponível: {e}")
 
 
 # Inicializar banco de dados na startup
