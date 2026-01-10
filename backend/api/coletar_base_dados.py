@@ -67,11 +67,29 @@ def coletar_dados_bigquery():
     """Coleta dados do BigQuery usando a query SQL."""
     try:
         from google.cloud import bigquery
+        import os
+        import json
         
         logger.info("🔌 Conectando ao BigQuery...")
         
-        # Inicializar cliente BigQuery
-        client = bigquery.Client()
+        # Verificar se GOOGLE_APPLICATION_CREDENTIALS está configurada
+        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        
+        # Se for uma string JSON (configurada no Render como variável de ambiente)
+        if creds_env and creds_env.startswith('{'):
+            logger.info("📋 Credenciais encontradas como JSON string")
+            try:
+                creds_dict = json.loads(creds_env)
+                from google.oauth2 import service_account
+                credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                client = bigquery.Client(credentials=credentials)
+            except Exception as e:
+                logger.warning(f"Erro ao parsear JSON de credenciais: {e}")
+                logger.info("Tentando usar cliente padrão...")
+                client = bigquery.Client()
+        else:
+            # Usar cliente padrão (procura arquivo ou variável de ambiente)
+            client = bigquery.Client()
         
         logger.info("📊 Executando query no BigQuery (ano 2021)...")
         logger.info("⚠️ Esta operação pode demorar alguns minutos...")
