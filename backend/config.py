@@ -17,55 +17,54 @@ from pydantic import Field
 class Settings(BaseSettings):
     """Configurações da aplicação."""
     
-    # Ambiente
-    environment: str = Field(default="development", alias="ENVIRONMENT")
-    debug: bool = Field(default=True, alias="DEBUG")
+    # Ambiente - BaseSettings do Pydantic v1 lê automaticamente variáveis de ambiente em maiúsculas
+    # quando case_sensitive = False
+    environment: str = Field(default="development")
+    debug: bool = Field(default=True)
     
     # Diretório de dados (relativo ao projeto)
-    data_dir: Path = Field(
-        default=Path(__file__).parent.parent / "comex_data",
-        alias="DATA_DIR"
-    )
+    data_dir: Path = Field(default=Path(__file__).parent.parent / "comex_data")
     
     # Database (será construído dinamicamente se não definido)
-    database_url: Optional[str] = Field(
-        default="",  # Será construído dinamicamente
-        alias="DATABASE_URL"
-    )
+    database_url: Optional[str] = Field(default="")
     
     # API Comex Stat
-    comex_stat_api_url: Optional[str] = Field(
-        default="https://api-comexstat.mdic.gov.br",
-        alias="COMEX_STAT_API_URL"
-    )
-    comex_stat_api_key: Optional[str] = Field(
-        default=None,
-        alias="COMEX_STAT_API_KEY"
-    )
+    comex_stat_api_url: Optional[str] = Field(default="https://api-comexstat.mdic.gov.br")
+    comex_stat_api_key: Optional[str] = Field(default=None)
     
     # Configurações de coleta
-    update_interval_hours: int = Field(default=24, alias="UPDATE_INTERVAL_HOURS")
-    months_to_fetch: int = Field(default=3, alias="MONTHS_TO_FETCH")
-    retry_attempts: int = Field(default=3, alias="RETRY_ATTEMPTS")
-    retry_delay_seconds: int = Field(default=5, alias="RETRY_DELAY_SECONDS")
+    update_interval_hours: int = Field(default=24)
+    months_to_fetch: int = Field(default=3)
+    retry_attempts: int = Field(default=3)
+    retry_delay_seconds: int = Field(default=5)
     
     # Logging
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    log_dir: Optional[Path] = Field(
-        default=Path(__file__).parent.parent / "comex_data" / "logs",
-        alias="LOG_DIR"
-    )
+    log_level: str = Field(default="INFO")
+    log_dir: Optional[Path] = Field(default=Path(__file__).parent.parent / "comex_data" / "logs")
     
     # Autenticação
-    secret_key: str = Field(
-        default="sua-chave-secreta-aqui-mude-em-producao",
-        alias="SECRET_KEY"
-    )
+    secret_key: str = Field(default="sua-chave-secreta-aqui-mude-em-producao")
     
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        case_sensitive = False
+        case_sensitive = False  # Permite ler ENVIRONMENT mesmo com campo environment
+        # Mapear campos para variáveis de ambiente em maiúsculas
+        fields = {
+            'environment': {'env': 'ENVIRONMENT'},
+            'debug': {'env': 'DEBUG'},
+            'data_dir': {'env': 'DATA_DIR'},
+            'database_url': {'env': 'DATABASE_URL'},
+            'comex_stat_api_url': {'env': 'COMEX_STAT_API_URL'},
+            'comex_stat_api_key': {'env': 'COMEX_STAT_API_KEY'},
+            'update_interval_hours': {'env': 'UPDATE_INTERVAL_HOURS'},
+            'months_to_fetch': {'env': 'MONTHS_TO_FETCH'},
+            'retry_attempts': {'env': 'RETRY_ATTEMPTS'},
+            'retry_delay_seconds': {'env': 'RETRY_DELAY_SECONDS'},
+            'log_level': {'env': 'LOG_LEVEL'},
+            'log_dir': {'env': 'LOG_DIR'},
+            'secret_key': {'env': 'SECRET_KEY'},
+        }
         
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -73,15 +72,18 @@ class Settings(BaseSettings):
         # Configurar caminhos relativos se não foram definidos via env
         if str(self.data_dir) == "D:/comex_data" or "D:/" in str(self.data_dir):
             self.data_dir = Path(__file__).parent.parent / "comex_data"
+            self.DATA_DIR = self.data_dir
         
         # Configurar database_url se não foi definido ou contém D:/
         if not self.database_url or "D:/comex_data" in str(self.database_url) or "D:/" in str(self.database_url):
             db_path = self.data_dir / "database" / "comex.db"
             self.database_url = f"sqlite:///{db_path.absolute()}"
+            self.DATABASE_URL = self.database_url
         
         # Configurar log_dir se contém D:/
         if "D:/comex_data" in str(self.log_dir) or "D:/" in str(self.log_dir):
             self.log_dir = self.data_dir / "logs"
+            self.LOG_DIR = self.log_dir
         
         # Criar diretórios necessários
         self._create_directories()
