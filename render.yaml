@@ -9,7 +9,7 @@ services:
     region: oregon
     plan: free
     buildCommand: "pip install --upgrade pip setuptools wheel && pip install --only-binary :all: --no-cache-dir -r backend/requirements-render-ultra-minimal.txt 2>&1 || pip install --no-build-isolation --no-cache-dir -r backend/requirements-render-ultra-minimal.txt"
-    startCommand: "cd backend && python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
+    startCommand: "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
     rootDir: .
     healthCheckPath: /health
     envVars:

@@ -8,6 +8,7 @@ from sqlalchemy import text
 from typing import Optional, List
 from datetime import date, datetime
 from pydantic import BaseModel
+from pathlib import Path
 import uvicorn
 
 from loguru import logger
@@ -92,8 +93,30 @@ except ImportError as e:
 async def startup_event():
     """Inicializa o banco de dados na startup."""
     try:
+        # Executar migrations do Alembic antes de inicializar
+        import subprocess
+        import sys
+        logger.info("🔄 Executando migrations do Alembic...")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", "head"],
+                cwd=Path(__file__).parent,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                logger.info("✅ Migrations executadas com sucesso")
+            else:
+                logger.warning(f"⚠️ Migration retornou código {result.returncode}: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.warning("⚠️ Migration timeout, continuando...")
+        except Exception as migration_error:
+            logger.warning(f"⚠️ Erro ao executar migrations: {migration_error}, continuando...")
+        
+        # Inicializar banco (cria tabelas se não existirem)
         init_db()
-        logger.info("Banco de dados inicializado")
+        logger.info("✅ Banco de dados inicializado")
     except Exception as e:
         logger.error(f"Erro ao inicializar banco de dados: {e}")
         # Não interrompe a aplicação, mas loga o erro

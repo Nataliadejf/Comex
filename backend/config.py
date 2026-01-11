@@ -72,18 +72,15 @@ class Settings(BaseSettings):
         # Configurar caminhos relativos se não foram definidos via env
         if str(self.data_dir) == "D:/comex_data" or "D:/" in str(self.data_dir):
             self.data_dir = Path(__file__).parent.parent / "comex_data"
-            self.DATA_DIR = self.data_dir
         
         # Configurar database_url se não foi definido ou contém D:/
         if not self.database_url or "D:/comex_data" in str(self.database_url) or "D:/" in str(self.database_url):
             db_path = self.data_dir / "database" / "comex.db"
             self.database_url = f"sqlite:///{db_path.absolute()}"
-            self.DATABASE_URL = self.database_url
         
         # Configurar log_dir se contém D:/
         if "D:/comex_data" in str(self.log_dir) or "D:/" in str(self.log_dir):
             self.log_dir = self.data_dir / "logs"
-            self.LOG_DIR = self.log_dir
         
         # Criar diretórios necessários
         self._create_directories()
