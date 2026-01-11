@@ -39,7 +39,7 @@ openpyxl==3.1.2
 google-cloud-bigquery==3.13.0
 
 # Database migrations (opcional, mas recomendado)
-# alembic==1.13.1  # Descomente se precisar de migrations
+alembic==1.13.1
 
 # NOTA CRÍTICA: 
 # - Versões compatíveis com Python 3.11.8 (forçar no Render)

@@ -34,5 +34,8 @@ pytest-asyncio==0.21.1
 # CORS
 python-multipart==0.0.6
 
+# Database migrations
+alembic==1.13.1
+
 # PDF Export (opcional)
 reportlab==4.0.7
