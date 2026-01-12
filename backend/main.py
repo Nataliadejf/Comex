@@ -231,6 +231,247 @@ async def health_check(db: Session = Depends(get_db)):
         return {"status": "unhealthy", "error": str(e)}
 
 
+@app.get("/validar-sistema")
+async def validar_sistema_completo(db: Session = Depends(get_db)):
+    """
+    Validação completa do sistema.
+    Verifica:
+    - Conexão com BigQuery
+    - Dados no banco de dados PostgreSQL
+    - Arquivos CSV disponíveis
+    - Relacionamentos entre bases
+    """
+    from sqlalchemy import func
+    from database.models import (
+        OperacaoComex, Empresa, EmpresasRecomendadas,
+        ComercioExterior, CNAEHierarquia
+    )
+    from pathlib import Path
+    import os
+    import json
+    
+    resultados = {
+        "data_validacao": datetime.now().isoformat(),
+        "bigquery": {},
+        "banco_dados": {},
+        "arquivos_csv": {},
+        "relacionamentos": {},
+        "resumo": {}
+    }
+    
+    try:
+        # 1. Validar BigQuery
+        logger.info("🔍 Validando BigQuery...")
+        bigquery_result = {"conectado": False, "credenciais_configuradas": False, "teste_query": False, "erro": None}
+        
+        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        if creds_env:
+            bigquery_result["credenciais_configuradas"] = True
+            if creds_env.startswith('{'):
+                try:
+                    json.loads(creds_env)
+                    bigquery_result["credenciais_validas"] = True
+                except:
+                    bigquery_result["credenciais_validas"] = False
+        
+        try:
+            from google.cloud import bigquery
+            if creds_env and creds_env.startswith('{'):
+                try:
+                    creds_dict = json.loads(creds_env)
+                    from google.oauth2 import service_account
+                    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                    client = bigquery.Client(credentials=credentials)
+                except:
+                    client = bigquery.Client()
+            else:
+                client = bigquery.Client()
+            
+            bigquery_result["conectado"] = True
+            query_job = client.query("SELECT 1 as test")
+            query_job.result()
+            bigquery_result["teste_query"] = True
+        except ImportError:
+            bigquery_result["erro"] = "Biblioteca google-cloud-bigquery não instalada"
+        except Exception as e:
+            bigquery_result["erro"] = str(e)
+        
+        resultados["bigquery"] = bigquery_result
+        
+        # 2. Validar Banco de Dados
+        logger.info("🔍 Validando banco de dados...")
+        banco_result = {"conectado": False, "tabelas": {}, "total_registros": {}}
+        
+        try:
+            db.execute(text("SELECT 1"))
+            banco_result["conectado"] = True
+            
+            tabelas_verificar = [
+                ("operacoes_comex", OperacaoComex),
+                ("empresas", Empresa),
+                ("empresas_recomendadas", EmpresasRecomendadas),
+                ("comercio_exterior", ComercioExterior),
+                ("cnae_hierarquia", CNAEHierarquia)
+            ]
+            
+            for nome_tabela, modelo in tabelas_verificar:
+                try:
+                    count = db.query(func.count(modelo.id)).scalar()
+                    banco_result["tabelas"][nome_tabela] = {"existe": True, "total_registros": count}
+                    banco_result["total_registros"][nome_tabela] = count
+                except Exception as e:
+                    banco_result["tabelas"][nome_tabela] = {"existe": False, "erro": str(e)}
+            
+            # Detalhes de operacoes_comex
+            if banco_result["total_registros"].get("operacoes_comex", 0) > 0:
+                importacao = db.query(func.count(OperacaoComex.id)).filter(
+                    OperacaoComex.tipo_operacao == "Importação"
+                ).scalar()
+                exportacao = db.query(func.count(OperacaoComex.id)).filter(
+                    OperacaoComex.tipo_operacao == "Exportação"
+                ).scalar()
+                
+                banco_result["operacoes_detalhes"] = {
+                    "importacao": importacao,
+                    "exportacao": exportacao
+                }
+                
+                cnpjs_importadores = db.query(func.count(func.distinct(OperacaoComex.cnpj_importador))).scalar()
+                cnpjs_exportadores = db.query(func.count(func.distinct(OperacaoComex.cnpj_exportador))).scalar()
+                
+                banco_result["cnpjs_unicos"] = {
+                    "importadores": cnpjs_importadores,
+                    "exportadores": cnpjs_exportadores
+                }
+        except Exception as e:
+            banco_result["erro"] = str(e)
+        
+        resultados["banco_dados"] = banco_result
+        
+        # 3. Validar Arquivos CSV
+        logger.info("🔍 Validando arquivos CSV...")
+        csv_result = {"diretorio_existe": False, "arquivos_encontrados": [], "total_arquivos": 0}
+        
+        try:
+            base_dir = Path(__file__).parent.parent
+            csv_dir = base_dir / "comex_data" / "comexstat_csv"
+            csv_downloads_dir = base_dir / "comex_data" / "csv_downloads"
+            
+            if csv_dir.exists():
+                csv_result["diretorio_existe"] = True
+                arquivos_csv = list(csv_dir.glob("*.csv")) + list(csv_dir.glob("*.xlsx"))
+                csv_result["total_arquivos"] = len(arquivos_csv)
+                
+                for arquivo in arquivos_csv[:10]:  # Limitar a 10 para não sobrecarregar resposta
+                    tamanho = arquivo.stat().st_size
+                    csv_result["arquivos_encontrados"].append({
+                        "nome": arquivo.name,
+                        "tamanho": tamanho
+                    })
+            
+            if csv_downloads_dir.exists():
+                arquivos_downloads = list(csv_downloads_dir.glob("*.csv"))
+                importacoes = [f for f in arquivos_downloads if "importacao" in f.name]
+                exportacoes = [f for f in arquivos_downloads if "exportacao" in f.name]
+                
+                csv_result["csv_downloads"] = {
+                    "total": len(arquivos_downloads),
+                    "importacoes": len(importacoes),
+                    "exportacoes": len(exportacoes)
+                }
+        except Exception as e:
+            csv_result["erro"] = str(e)
+        
+        resultados["arquivos_csv"] = csv_result
+        
+        # 4. Validar Relacionamentos
+        logger.info("🔍 Validando relacionamentos...")
+        rel_result = {"empresas_recomendadas": {}, "relacionamento_operacoes_empresas": {}}
+        
+        try:
+            total_recomendadas = db.query(func.count(EmpresasRecomendadas.id)).scalar()
+            rel_result["empresas_recomendadas"]["total"] = total_recomendadas
+            
+            if total_recomendadas > 0:
+                importadoras = db.query(func.count(EmpresasRecomendadas.id)).filter(
+                    EmpresasRecomendadas.tipo_principal == "importadora"
+                ).scalar()
+                exportadoras = db.query(func.count(EmpresasRecomendadas.id)).filter(
+                    EmpresasRecomendadas.tipo_principal == "exportadora"
+                ).scalar()
+                
+                rel_result["empresas_recomendadas"]["importadoras"] = importadoras
+                rel_result["empresas_recomendadas"]["exportadoras"] = exportadoras
+                
+                com_cnpj = db.query(func.count(EmpresasRecomendadas.id)).filter(
+                    EmpresasRecomendadas.cnpj.isnot(None)
+                ).scalar()
+                rel_result["empresas_recomendadas"]["com_cnpj"] = com_cnpj
+            
+            # Relacionamento operacoes_comex ↔ empresas
+            cnpjs_operacoes = db.query(func.distinct(OperacaoComex.cnpj_importador)).filter(
+                OperacaoComex.cnpj_importador.isnot(None)
+            ).all()
+            cnpjs_operacoes = [c[0] for c in cnpjs_operacoes if c[0]]
+            
+            cnpjs_empresas = db.query(func.distinct(Empresa.cnpj)).filter(
+                Empresa.cnpj.isnot(None)
+            ).all()
+            cnpjs_empresas = [c[0] for c in cnpjs_empresas if c[0]]
+            
+            cnpjs_relacionados = len(set(cnpjs_operacoes) & set(cnpjs_empresas))
+            
+            rel_result["relacionamento_operacoes_empresas"] = {
+                "cnpjs_operacoes": len(cnpjs_operacoes),
+                "cnpjs_empresas": len(cnpjs_empresas),
+                "cnpjs_relacionados": cnpjs_relacionados,
+                "percentual_relacionado": round((cnpjs_relacionados / len(cnpjs_operacoes) * 100) if cnpjs_operacoes else 0, 2)
+            }
+        except Exception as e:
+            rel_result["erro"] = str(e)
+        
+        resultados["relacionamentos"] = rel_result
+        
+        # 5. Gerar Resumo
+        resumo = {
+            "status_geral": "OK",
+            "problemas": [],
+            "recomendacoes": []
+        }
+        
+        if not bigquery_result.get("conectado"):
+            resumo["status_geral"] = "ATENÇÃO"
+            resumo["problemas"].append("BigQuery não conectado")
+            resumo["recomendacoes"].append("Configure GOOGLE_APPLICATION_CREDENTIALS_JSON no Render")
+        
+        if banco_result["total_registros"].get("operacoes_comex", 0) == 0:
+            resumo["status_geral"] = "ATENÇÃO"
+            resumo["problemas"].append("Tabela operacoes_comex está vazia")
+            resumo["recomendacoes"].append("Execute coleta de dados do Comex Stat")
+        
+        if banco_result["total_registros"].get("empresas", 0) == 0:
+            resumo["problemas"].append("Tabela empresas está vazia")
+            resumo["recomendacoes"].append("Execute coleta de dados do BigQuery (Base dos Dados)")
+        
+        if rel_result["empresas_recomendadas"].get("total", 0) == 0:
+            resumo["problemas"].append("Tabela empresas_recomendadas está vazia")
+            resumo["recomendacoes"].append("Execute script de análise de sinergias")
+        
+        if rel_result["relacionamento_operacoes_empresas"].get("cnpjs_relacionados", 0) == 0:
+            resumo["problemas"].append("Nenhum relacionamento entre operacoes_comex e empresas")
+            resumo["recomendacoes"].append("Execute script de análise de sinergias para criar relacionamentos")
+        
+        resultados["resumo"] = resumo
+        
+        return resultados
+        
+    except Exception as e:
+        logger.error(f"Erro na validação: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na validação: {str(e)}")
+
+
 @app.post("/coletar-dados")
 async def coletar_dados(db: Session = Depends(get_db)):
     """
