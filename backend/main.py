@@ -1,7 +1,7 @@
 """
 Aplicação principal FastAPI.
 """
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -55,7 +55,13 @@ except ImportError:
 app = FastAPI(
     title="Comex Analyzer API",
     description="API para análise de dados do comércio exterior brasileiro",
-    version="1.0.0"
+    version="1.0.0",
+    openapi_tags=[
+        {
+            "name": "importacao",
+            "description": "Endpoints para importação de arquivos Excel e CNAE",
+        },
+    ]
 )
 
 # Configurar CORS para permitir requisições do frontend Electron
@@ -561,6 +567,198 @@ async def coletar_dados(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
 
 
+@app.post("/upload-e-importar-excel", tags=["importacao"])
+async def upload_e_importar_excel(
+    arquivo: UploadFile = File(..., description="Arquivo Excel (.xlsx ou .xls) para importar"),
+    db: Session = Depends(get_db)
+):
+    """
+    Faz upload de um arquivo Excel e importa automaticamente para o banco de dados.
+    
+    Aceita arquivos .xlsx e .xls via upload direto.
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+        from datetime import date
+        import tempfile
+        import os
+        from database.models import OperacaoComex, TipoOperacao
+        
+        # Validar extensão do arquivo
+        nome_arquivo = arquivo.filename.lower()
+        if not (nome_arquivo.endswith('.xlsx') or nome_arquivo.endswith('.xls')):
+            raise HTTPException(
+                status_code=400,
+                detail="Arquivo deve ser Excel (.xlsx ou .xls)"
+            )
+        
+        logger.info(f"Iniciando upload e importação do arquivo: {arquivo.filename}")
+        
+        # Salvar arquivo temporariamente
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx' if nome_arquivo.endswith('.xlsx') else '.xls') as tmp_file:
+            conteudo = await arquivo.read()
+            tmp_file.write(conteudo)
+            caminho_temp = tmp_file.name
+        
+        try:
+            # Ler Excel
+            df = pd.read_excel(caminho_temp)
+            logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
+            
+            stats = {
+                "arquivo": arquivo.filename,
+                "total_registros": 0,
+                "importacoes": 0,
+                "exportacoes": 0,
+                "erros": []
+            }
+            
+            # Processar cada linha
+            for idx, row in df.iterrows():
+                try:
+                    # Extrair dados básicos
+                    ncm = str(row.get('Código NCM', '')).strip() if pd.notna(row.get('Código NCM')) else None
+                    if not ncm or len(ncm) < 4:
+                        continue
+                    
+                    descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
+                    uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
+                    pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
+                    
+                    # Processar mês
+                    mes_str = str(row.get('Mês', '')).strip() if pd.notna(row.get('Mês')) else ''
+                    mes = None
+                    if mes_str:
+                        import re
+                        match = re.search(r'(\d{1,2})', mes_str)
+                        if match:
+                            mes = int(match.group(1))
+                        else:
+                            meses_map = {
+                                'janeiro': 1, 'fevereiro': 2, 'março': 3, 'marco': 3,
+                                'abril': 4, 'maio': 5, 'junho': 6,
+                                'julho': 7, 'agosto': 8, 'setembro': 9,
+                                'outubro': 10, 'novembro': 11, 'dezembro': 12
+                            }
+                            for nome, num in meses_map.items():
+                                if nome in mes_str.lower():
+                                    mes = num
+                                    break
+                    
+                    if not mes:
+                        mes = 1  # Default
+                    
+                    # Tentar detectar ano do nome do arquivo ou usar padrão
+                    ano = 2025  # Default
+                    ano_match = re.search(r'20\d{2}', arquivo.filename)
+                    if ano_match:
+                        ano = int(ano_match.group())
+                    
+                    data_operacao = date(ano, mes, 1)
+                    mes_referencia = f"{ano}-{mes:02d}"
+                    
+                    # Processar EXPORTAÇÃO
+                    valor_exp = row.get('Exportação - 2025 - Valor US$ FOB', 0) or row.get('Exportação - Valor US$ FOB', 0) or row.get('Valor Exportação', 0)
+                    peso_exp = row.get('Exportação - 2025 - Quilograma Líquido', 0) or row.get('Exportação - Quilograma Líquido', 0) or row.get('Peso Exportação', 0)
+                    
+                    if pd.notna(valor_exp) and float(valor_exp) > 0:
+                        # Verificar se já existe
+                        existing = db.query(OperacaoComex).filter(
+                            and_(
+                                OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
+                                OperacaoComex.data_operacao == data_operacao,
+                                OperacaoComex.pais_origem_destino == pais,
+                                OperacaoComex.uf == uf
+                            )
+                        ).first()
+                        
+                        if not existing:
+                            operacao = OperacaoComex(
+                                ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                descricao_produto=descricao,
+                                tipo_operacao=TipoOperacao.EXPORTACAO,
+                                uf=uf,
+                                pais_origem_destino=pais,
+                                valor_fob=float(valor_exp),
+                                peso_liquido_kg=float(peso_exp) if pd.notna(peso_exp) else 0,
+                                data_operacao=data_operacao,
+                                mes_referencia=mes_referencia,
+                                arquivo_origem=arquivo.filename
+                            )
+                            db.add(operacao)
+                            stats["exportacoes"] += 1
+                            stats["total_registros"] += 1
+                    
+                    # Processar IMPORTAÇÃO
+                    valor_imp = row.get('Importação - 2025 - Valor US$ FOB', 0) or row.get('Importação - Valor US$ FOB', 0) or row.get('Valor Importação', 0)
+                    peso_imp = row.get('Importação - 2025 - Quilograma Líquido', 0) or row.get('Importação - Quilograma Líquido', 0) or row.get('Peso Importação', 0)
+                    
+                    if pd.notna(valor_imp) and float(valor_imp) > 0:
+                        # Verificar se já existe
+                        existing = db.query(OperacaoComex).filter(
+                            and_(
+                                OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
+                                OperacaoComex.data_operacao == data_operacao,
+                                OperacaoComex.pais_origem_destino == pais,
+                                OperacaoComex.uf == uf
+                            )
+                        ).first()
+                        
+                        if not existing:
+                            operacao = OperacaoComex(
+                                ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                descricao_produto=descricao,
+                                tipo_operacao=TipoOperacao.IMPORTACAO,
+                                uf=uf,
+                                pais_origem_destino=pais,
+                                valor_fob=float(valor_imp),
+                                peso_liquido_kg=float(peso_imp) if pd.notna(peso_imp) else 0,
+                                data_operacao=data_operacao,
+                                mes_referencia=mes_referencia,
+                                arquivo_origem=arquivo.filename
+                            )
+                            db.add(operacao)
+                            stats["importacoes"] += 1
+                            stats["total_registros"] += 1
+                    
+                    # Commit a cada 1000 registros
+                    if stats["total_registros"] % 1000 == 0:
+                        db.commit()
+                        logger.info(f"  Processados {stats['total_registros']} registros...")
+                
+                except Exception as e:
+                    logger.error(f"Erro ao processar linha {idx}: {e}")
+                    stats["erros"].append(f"Linha {idx}: {str(e)}")
+                    continue
+            
+            db.commit()
+            logger.success(f"✅ Importação concluída: {stats['total_registros']} registros ({stats['importacoes']} importações, {stats['exportacoes']} exportações)")
+            
+            return {
+                "success": True,
+                "message": "Upload e importação concluídos",
+                "stats": stats
+            }
+        
+        finally:
+            # Remover arquivo temporário
+            try:
+                os.unlink(caminho_temp)
+            except:
+                pass
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro no upload e importação: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro no upload e importação: {str(e)}")
+
+
 @app.post("/importar-excel-automatico")
 async def importar_excel_automatico(
     db: Session = Depends(get_db)
@@ -985,6 +1183,150 @@ async def importar_excel_manual(
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro na importação manual: {str(e)}")
+
+
+@app.post("/upload-e-importar-cnae", tags=["importacao"])
+async def upload_e_importar_cnae(
+    arquivo: UploadFile = File(..., description="Arquivo CNAE Excel (.xlsx ou .xls) para importar"),
+    db: Session = Depends(get_db)
+):
+    """
+    Faz upload de um arquivo CNAE Excel e importa automaticamente para o banco de dados.
+    
+    Aceita arquivos .xlsx e .xls via upload direto.
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+        import tempfile
+        import os
+        from database.models import CNAEHierarquia
+        
+        # Validar extensão do arquivo
+        nome_arquivo = arquivo.filename.lower()
+        if not (nome_arquivo.endswith('.xlsx') or nome_arquivo.endswith('.xls')):
+            raise HTTPException(
+                status_code=400,
+                detail="Arquivo deve ser Excel (.xlsx ou .xls)"
+            )
+        
+        logger.info(f"Iniciando upload e importação do arquivo CNAE: {arquivo.filename}")
+        
+        # Salvar arquivo temporariamente
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx' if nome_arquivo.endswith('.xlsx') else '.xls') as tmp_file:
+            conteudo = await arquivo.read()
+            tmp_file.write(conteudo)
+            caminho_temp = tmp_file.name
+        
+        try:
+            # Ler Excel
+            df = pd.read_excel(caminho_temp)
+            logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
+            logger.info(f"Colunas disponíveis: {list(df.columns)}")
+            
+            stats = {
+                "arquivo": arquivo.filename,
+                "total_registros": 0,
+                "inseridos": 0,
+                "atualizados": 0,
+                "erros": []
+            }
+            
+            # Processar cada linha
+            for idx, row in df.iterrows():
+                try:
+                    # Tentar diferentes nomes de colunas para CNAE
+                    cnae = (
+                        str(row.get('CNAE', '')) or
+                        str(row.get('Código CNAE', '')) or
+                        str(row.get('CNAE 2.0', '')) or
+                        str(row.get('Subclasse', ''))
+                    ).strip()
+                    
+                    if not cnae or cnae == 'nan' or len(cnae) < 4:
+                        continue
+                    
+                    # Limpar CNAE (remover pontos, traços, etc)
+                    cnae_limpo = cnae.replace('.', '').replace('-', '').strip()
+                    
+                    # Extrair informações adicionais
+                    descricao = (
+                        str(row.get('Descrição', '')) or
+                        str(row.get('Descrição Subclasse', '')) or
+                        str(row.get('Descrição CNAE', ''))
+                    ).strip()[:500]
+                    
+                    classe = str(row.get('Classe', '')).strip()[:10] if pd.notna(row.get('Classe')) else None
+                    grupo = str(row.get('Grupo', '')).strip()[:10] if pd.notna(row.get('Grupo')) else None
+                    divisao = str(row.get('Divisão', '')).strip()[:10] if pd.notna(row.get('Divisão')) else None
+                    secao = str(row.get('Seção', '')).strip()[:10] if pd.notna(row.get('Seção')) else None
+                    
+                    # Verificar se já existe
+                    existente = db.query(CNAEHierarquia).filter(
+                        CNAEHierarquia.cnae == cnae_limpo
+                    ).first()
+                    
+                    if existente:
+                        # Atualizar
+                        if descricao:
+                            existente.descricao = descricao
+                        if classe:
+                            existente.classe = classe
+                        if grupo:
+                            existente.grupo = grupo
+                        if divisao:
+                            existente.divisao = divisao
+                        if secao:
+                            existente.secao = secao
+                        stats["atualizados"] += 1
+                    else:
+                        # Criar novo
+                        cnae_hierarquia = CNAEHierarquia(
+                            cnae=cnae_limpo,
+                            descricao=descricao,
+                            classe=classe,
+                            grupo=grupo,
+                            divisao=divisao,
+                            secao=secao
+                        )
+                        db.add(cnae_hierarquia)
+                        stats["inseridos"] += 1
+                    
+                    stats["total_registros"] += 1
+                    
+                    # Commit a cada 100 registros
+                    if stats["total_registros"] % 100 == 0:
+                        db.commit()
+                        logger.info(f"  Processados {stats['total_registros']} registros...")
+                
+                except Exception as e:
+                    logger.error(f"Erro ao processar linha {idx}: {e}")
+                    stats["erros"].append(f"Linha {idx}: {str(e)}")
+                    continue
+            
+            db.commit()
+            logger.success(f"✅ Importação de CNAE concluída: {stats['inseridos']} inseridos, {stats['atualizados']} atualizados")
+            
+            return {
+                "success": True,
+                "message": "Upload e importação de CNAE concluídos",
+                "stats": stats
+            }
+        
+        finally:
+            # Remover arquivo temporário
+            try:
+                os.unlink(caminho_temp)
+            except:
+                pass
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro no upload e importação de CNAE: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro no upload e importação de CNAE: {str(e)}")
 
 
 @app.post("/importar-cnae-automatico")
