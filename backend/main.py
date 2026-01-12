@@ -476,18 +476,1408 @@ async def validar_sistema_completo(db: Session = Depends(get_db)):
 async def coletar_dados(db: Session = Depends(get_db)):
     """
     Inicia coleta de dados do Comex Stat.
+    Tenta múltiplos métodos: API → CSV Scraper → Scraper tradicional
     """
     try:
         collector = DataCollector()
         stats = await collector.collect_recent_data(db)
         
+        # Se não coletou nada, tentar CSV scraper diretamente
+        if stats.get("total_registros", 0) == 0:
+            logger.warning("⚠️ Coleta inicial retornou 0 registros. Tentando CSV scraper diretamente...")
+            try:
+                from data_collector.csv_scraper import CSVDataScraper
+                csv_scraper = CSVDataScraper()
+                
+                # Baixar últimos 12 meses
+                logger.info("📥 Baixando arquivos CSV do MDIC...")
+                downloaded_files = await csv_scraper.download_recent_months(meses=12)
+                
+                if downloaded_files:
+                    logger.info(f"✅ {len(downloaded_files)} arquivos baixados. Processando...")
+                    from data_collector.transformer import DataTransformer
+                    transformer = DataTransformer()
+                    
+                    total_saved = 0
+                    for filepath in downloaded_files:
+                        try:
+                            # Parse CSV
+                            raw_data = csv_scraper.parse_csv_file(filepath)
+                            if not raw_data:
+                                continue
+                            
+                            # Extrair mês e tipo do nome do arquivo
+                            nome = filepath.stem
+                            if "importacao" in nome.lower():
+                                tipo = "Importação"
+                            elif "exportacao" in nome.lower():
+                                tipo = "Exportação"
+                            else:
+                                continue
+                            
+                            # Extrair mês (formato: tipo_YYYY_MM)
+                            partes = nome.split('_')
+                            if len(partes) >= 3:
+                                ano = partes[-2]
+                                mes = partes[-1]
+                                mes_str = f"{ano}-{mes}"
+                            else:
+                                mes_str = datetime.now().strftime("%Y-%m")
+                            
+                            # Transformar dados
+                            transformed = transformer.transform_csv_data(raw_data, mes_str, tipo)
+                            
+                            # Salvar no banco
+                            saved = collector._save_to_database(db, transformed, mes_str, tipo)
+                            total_saved += saved
+                            
+                            if mes_str not in stats["meses_processados"]:
+                                stats["meses_processados"].append(mes_str)
+                                
+                        except Exception as e:
+                            logger.error(f"Erro ao processar {filepath.name}: {e}")
+                            stats["erros"].append(f"Erro ao processar {filepath.name}: {str(e)}")
+                    
+                    stats["total_registros"] = total_saved
+                    logger.info(f"✅ CSV scraper salvou {total_saved} registros")
+                else:
+                    logger.warning("⚠️ Nenhum arquivo CSV foi baixado")
+                    stats["erros"].append("CSV scraper não conseguiu baixar arquivos")
+                    
+            except Exception as e:
+                logger.error(f"Erro no CSV scraper direto: {e}")
+                stats["erros"].append(f"CSV scraper direto: {str(e)}")
+        
         return {
             "success": True,
             "message": "Coleta de dados concluída",
-            "stats": stats
+            "stats": stats,
+            "recomendacao": "Se total_registros = 0, tente usar POST /coletar-dados-enriquecidos" if stats.get("total_registros", 0) == 0 else None
         }
     except Exception as e:
+        logger.error(f"Erro ao coletar dados: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
+
+
+@app.post("/importar-excel-automatico")
+async def importar_excel_automatico(
+    db: Session = Depends(get_db)
+):
+    """
+    Importa automaticamente todos os arquivos Excel encontrados na pasta comex_data/comexstat_csv.
+    
+    Procura por arquivos .xlsx e .xls e importa todos encontrados.
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+        from datetime import date
+        from database.models import OperacaoComex, TipoOperacao
+        
+        logger.info("Iniciando importação automática de arquivos Excel...")
+        
+        # Procurar arquivos em múltiplos locais
+        base_dir = Path(__file__).parent.parent
+        diretorios_procurar = [
+            base_dir / "comex_data" / "comexstat_csv",
+            Path("/opt/render/project/src/comex_data/comexstat_csv"),
+        ]
+        
+        arquivos_encontrados = []
+        for diretorio in diretorios_procurar:
+            if diretorio.exists():
+                # Procurar arquivos Excel
+                arquivos_xlsx = list(diretorio.glob("*.xlsx"))
+                arquivos_xls = list(diretorio.glob("*.xls"))
+                arquivos_encontrados.extend(arquivos_xlsx + arquivos_xls)
+                logger.info(f"Encontrados {len(arquivos_xlsx + arquivos_xls)} arquivos em {diretorio}")
+        
+        # Filtrar apenas arquivos de dados (não arquivos temporários ou outros)
+        arquivos_validos = []
+        for arquivo in arquivos_encontrados:
+            nome = arquivo.name.lower()
+            # Ignorar arquivos temporários e outros
+            if nome.startswith('~$') or nome.startswith('.~'):
+                continue
+            # Incluir arquivos que parecem ser de dados
+            if 'exportacao' in nome or 'importacao' in nome or 'comex' in nome or 'geral' in nome:
+                arquivos_validos.append(arquivo)
+        
+        if not arquivos_validos:
+            logger.warning("⚠️ Nenhum arquivo Excel válido encontrado")
+            return {
+                "success": False,
+                "message": "Nenhum arquivo Excel válido encontrado",
+                "diretorios_procurados": [str(d) for d in diretorios_procurar],
+                "arquivos_encontrados": 0
+            }
+        
+        logger.info(f"✅ {len(arquivos_validos)} arquivo(s) válido(s) encontrado(s)")
+        
+        stats_geral = {
+            "total_arquivos": len(arquivos_validos),
+            "arquivos_processados": 0,
+            "arquivos_com_erro": 0,
+            "total_registros": 0,
+            "importacoes": 0,
+            "exportacoes": 0,
+            "erros": [],
+            "detalhes_por_arquivo": []
+        }
+        
+        # Processar cada arquivo
+        for arquivo_excel in arquivos_validos:
+            try:
+                logger.info(f"📄 Processando arquivo: {arquivo_excel.name}")
+                
+                # Ler Excel
+                df = pd.read_excel(arquivo_excel)
+                logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
+                
+                stats_arquivo = {
+                    "arquivo": arquivo_excel.name,
+                    "total_registros": 0,
+                    "importacoes": 0,
+                    "exportacoes": 0,
+                    "erros": []
+                }
+                
+                # Processar cada linha
+                for idx, row in df.iterrows():
+                    try:
+                        # Extrair dados básicos
+                        ncm = str(row.get('Código NCM', '')).strip() if pd.notna(row.get('Código NCM')) else None
+                        if not ncm or len(ncm) < 4:
+                            continue
+                        
+                        descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
+                        uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
+                        pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
+                        
+                        # Processar mês
+                        mes_str = str(row.get('Mês', '')).strip() if pd.notna(row.get('Mês')) else ''
+                        mes = None
+                        if mes_str:
+                            import re
+                            match = re.search(r'(\d{1,2})', mes_str)
+                            if match:
+                                mes = int(match.group(1))
+                            else:
+                                meses_map = {
+                                    'janeiro': 1, 'fevereiro': 2, 'março': 3, 'marco': 3,
+                                    'abril': 4, 'maio': 5, 'junho': 6,
+                                    'julho': 7, 'agosto': 8, 'setembro': 9,
+                                    'outubro': 10, 'novembro': 11, 'dezembro': 12
+                                }
+                                for nome, num in meses_map.items():
+                                    if nome in mes_str.lower():
+                                        mes = num
+                                        break
+                        
+                        if not mes:
+                            mes = 1  # Default
+                        
+                        # Tentar detectar ano do nome do arquivo ou usar padrão
+                        ano = 2025  # Default
+                        nome_arquivo_lower = arquivo_excel.name.lower()
+                        ano_match = re.search(r'20\d{2}', arquivo_excel.name)
+                        if ano_match:
+                            ano = int(ano_match.group())
+                        
+                        data_operacao = date(ano, mes, 1)
+                        mes_referencia = f"{ano}-{mes:02d}"
+                        
+                        # Processar EXPORTAÇÃO
+                        valor_exp = row.get('Exportação - 2025 - Valor US$ FOB', 0) or row.get('Exportação - Valor US$ FOB', 0) or row.get('Valor Exportação', 0)
+                        peso_exp = row.get('Exportação - 2025 - Quilograma Líquido', 0) or row.get('Exportação - Quilograma Líquido', 0) or row.get('Peso Exportação', 0)
+                        
+                        if pd.notna(valor_exp) and float(valor_exp) > 0:
+                            # Verificar se já existe
+                            existing = db.query(OperacaoComex).filter(
+                                and_(
+                                    OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                    OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
+                                    OperacaoComex.data_operacao == data_operacao,
+                                    OperacaoComex.pais_origem_destino == pais,
+                                    OperacaoComex.uf == uf
+                                )
+                            ).first()
+                            
+                            if not existing:
+                                operacao = OperacaoComex(
+                                    ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                    descricao_produto=descricao,
+                                    tipo_operacao=TipoOperacao.EXPORTACAO,
+                                    uf=uf,
+                                    pais_origem_destino=pais,
+                                    valor_fob=float(valor_exp),
+                                    peso_liquido_kg=float(peso_exp) if pd.notna(peso_exp) else 0,
+                                    data_operacao=data_operacao,
+                                    mes_referencia=mes_referencia,
+                                    arquivo_origem=arquivo_excel.name
+                                )
+                                db.add(operacao)
+                                stats_arquivo["exportacoes"] += 1
+                                stats_arquivo["total_registros"] += 1
+                                stats_geral["exportacoes"] += 1
+                                stats_geral["total_registros"] += 1
+                        
+                        # Processar IMPORTAÇÃO
+                        valor_imp = row.get('Importação - 2025 - Valor US$ FOB', 0) or row.get('Importação - Valor US$ FOB', 0) or row.get('Valor Importação', 0)
+                        peso_imp = row.get('Importação - 2025 - Quilograma Líquido', 0) or row.get('Importação - Quilograma Líquido', 0) or row.get('Peso Importação', 0)
+                        
+                        if pd.notna(valor_imp) and float(valor_imp) > 0:
+                            # Verificar se já existe
+                            existing = db.query(OperacaoComex).filter(
+                                and_(
+                                    OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                    OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
+                                    OperacaoComex.data_operacao == data_operacao,
+                                    OperacaoComex.pais_origem_destino == pais,
+                                    OperacaoComex.uf == uf
+                                )
+                            ).first()
+                            
+                            if not existing:
+                                operacao = OperacaoComex(
+                                    ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                                    descricao_produto=descricao,
+                                    tipo_operacao=TipoOperacao.IMPORTACAO,
+                                    uf=uf,
+                                    pais_origem_destino=pais,
+                                    valor_fob=float(valor_imp),
+                                    peso_liquido_kg=float(peso_imp) if pd.notna(peso_imp) else 0,
+                                    data_operacao=data_operacao,
+                                    mes_referencia=mes_referencia,
+                                    arquivo_origem=arquivo_excel.name
+                                )
+                                db.add(operacao)
+                                stats_arquivo["importacoes"] += 1
+                                stats_arquivo["total_registros"] += 1
+                                stats_geral["importacoes"] += 1
+                                stats_geral["total_registros"] += 1
+                        
+                        # Commit a cada 1000 registros
+                        if stats_geral["total_registros"] % 1000 == 0:
+                            db.commit()
+                            logger.info(f"  Processados {stats_geral['total_registros']} registros...")
+                    
+                    except Exception as e:
+                        logger.error(f"Erro ao processar linha {idx} do arquivo {arquivo_excel.name}: {e}")
+                        stats_arquivo["erros"].append(f"Linha {idx}: {str(e)}")
+                        continue
+                
+                # Commit final do arquivo
+                db.commit()
+                stats_geral["arquivos_processados"] += 1
+                stats_geral["detalhes_por_arquivo"].append(stats_arquivo)
+                logger.success(f"✅ Arquivo {arquivo_excel.name} processado: {stats_arquivo['total_registros']} registros ({stats_arquivo['importacoes']} importações, {stats_arquivo['exportacoes']} exportações)")
+            
+            except Exception as e:
+                logger.error(f"Erro ao processar arquivo {arquivo_excel.name}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                stats_geral["arquivos_com_erro"] += 1
+                stats_geral["erros"].append(f"Arquivo {arquivo_excel.name}: {str(e)}")
+                continue
+        
+        logger.success(
+            f"✅ Importação automática concluída: {stats_geral['arquivos_processados']} arquivo(s) processado(s), "
+            f"{stats_geral['total_registros']} registros ({stats_geral['importacoes']} importações, {stats_geral['exportacoes']} exportações)"
+        )
+        
+        return {
+            "success": True,
+            "message": "Importação automática concluída",
+            "stats": stats_geral
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na importação automática: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na importação automática: {str(e)}")
+
+
+@app.post("/importar-excel-manual")
+async def importar_excel_manual(
+    nome_arquivo: str = Query(..., description="Nome do arquivo Excel (ex: H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Importa arquivo Excel manualmente do diretório comex_data/comexstat_csv.
+    
+    O arquivo deve estar em: comex_data/comexstat_csv/
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+        from datetime import date
+        from database.models import OperacaoComex, TipoOperacao
+        
+        logger.info(f"Iniciando importação manual do arquivo: {nome_arquivo}")
+        
+        # Procurar arquivo em múltiplos locais
+        base_dir = Path(__file__).parent.parent
+        caminhos_possiveis = [
+            base_dir / "comex_data" / "comexstat_csv" / nome_arquivo,
+            base_dir / "comex_data" / "comexstat_csv" / f"{nome_arquivo}.xlsx",
+            Path("/opt/render/project/src/comex_data/comexstat_csv") / nome_arquivo,
+            Path("/opt/render/project/src/comex_data/comexstat_csv") / f"{nome_arquivo}.xlsx",
+        ]
+        
+        arquivo_excel = None
+        for caminho in caminhos_possiveis:
+            if caminho.exists():
+                arquivo_excel = caminho
+                break
+        
+        if not arquivo_excel:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Arquivo não encontrado. Procurado em: {[str(c) for c in caminhos_possiveis]}"
+            )
+        
+        logger.info(f"✅ Arquivo encontrado: {arquivo_excel}")
+        
+        # Ler Excel
+        df = pd.read_excel(arquivo_excel)
+        logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
+        
+        stats = {
+            "total_registros": 0,
+            "importacoes": 0,
+            "exportacoes": 0,
+            "erros": []
+        }
+        
+        # Processar cada linha
+        for idx, row in df.iterrows():
+            try:
+                # Extrair dados básicos
+                ncm = str(row.get('Código NCM', '')).strip() if pd.notna(row.get('Código NCM')) else None
+                if not ncm or len(ncm) < 4:
+                    continue
+                
+                descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
+                uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
+                pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
+                
+                # Processar mês
+                mes_str = str(row.get('Mês', '')).strip() if pd.notna(row.get('Mês')) else ''
+                mes = None
+                if mes_str:
+                    # Tentar extrair número do mês
+                    import re
+                    match = re.search(r'(\d{1,2})', mes_str)
+                    if match:
+                        mes = int(match.group(1))
+                    else:
+                        meses_map = {
+                            'janeiro': 1, 'fevereiro': 2, 'março': 3, 'marco': 3,
+                            'abril': 4, 'maio': 5, 'junho': 6,
+                            'julho': 7, 'agosto': 8, 'setembro': 9,
+                            'outubro': 10, 'novembro': 11, 'dezembro': 12
+                        }
+                        for nome, num in meses_map.items():
+                            if nome in mes_str.lower():
+                                mes = num
+                                break
+                
+                if not mes:
+                    mes = 1  # Default
+                
+                ano = 2025  # Ano do arquivo
+                data_operacao = date(ano, mes, 1)
+                mes_referencia = f"{ano}-{mes:02d}"
+                
+                # Processar EXPORTAÇÃO
+                valor_exp = row.get('Exportação - 2025 - Valor US$ FOB', 0)
+                peso_exp = row.get('Exportação - 2025 - Quilograma Líquido', 0)
+                
+                if pd.notna(valor_exp) and float(valor_exp) > 0:
+                    # Verificar se já existe
+                    existing = db.query(OperacaoComex).filter(
+                        and_(
+                            OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                            OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
+                            OperacaoComex.data_operacao == data_operacao,
+                            OperacaoComex.pais_origem_destino == pais,
+                            OperacaoComex.uf == uf
+                        )
+                    ).first()
+                    
+                    if not existing:
+                        operacao = OperacaoComex(
+                            ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                            descricao_produto=descricao,
+                            tipo_operacao=TipoOperacao.EXPORTACAO,
+                            uf=uf,
+                            pais_origem_destino=pais,
+                            valor_fob=float(valor_exp),
+                            peso_liquido_kg=float(peso_exp) if pd.notna(peso_exp) else 0,
+                            data_operacao=data_operacao,
+                            mes_referencia=mes_referencia,
+                            arquivo_origem=nome_arquivo
+                        )
+                        db.add(operacao)
+                        stats["exportacoes"] += 1
+                        stats["total_registros"] += 1
+                
+                # Processar IMPORTAÇÃO
+                valor_imp = row.get('Importação - 2025 - Valor US$ FOB', 0)
+                peso_imp = row.get('Importação - 2025 - Quilograma Líquido', 0)
+                
+                if pd.notna(valor_imp) and float(valor_imp) > 0:
+                    # Verificar se já existe
+                    existing = db.query(OperacaoComex).filter(
+                        and_(
+                            OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                            OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
+                            OperacaoComex.data_operacao == data_operacao,
+                            OperacaoComex.pais_origem_destino == pais,
+                            OperacaoComex.uf == uf
+                        )
+                    ).first()
+                    
+                    if not existing:
+                        operacao = OperacaoComex(
+                            ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
+                            descricao_produto=descricao,
+                            tipo_operacao=TipoOperacao.IMPORTACAO,
+                            uf=uf,
+                            pais_origem_destino=pais,
+                            valor_fob=float(valor_imp),
+                            peso_liquido_kg=float(peso_imp) if pd.notna(peso_imp) else 0,
+                            data_operacao=data_operacao,
+                            mes_referencia=mes_referencia,
+                            arquivo_origem=nome_arquivo
+                        )
+                        db.add(operacao)
+                        stats["importacoes"] += 1
+                        stats["total_registros"] += 1
+                
+                # Commit a cada 1000 registros
+                if stats["total_registros"] % 1000 == 0:
+                    db.commit()
+                    logger.info(f"  Processados {stats['total_registros']} registros...")
+            
+            except Exception as e:
+                logger.error(f"Erro ao processar linha {idx}: {e}")
+                stats["erros"].append(f"Linha {idx}: {str(e)}")
+                continue
+        
+        db.commit()
+        logger.success(f"✅ Importação concluída: {stats['total_registros']} registros ({stats['importacoes']} importações, {stats['exportacoes']} exportações)")
+        
+        return {
+            "success": True,
+            "message": "Importação manual concluída",
+            "stats": stats
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro na importação manual: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na importação manual: {str(e)}")
+
+
+@app.post("/importar-cnae-automatico")
+async def importar_cnae_automatico(
+    db: Session = Depends(get_db)
+):
+    """
+    Importa automaticamente todos os arquivos CNAE encontrados na pasta comex_data/comexstat_csv.
+    
+    Procura por arquivos CNAE.xlsx, NOVO CNAE.xlsx ou arquivos na pasta cnae/.
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+        from database.models import CNAEHierarquia
+        
+        logger.info("Iniciando importação automática de arquivos CNAE...")
+        
+        # Procurar arquivos em múltiplos locais
+        base_dir = Path(__file__).parent.parent
+        diretorios_procurar = [
+            base_dir / "comex_data" / "comexstat_csv",
+            base_dir / "comex_data" / "comexstat_csv" / "cnae",
+            Path("/opt/render/project/src/comex_data/comexstat_csv"),
+            Path("/opt/render/project/src/comex_data/comexstat_csv/cnae"),
+        ]
+        
+        arquivos_encontrados = []
+        for diretorio in diretorios_procurar:
+            if diretorio.exists():
+                # Procurar arquivos CNAE
+                arquivos_cnae = list(diretorio.glob("*CNAE*.xlsx")) + list(diretorio.glob("*CNAE*.xls"))
+                arquivos_encontrados.extend(arquivos_cnae)
+                logger.info(f"Encontrados {len(arquivos_cnae)} arquivos CNAE em {diretorio}")
+        
+        # Filtrar apenas arquivos válidos (não temporários)
+        arquivos_validos = [a for a in arquivos_encontrados if not a.name.startswith('~$')]
+        
+        if not arquivos_validos:
+            logger.warning("⚠️ Nenhum arquivo CNAE encontrado")
+            return {
+                "success": False,
+                "message": "Nenhum arquivo CNAE encontrado",
+                "diretorios_procurados": [str(d) for d in diretorios_procurar],
+                "arquivos_encontrados": 0
+            }
+        
+        logger.info(f"✅ {len(arquivos_validos)} arquivo(s) CNAE encontrado(s)")
+        
+        stats_geral = {
+            "total_arquivos": len(arquivos_validos),
+            "arquivos_processados": 0,
+            "total_registros": 0,
+            "inseridos": 0,
+            "atualizados": 0,
+            "erros": [],
+            "detalhes_por_arquivo": []
+        }
+        
+        # Processar cada arquivo
+        for arquivo_excel in arquivos_validos:
+            try:
+                logger.info(f"📄 Processando arquivo CNAE: {arquivo_excel.name}")
+                
+                # Ler Excel
+                df = pd.read_excel(arquivo_excel)
+                logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
+                
+                stats_arquivo = {
+                    "arquivo": arquivo_excel.name,
+                    "total_registros": 0,
+                    "inseridos": 0,
+                    "atualizados": 0,
+                    "erros": []
+                }
+                
+                # Processar cada linha
+                for idx, row in df.iterrows():
+                    try:
+                        # Tentar diferentes nomes de colunas para CNAE
+                        cnae = (
+                            str(row.get('CNAE', '')) or
+                            str(row.get('Código CNAE', '')) or
+                            str(row.get('CNAE 2.0', '')) or
+                            str(row.get('Subclasse', ''))
+                        ).strip()
+                        
+                        if not cnae or cnae == 'nan' or len(cnae) < 4:
+                            continue
+                        
+                        # Limpar CNAE (remover pontos, traços, etc)
+                        cnae_limpo = cnae.replace('.', '').replace('-', '').strip()
+                        
+                        # Extrair informações adicionais
+                        descricao = (
+                            str(row.get('Descrição', '')) or
+                            str(row.get('Descrição Subclasse', '')) or
+                            str(row.get('Descrição CNAE', ''))
+                        ).strip()[:500]
+                        
+                        classe = str(row.get('Classe', '')).strip()[:10] if pd.notna(row.get('Classe')) else None
+                        grupo = str(row.get('Grupo', '')).strip()[:10] if pd.notna(row.get('Grupo')) else None
+                        divisao = str(row.get('Divisão', '')).strip()[:10] if pd.notna(row.get('Divisão')) else None
+                        secao = str(row.get('Seção', '')).strip()[:10] if pd.notna(row.get('Seção')) else None
+                        
+                        # Verificar se já existe
+                        existente = db.query(CNAEHierarquia).filter(
+                            CNAEHierarquia.cnae == cnae_limpo
+                        ).first()
+                        
+                        if existente:
+                            # Atualizar
+                            if descricao:
+                                existente.descricao = descricao
+                            if classe:
+                                existente.classe = classe
+                            if grupo:
+                                existente.grupo = grupo
+                            if divisao:
+                                existente.divisao = divisao
+                            if secao:
+                                existente.secao = secao
+                            stats_arquivo["atualizados"] += 1
+                            stats_geral["atualizados"] += 1
+                        else:
+                            # Criar novo
+                            cnae_hierarquia = CNAEHierarquia(
+                                cnae=cnae_limpo,
+                                descricao=descricao,
+                                classe=classe,
+                                grupo=grupo,
+                                divisao=divisao,
+                                secao=secao
+                            )
+                            db.add(cnae_hierarquia)
+                            stats_arquivo["inseridos"] += 1
+                            stats_geral["inseridos"] += 1
+                        
+                        stats_arquivo["total_registros"] += 1
+                        stats_geral["total_registros"] += 1
+                        
+                        # Commit a cada 100 registros
+                        if stats_geral["total_registros"] % 100 == 0:
+                            db.commit()
+                            logger.info(f"  Processados {stats_geral['total_registros']} registros...")
+                    
+                    except Exception as e:
+                        logger.error(f"Erro ao processar linha {idx} do arquivo {arquivo_excel.name}: {e}")
+                        stats_arquivo["erros"].append(f"Linha {idx}: {str(e)}")
+                        continue
+                
+                # Commit final do arquivo
+                db.commit()
+                stats_geral["arquivos_processados"] += 1
+                stats_geral["detalhes_por_arquivo"].append(stats_arquivo)
+                logger.success(f"✅ Arquivo CNAE {arquivo_excel.name} processado: {stats_arquivo['inseridos']} inseridos, {stats_arquivo['atualizados']} atualizados")
+            
+            except Exception as e:
+                logger.error(f"Erro ao processar arquivo CNAE {arquivo_excel.name}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                stats_geral["erros"].append(f"Arquivo {arquivo_excel.name}: {str(e)}")
+                continue
+        
+        logger.success(
+            f"✅ Importação automática de CNAE concluída: {stats_geral['arquivos_processados']} arquivo(s) processado(s), "
+            f"{stats_geral['inseridos']} inseridos, {stats_geral['atualizados']} atualizados"
+        )
+        
+        return {
+            "success": True,
+            "message": "Importação automática de CNAE concluída",
+            "stats": stats_geral
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na importação automática de CNAE: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na importação automática de CNAE: {str(e)}")
+
+
+@app.post("/importar-cnae")
+async def importar_cnae(
+    nome_arquivo: str = Query("CNAE.xlsx", description="Nome do arquivo CNAE (ex: CNAE.xlsx)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Importa dados de CNAE do arquivo Excel para o banco de dados.
+    
+    O arquivo deve estar em: comex_data/comexstat_csv/cnae/
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+        from database.models import CNAEHierarquia
+        
+        logger.info(f"Iniciando importação de CNAE do arquivo: {nome_arquivo}")
+        
+        # Procurar arquivo em múltiplos locais
+        base_dir = Path(__file__).parent.parent
+        caminhos_possiveis = [
+            base_dir / "comex_data" / "comexstat_csv" / nome_arquivo,
+            base_dir / "comex_data" / "comexstat_csv" / "cnae" / nome_arquivo,
+            base_dir / "comex_data" / "comexstat_csv" / f"{nome_arquivo}.xlsx",
+            Path("/opt/render/project/src/comex_data/comexstat_csv") / nome_arquivo,
+            Path("/opt/render/project/src/comex_data/comexstat_csv/cnae") / nome_arquivo,
+        ]
+        
+        arquivo_excel = None
+        for caminho in caminhos_possiveis:
+            if caminho.exists():
+                arquivo_excel = caminho
+                break
+        
+        if not arquivo_excel:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Arquivo CNAE não encontrado. Procurado em: {[str(c) for c in caminhos_possiveis]}"
+            )
+        
+        logger.info(f"✅ Arquivo encontrado: {arquivo_excel}")
+        
+        # Ler Excel
+        df = pd.read_excel(arquivo_excel)
+        logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
+        logger.info(f"Colunas disponíveis: {list(df.columns)}")
+        
+        stats = {
+            "total_registros": 0,
+            "inseridos": 0,
+            "atualizados": 0,
+            "erros": []
+        }
+        
+        # Processar cada linha
+        for idx, row in df.iterrows():
+            try:
+                # Tentar diferentes nomes de colunas para CNAE
+                cnae = (
+                    str(row.get('CNAE', '')) or
+                    str(row.get('Código CNAE', '')) or
+                    str(row.get('CNAE 2.0', '')) or
+                    str(row.get('Subclasse', ''))
+                ).strip()
+                
+                if not cnae or cnae == 'nan' or len(cnae) < 4:
+                    continue
+                
+                # Limpar CNAE (remover pontos, traços, etc)
+                cnae_limpo = cnae.replace('.', '').replace('-', '').strip()
+                
+                # Extrair informações adicionais
+                descricao = (
+                    str(row.get('Descrição', '')) or
+                    str(row.get('Descrição Subclasse', '')) or
+                    str(row.get('Descrição CNAE', ''))
+                ).strip()[:500]
+                
+                classe = str(row.get('Classe', '')).strip()[:10] if pd.notna(row.get('Classe')) else None
+                grupo = str(row.get('Grupo', '')).strip()[:10] if pd.notna(row.get('Grupo')) else None
+                divisao = str(row.get('Divisão', '')).strip()[:10] if pd.notna(row.get('Divisão')) else None
+                secao = str(row.get('Seção', '')).strip()[:10] if pd.notna(row.get('Seção')) else None
+                
+                # Verificar se já existe
+                existente = db.query(CNAEHierarquia).filter(
+                    CNAEHierarquia.cnae == cnae_limpo
+                ).first()
+                
+                if existente:
+                    # Atualizar
+                    if descricao:
+                        existente.descricao = descricao
+                    if classe:
+                        existente.classe = classe
+                    if grupo:
+                        existente.grupo = grupo
+                    if divisao:
+                        existente.divisao = divisao
+                    if secao:
+                        existente.secao = secao
+                    stats["atualizados"] += 1
+                else:
+                    # Criar novo
+                    cnae_hierarquia = CNAEHierarquia(
+                        cnae=cnae_limpo,
+                        descricao=descricao,
+                        classe=classe,
+                        grupo=grupo,
+                        divisao=divisao,
+                        secao=secao
+                    )
+                    db.add(cnae_hierarquia)
+                    stats["inseridos"] += 1
+                
+                stats["total_registros"] += 1
+                
+                # Commit a cada 100 registros
+                if stats["total_registros"] % 100 == 0:
+                    db.commit()
+                    logger.info(f"  Processados {stats['total_registros']} registros...")
+            
+            except Exception as e:
+                logger.error(f"Erro ao processar linha {idx}: {e}")
+                stats["erros"].append(f"Linha {idx}: {str(e)}")
+                continue
+        
+        db.commit()
+        logger.success(f"✅ Importação de CNAE concluída: {stats['inseridos']} inseridos, {stats['atualizados']} atualizados")
+        
+        return {
+            "success": True,
+            "message": "Importação de CNAE concluída",
+            "stats": stats
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro na importação de CNAE: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na importação de CNAE: {str(e)}")
+
+
+@app.post("/coletar-empresas-bigquery-ultimos-anos")
+async def coletar_empresas_bigquery_ultimos_anos(
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta empresas do BigQuery (Base dos Dados) dos últimos 3 anos (2019, 2020, 2021).
+    
+    Requer BigQuery configurado no Render.
+    """
+    try:
+        from api.coletar_base_dados import coletar_dados_bigquery, importar_para_postgresql
+        from database.models import Empresa
+        from sqlalchemy import func
+        
+        logger.info("Iniciando coleta de empresas do BigQuery (anos 2019, 2020, 2021)...")
+        
+        # Coletar dados do BigQuery
+        df = coletar_dados_bigquery()
+        
+        if df.empty:
+            return {
+                "success": False,
+                "message": "Nenhum dado retornado da query",
+                "total_registros": 0,
+                "empresas_inseridas": 0,
+                "empresas_atualizadas": 0
+            }
+        
+        # Estatísticas
+        total_registros = len(df)
+        
+        # Estatísticas por ano
+        anos_stats = {}
+        if 'ano' in df.columns:
+            anos_stats = df['ano'].value_counts().to_dict()
+        
+        # Estatísticas por tipo
+        tipos_stats = {}
+        if 'id_exportacao_importacao' in df.columns:
+            tipos_stats = df['id_exportacao_importacao'].value_counts().to_dict()
+        
+        # Estatísticas por estado
+        estados_stats = {}
+        if 'sigla_uf' in df.columns:
+            estados_stats = df['sigla_uf'].value_counts().head(10).to_dict()
+        
+        # Importar para PostgreSQL
+        empresas_inseridas, empresas_atualizadas = importar_para_postgresql(df, db)
+        
+        # Verificar total no banco após importação
+        total_no_banco = db.query(func.count(Empresa.id)).scalar() or 0
+        
+        logger.success(
+            f"✅ Coleta concluída: {total_registros} registros coletados, "
+            f"{empresas_inseridas} empresas inseridas, {empresas_atualizadas} atualizadas"
+        )
+        
+        return {
+            "success": True,
+            "message": "Coleta de empresas do BigQuery concluída",
+            "total_registros": total_registros,
+            "empresas_inseridas": empresas_inseridas,
+            "empresas_atualizadas": empresas_atualizadas,
+            "total_no_banco": total_no_banco,
+            "estatisticas": {
+                "por_ano": anos_stats,
+                "por_tipo": tipos_stats,
+                "por_estado": estados_stats
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na coleta de empresas: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na coleta: {str(e)}")
+
+
+@app.get("/validar-bigquery")
+async def validar_bigquery():
+    """
+    Valida conexão e configuração do BigQuery.
+    Verifica se as credenciais estão configuradas e se é possível conectar.
+    """
+    try:
+        import os
+        import json
+        from google.cloud import bigquery
+        from google.oauth2 import service_account
+        
+        resultado = {
+            "conectado": False,
+            "credenciais_configuradas": False,
+            "credenciais_validas": False,
+            "teste_query": False,
+            "erro": None,
+            "detalhes": {}
+        }
+        
+        # Verificar variável de ambiente
+        creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        
+        if creds_env:
+            resultado["credenciais_configuradas"] = True
+            
+            # Tentar validar JSON
+            if creds_env.startswith('{'):
+                try:
+                    creds_dict = json.loads(creds_env)
+                    resultado["credenciais_validas"] = True
+                    resultado["detalhes"]["tipo"] = "JSON string"
+                    resultado["detalhes"]["project_id"] = creds_dict.get("project_id", "não encontrado")
+                except json.JSONDecodeError:
+                    resultado["credenciais_validas"] = False
+                    resultado["erro"] = "JSON inválido em GOOGLE_APPLICATION_CREDENTIALS_JSON"
+            else:
+                resultado["detalhes"]["tipo"] = "Caminho de arquivo"
+                resultado["detalhes"]["caminho"] = creds_env
+        
+        # Tentar conectar
+        try:
+            if creds_env and creds_env.startswith('{'):
+                try:
+                    creds_dict = json.loads(creds_env)
+                    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                    client = bigquery.Client(credentials=credentials, project=creds_dict.get("project_id"))
+                except Exception as e:
+                    resultado["erro"] = f"Erro ao criar credenciais: {str(e)}"
+                    return resultado
+            else:
+                client = bigquery.Client()
+            
+            # Testar query simples
+            query_job = client.query("SELECT 1 as test")
+            query_job.result()
+            
+            resultado["conectado"] = True
+            resultado["teste_query"] = True
+            resultado["detalhes"]["project_id"] = client.project
+            
+            logger.success("✅ BigQuery conectado e funcionando")
+            
+        except ImportError:
+            resultado["erro"] = "Biblioteca google-cloud-bigquery não instalada"
+        except Exception as e:
+            resultado["erro"] = str(e)
+            logger.error(f"Erro ao conectar BigQuery: {e}")
+        
+        return resultado
+        
+    except Exception as e:
+        logger.error(f"Erro na validação do BigQuery: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na validação: {str(e)}")
+
+
+@app.post("/enriquecer-com-cnae-relacionamentos")
+async def enriquecer_com_cnae_relacionamentos(
+    db: Session = Depends(get_db)
+):
+    """
+    Enriquece dados com CNAE e cria relacionamentos entre empresas importadoras e exportadoras.
+    
+    Este endpoint:
+    1. Valida BigQuery
+    2. Coleta empresas do BigQuery (Base dos Dados)
+    3. Enriquece com dados de CNAE
+    4. Cria relacionamentos entre importadoras e exportadoras
+    5. Gera recomendações de sinergias
+    """
+    try:
+        from pathlib import Path
+        from data_collector.cnae_analyzer import CNAEAnalyzer
+        from data_collector.sinergia_analyzer import SinergiaAnalyzer
+        from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
+        from database.models import Empresa, EmpresasRecomendadas
+        from sqlalchemy import func
+        
+        logger.info("Iniciando enriquecimento com CNAE e relacionamentos...")
+        
+        resultado = {
+            "bigquery_validado": False,
+            "empresas_coletadas": 0,
+            "empresas_enriquecidas_cnae": 0,
+            "relacionamentos_criados": 0,
+            "recomendacoes_geradas": 0,
+            "erros": []
+        }
+        
+        # 1. Validar BigQuery
+        logger.info("1️⃣ Validando BigQuery...")
+        try:
+            import os
+            import json
+            from google.cloud import bigquery
+            from google.oauth2 import service_account
+            
+            creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+            
+            if creds_env:
+                try:
+                    if creds_env.startswith('{'):
+                        creds_dict = json.loads(creds_env)
+                        credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                        client = bigquery.Client(credentials=credentials, project=creds_dict.get("project_id"))
+                    else:
+                        client = bigquery.Client()
+                    
+                    # Testar query
+                    query_job = client.query("SELECT 1 as test")
+                    query_job.result()
+                    
+                    resultado["bigquery_validado"] = True
+                    resultado["bigquery_detalhes"] = {"conectado": True, "project_id": client.project}
+                    logger.success("✅ BigQuery conectado")
+                except Exception as e:
+                    resultado["bigquery_validado"] = False
+                    resultado["bigquery_detalhes"] = {"conectado": False, "erro": str(e)}
+                    logger.warning(f"⚠️ BigQuery não conectado: {e}")
+                    resultado["erros"].append(f"BigQuery não conectado: {str(e)}")
+            else:
+                resultado["bigquery_validado"] = False
+                resultado["bigquery_detalhes"] = {"conectado": False, "erro": "Credenciais não configuradas"}
+                logger.warning("⚠️ BigQuery não configurado. Continuando sem BigQuery...")
+                resultado["erros"].append("BigQuery não configurado - usando apenas dados locais")
+        except ImportError:
+            resultado["bigquery_validado"] = False
+            resultado["bigquery_detalhes"] = {"conectado": False, "erro": "Biblioteca google-cloud-bigquery não instalada"}
+            logger.warning("⚠️ Biblioteca BigQuery não instalada")
+            resultado["erros"].append("Biblioteca BigQuery não instalada")
+        except Exception as e:
+            logger.warning(f"Erro ao validar BigQuery: {e}")
+            resultado["erros"].append(f"Erro ao validar BigQuery: {str(e)}")
+        
+        # 2. Coletar empresas do BigQuery (se disponível)
+        empresas_mdic = {}
+        if resultado["bigquery_validado"]:
+            logger.info("2️⃣ Coletando empresas do BigQuery...")
+            try:
+                scraper = EmpresasMDICScraper()
+                empresas_lista = await scraper.coletar_empresas()
+                for empresa in empresas_lista:
+                    cnpj = empresa.get("cnpj")
+                    if cnpj:
+                        empresas_mdic[cnpj] = empresa
+                resultado["empresas_coletadas"] = len(empresas_mdic)
+                logger.success(f"✅ {len(empresas_mdic)} empresas coletadas do BigQuery")
+            except Exception as e:
+                logger.warning(f"Erro ao coletar empresas do BigQuery: {e}")
+                resultado["erros"].append(f"Erro ao coletar empresas: {str(e)}")
+        
+        # 3. Carregar CNAE
+        logger.info("3️⃣ Carregando dados de CNAE...")
+        cnae_analyzer = None
+        try:
+            # Tentar múltiplos caminhos
+            caminhos_cnae = [
+                Path("C:/Users/User/Desktop/Cursor/NOVO CNAE.xlsx"),
+                Path(__file__).parent.parent / "NOVO CNAE.xlsx",
+                Path("/opt/render/project/src/NOVO CNAE.xlsx"),
+            ]
+            
+            arquivo_cnae = None
+            for caminho in caminhos_cnae:
+                if caminho.exists():
+                    arquivo_cnae = caminho
+                    break
+            
+            if arquivo_cnae:
+                cnae_analyzer = CNAEAnalyzer(arquivo_cnae)
+                cnae_analyzer.carregar_cnae_excel()
+                logger.success("✅ CNAE carregado")
+            else:
+                logger.warning("⚠️ Arquivo CNAE não encontrado")
+                resultado["erros"].append("Arquivo CNAE não encontrado")
+        except Exception as e:
+            logger.warning(f"Erro ao carregar CNAE: {e}")
+            resultado["erros"].append(f"Erro ao carregar CNAE: {str(e)}")
+        
+        # 4. Enriquecer operações com empresas e CNAE
+        logger.info("4️⃣ Enriquecendo operações com empresas e CNAE...")
+        try:
+            from database.models import OperacaoComex
+            
+            # Buscar operações sem empresa identificada
+            operacoes_sem_empresa = db.query(OperacaoComex).filter(
+                OperacaoComex.cnpj_importador.is_(None) | OperacaoComex.cnpj_exportador.is_(None)
+            ).limit(10000).all()
+            
+            enriquecidas = 0
+            for op in operacoes_sem_empresa:
+                atualizada = False
+                
+                # Tentar identificar importador
+                if not op.cnpj_importador and op.razao_social_importador:
+                    # Buscar por razão social no MDIC
+                    razao_limpa = str(op.razao_social_importador).upper().strip()
+                    for cnpj, emp in empresas_mdic.items():
+                        if str(emp.get("razao_social", "")).upper().strip() == razao_limpa:
+                            op.cnpj_importador = cnpj
+                            atualizada = True
+                            break
+                
+                # Tentar identificar exportador
+                if not op.cnpj_exportador and op.razao_social_exportador:
+                    razao_limpa = str(op.razao_social_exportador).upper().strip()
+                    for cnpj, emp in empresas_mdic.items():
+                        if str(emp.get("razao_social", "")).upper().strip() == razao_limpa:
+                            op.cnpj_exportador = cnpj
+                            atualizada = True
+                            break
+                
+                if atualizada:
+                    enriquecidas += 1
+                
+                # Enriquecer com CNAE se disponível
+                if cnae_analyzer:
+                    if op.cnpj_importador:
+                        cnae_info = cnae_analyzer.buscar_por_cnpj(op.cnpj_importador)
+                        if cnae_info:
+                            op.cnae_importador = cnae_info.get("cnae")
+                    
+                    if op.cnpj_exportador:
+                        cnae_info = cnae_analyzer.buscar_por_cnpj(op.cnpj_exportador)
+                        if cnae_info:
+                            op.cnae_exportador = cnae_info.get("cnae")
+            
+            if enriquecidas > 0:
+                db.commit()
+                resultado["empresas_enriquecidas_cnae"] = enriquecidas
+                logger.success(f"✅ {enriquecidas} operações enriquecidas")
+        except Exception as e:
+            logger.error(f"Erro ao enriquecer operações: {e}")
+            resultado["erros"].append(f"Erro ao enriquecer operações: {str(e)}")
+        
+        # 5. Criar recomendações baseadas em estado, NCM e volume
+        logger.info("5️⃣ Criando recomendações baseadas em estado, NCM e volume...")
+        try:
+            from database.models import OperacaoComex, TipoOperacao
+            
+            # Buscar empresas do banco (do BigQuery)
+            empresas_banco = db.query(Empresa).all()
+            empresas_dict = {emp.cnpj: emp for emp in empresas_banco if emp.cnpj}
+            
+            # Analisar operações por estado, NCM e volume
+            logger.info("Analisando operações para criar recomendações...")
+            
+            # Agrupar operações por estado, NCM e tipo
+            query_importacoes = db.query(
+                OperacaoComex.uf,
+                OperacaoComex.ncm,
+                OperacaoComex.cnpj_importador,
+                func.sum(OperacaoComex.valor_fob).label('volume_total'),
+                func.count(OperacaoComex.id).label('qtd_operacoes')
+            ).filter(
+                OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
+                OperacaoComex.uf.isnot(None),
+                OperacaoComex.ncm.isnot(None),
+                OperacaoComex.valor_fob > 0
+            ).group_by(
+                OperacaoComex.uf,
+                OperacaoComex.ncm,
+                OperacaoComex.cnpj_importador
+            ).having(
+                func.sum(OperacaoComex.valor_fob) > 10000  # Mínimo de volume
+            ).all()
+            
+            query_exportacoes = db.query(
+                OperacaoComex.uf,
+                OperacaoComex.ncm,
+                OperacaoComex.cnpj_exportador,
+                func.sum(OperacaoComex.valor_fob).label('volume_total'),
+                func.count(OperacaoComex.id).label('qtd_operacoes')
+            ).filter(
+                OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
+                OperacaoComex.uf.isnot(None),
+                OperacaoComex.ncm.isnot(None),
+                OperacaoComex.valor_fob > 0
+            ).group_by(
+                OperacaoComex.uf,
+                OperacaoComex.ncm,
+                OperacaoComex.cnpj_exportador
+            ).having(
+                func.sum(OperacaoComex.valor_fob) > 10000  # Mínimo de volume
+            ).all()
+            
+            # Criar índice de operações por estado+NCM
+            importacoes_por_estado_ncm = {}
+            exportacoes_por_estado_ncm = {}
+            
+            for uf, ncm, cnpj, volume, qtd in query_importacoes:
+                chave = f"{uf}_{ncm}"
+                if chave not in importacoes_por_estado_ncm:
+                    importacoes_por_estado_ncm[chave] = []
+                importacoes_por_estado_ncm[chave].append({
+                    "cnpj": cnpj,
+                    "volume": float(volume),
+                    "qtd": int(qtd)
+                })
+            
+            for uf, ncm, cnpj, volume, qtd in query_exportacoes:
+                chave = f"{uf}_{ncm}"
+                if chave not in exportacoes_por_estado_ncm:
+                    exportacoes_por_estado_ncm[chave] = []
+                exportacoes_por_estado_ncm[chave].append({
+                    "cnpj": cnpj,
+                    "volume": float(volume),
+                    "qtd": int(qtd)
+                })
+            
+            # Criar recomendações: para cada exportador, encontrar importadores prováveis
+            relacionamentos_criados = 0
+            recomendacoes_geradas = 0
+            
+            # Processar exportadores
+            for chave, exportadores in exportacoes_por_estado_ncm.items():
+                uf, ncm = chave.split('_', 1)
+                
+                # Buscar importadores do mesmo estado e NCM
+                importadores_provaveis = importacoes_por_estado_ncm.get(chave, [])
+                
+                if not importadores_provaveis:
+                    # Tentar mesmo estado, NCM diferente (complementaridade)
+                    for chave_imp, importadores in importacoes_por_estado_ncm.items():
+                        uf_imp, ncm_imp = chave_imp.split('_', 1)
+                        if uf_imp == uf:
+                            importadores_provaveis.extend(importadores)
+                
+                # Criar recomendações para cada exportador
+                for exp in exportadores:
+                    cnpj_exp = exp["cnpj"]
+                    if not cnpj_exp:
+                        continue
+                    
+                    empresa_exp = empresas_dict.get(cnpj_exp)
+                    if not empresa_exp:
+                        continue
+                    
+                    # Ordenar importadores por volume (maior volume = maior probabilidade)
+                    importadores_provaveis_ordenados = sorted(
+                        importadores_provaveis,
+                        key=lambda x: x["volume"],
+                        reverse=True
+                    )[:5]  # Top 5 importadores prováveis
+                    
+                    for imp in importadores_provaveis_ordenados:
+                        cnpj_imp = imp["cnpj"]
+                        if not cnpj_imp or cnpj_imp == cnpj_exp:
+                            continue
+                        
+                        empresa_imp = empresas_dict.get(cnpj_imp)
+                        if not empresa_imp:
+                            continue
+                        
+                        # Calcular score de recomendação
+                        score = (
+                            (imp["volume"] / 1000000) * 0.4 +  # Volume (peso 40%)
+                            (imp["qtd"] / 100) * 0.3 +  # Quantidade de operações (peso 30%)
+                            0.3 if uf == empresa_imp.estado else 0.1  # Mesmo estado (peso 30%)
+                        )
+                        
+                        # Criar recomendação para exportador
+                        recomendacao_exp = db.query(EmpresasRecomendadas).filter(
+                            EmpresasRecomendadas.cnpj == cnpj_exp,
+                            EmpresasRecomendadas.tipo_principal == "exportadora"
+                        ).first()
+                        
+                        if not recomendacao_exp:
+                            recomendacao_exp = EmpresasRecomendadas(
+                                cnpj=cnpj_exp,
+                                nome=empresa_exp.nome,
+                                tipo_principal="exportadora",
+                                estado=uf,
+                                cnae=empresa_exp.cnae,
+                                provavel_exportador=1,
+                                peso_participacao=score * 100,  # Converter para 0-100
+                                total_operacoes_exportacao=exp["qtd"],
+                                valor_total_exportacao_usd=exp["volume"],
+                                ncms_exportacao=ncm
+                            )
+                            db.add(recomendacao_exp)
+                            recomendacoes_geradas += 1
+                        else:
+                            recomendacao_exp.peso_participacao = max(
+                                recomendacao_exp.peso_participacao or 0,
+                                score * 100
+                            )
+                            recomendacao_exp.total_operacoes_exportacao = max(
+                                recomendacao_exp.total_operacoes_exportacao or 0,
+                                exp["qtd"]
+                            )
+                            recomendacao_exp.valor_total_exportacao_usd = max(
+                                recomendacao_exp.valor_total_exportacao_usd or 0,
+                                exp["volume"]
+                            )
+                            if recomendacao_exp.ncms_exportacao:
+                                if ncm not in recomendacao_exp.ncms_exportacao:
+                                    recomendacao_exp.ncms_exportacao += f",{ncm}"
+                            else:
+                                recomendacao_exp.ncms_exportacao = ncm
+                        
+                        # Criar recomendação para importador
+                        recomendacao_imp = db.query(EmpresasRecomendadas).filter(
+                            EmpresasRecomendadas.cnpj == cnpj_imp,
+                            EmpresasRecomendadas.tipo_principal == "importadora"
+                        ).first()
+                        
+                        if not recomendacao_imp:
+                            recomendacao_imp = EmpresasRecomendadas(
+                                cnpj=cnpj_imp,
+                                nome=empresa_imp.nome,
+                                tipo_principal="importadora",
+                                estado=uf,
+                                cnae=empresa_imp.cnae,
+                                provavel_importador=1,
+                                peso_participacao=score * 100,  # Converter para 0-100
+                                total_operacoes_importacao=imp["qtd"],
+                                valor_total_importacao_usd=imp["volume"],
+                                ncms_importacao=ncm
+                            )
+                            db.add(recomendacao_imp)
+                            recomendacoes_geradas += 1
+                        else:
+                            recomendacao_imp.peso_participacao = max(
+                                recomendacao_imp.peso_participacao or 0,
+                                score * 100
+                            )
+                            recomendacao_imp.total_operacoes_importacao = max(
+                                recomendacao_imp.total_operacoes_importacao or 0,
+                                imp["qtd"]
+                            )
+                            recomendacao_imp.valor_total_importacao_usd = max(
+                                recomendacao_imp.valor_total_importacao_usd or 0,
+                                imp["volume"]
+                            )
+                            if recomendacao_imp.ncms_importacao:
+                                if ncm not in recomendacao_imp.ncms_importacao:
+                                    recomendacao_imp.ncms_importacao += f",{ncm}"
+                            else:
+                                recomendacao_imp.ncms_importacao = ncm
+                        
+                        relacionamentos_criados += 1
+            
+            db.commit()
+            resultado["relacionamentos_criados"] = relacionamentos_criados
+            resultado["recomendacoes_geradas"] = recomendacoes_geradas
+            logger.success(f"✅ {relacionamentos_criados} relacionamentos criados, {recomendacoes_geradas} recomendações geradas")
+        
+        except Exception as e:
+            logger.error(f"Erro ao analisar sinergias: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            resultado["erros"].append(f"Erro ao analisar sinergias: {str(e)}")
+        
+        logger.success("✅ Enriquecimento concluído")
+        
+        return {
+            "success": True,
+            "message": "Enriquecimento com CNAE e relacionamentos concluído",
+            "resultado": resultado
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro no enriquecimento: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro no enriquecimento: {str(e)}")
 
 
 @app.post("/coletar-dados-enriquecidos")
@@ -526,6 +1916,141 @@ async def coletar_dados_enriquecidos(
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro na coleta enriquecida: {str(e)}")
+
+
+@app.post("/coletar-dados-csv-direto")
+async def coletar_dados_csv_direto(
+    meses: int = Query(12, description="Número de meses para coletar"),
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta dados CSV diretamente do MDIC usando CSVDataScraper (método mais confiável).
+    Este endpoint força o download dos arquivos CSV e processa diretamente.
+    
+    Use este endpoint se /coletar-dados-enriquecidos não estiver coletando dados.
+    """
+    try:
+        from data_collector.csv_scraper import CSVDataScraper
+        from data_collector.transformer import DataTransformer
+        from data_collector.collector import DataCollector
+        from datetime import datetime
+        
+        logger.info(f"Iniciando coleta direta de CSV do MDIC ({meses} meses)...")
+        
+        stats = {
+            "total_registros": 0,
+            "meses_processados": [],
+            "erros": [],
+            "arquivos_baixados": 0
+        }
+        
+        # Inicializar scrapers
+        csv_scraper = CSVDataScraper()
+        transformer = DataTransformer()
+        collector = DataCollector()
+        
+        # Baixar arquivos CSV
+        logger.info("📥 Baixando arquivos CSV do MDIC...")
+        downloaded_files = await csv_scraper.download_recent_months(meses)
+        
+        if not downloaded_files:
+            logger.warning("⚠️ Nenhum arquivo CSV foi baixado")
+            stats["erros"].append("Nenhum arquivo CSV foi baixado do MDIC")
+            return {
+                "success": False,
+                "message": "Não foi possível baixar arquivos CSV",
+                "stats": stats,
+                "recomendacao": "Verifique se as URLs do MDIC estão acessíveis ou tente novamente mais tarde"
+            }
+        
+        stats["arquivos_baixados"] = len(downloaded_files)
+        logger.info(f"✅ {len(downloaded_files)} arquivos baixados. Processando...")
+        
+        # Processar cada arquivo
+        total_saved = 0
+        for filepath in downloaded_files:
+            try:
+                # Parse CSV
+                raw_data = csv_scraper.parse_csv_file(filepath)
+                if not raw_data:
+                    logger.warning(f"⚠️ Arquivo vazio ou inválido: {filepath.name}")
+                    continue
+                
+                # Extrair mês e tipo do nome do arquivo
+                nome = filepath.stem
+                if "importacao" in nome.lower() or "imp" in nome.lower():
+                    tipo = "Importação"
+                elif "exportacao" in nome.lower() or "exp" in nome.lower():
+                    tipo = "Exportação"
+                else:
+                    logger.warning(f"⚠️ Não foi possível determinar tipo do arquivo: {nome}")
+                    continue
+                
+                # Extrair mês (formato: tipo_YYYY_MM ou tipo_YYYYMM)
+                partes = nome.split('_')
+                mes_str = None
+                if len(partes) >= 3:
+                    try:
+                        ano = partes[-2]
+                        mes = partes[-1]
+                        mes_str = f"{ano}-{mes.zfill(2)}"
+                    except:
+                        pass
+                
+                if not mes_str:
+                    # Tentar formato alternativo
+                    import re
+                    match = re.search(r'(\d{4})[_-]?(\d{2})', nome)
+                    if match:
+                        ano, mes = match.groups()
+                        mes_str = f"{ano}-{mes}"
+                    else:
+                        mes_str = datetime.now().strftime("%Y-%m")
+                        logger.warning(f"⚠️ Não foi possível extrair mês de {nome}, usando mês atual")
+                
+                # Transformar dados
+                transformed = transformer.transform_csv_data(raw_data, mes_str, tipo)
+                
+                if not transformed:
+                    logger.warning(f"⚠️ Nenhum registro transformado de {filepath.name}")
+                    continue
+                
+                # Salvar no banco
+                saved = collector._save_to_database(db, transformed, mes_str, tipo)
+                total_saved += saved
+                
+                if mes_str not in stats["meses_processados"]:
+                    stats["meses_processados"].append(mes_str)
+                
+                logger.info(
+                    f"✅ {tipo} {mes_str}: {len(transformed)} registros processados, "
+                    f"{saved} salvos no banco"
+                )
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar {filepath.name}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                stats["erros"].append(f"Erro ao processar {filepath.name}: {str(e)}")
+        
+        stats["total_registros"] = total_saved
+        
+        logger.success(
+            f"✅ Coleta direta concluída: {total_saved} registros salvos, "
+            f"{len(stats['meses_processados'])} meses processados"
+        )
+        
+        return {
+            "success": True,
+            "message": "Coleta direta de CSV concluída",
+            "stats": stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na coleta direta: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Erro na coleta direta: {str(e)}")
 
 
 class ColetarDadosNCMsRequest(BaseModel):
