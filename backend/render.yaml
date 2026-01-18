@@ -14,4 +14,10 @@ services:
         sync: false
       - key: SECRET_KEY
         sync: false
+      - key: AUTO_IMPORT_EXCEL_ON_START
+        value: "true"
+      - key: AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY
+        value: "true"
+      - key: AUTO_IMPORT_EXCEL_FILENAME
+        value: "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"
 

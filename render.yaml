@@ -1,3 +1,25 @@
+services:
+  - type: web
+    name: comex-backend
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements-render-ultra-minimal.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: COMEX_STAT_API_URL
+        sync: false
+      - key: COMEX_STAT_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: AUTO_IMPORT_EXCEL_ON_START
+        value: "true"
+      - key: AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY
+        value: "true"
+      - key: AUTO_IMPORT_EXCEL_FILENAME
+        value: "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"
 # Render.com Blueprint - Deploy Automático via Git
 # Este arquivo permite deploy automático conectando o repositório GitHub ao Render
 

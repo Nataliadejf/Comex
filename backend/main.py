@@ -1,12 +1,17 @@
 """
 Aplicação principal FastAPI.
 """
-from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, and_
+from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional, List
 from datetime import date, datetime
+from threading import Lock
+import time
+import json
+import os
 from pydantic import BaseModel
 from pathlib import Path
 import uvicorn
@@ -14,7 +19,7 @@ import uvicorn
 from loguru import logger
 
 from config import settings
-from database import get_db, init_db
+from database import get_db, init_db, SessionLocal
 from database.models import (
     OperacaoComex, TipoOperacao, ViaTransporte,
     ComercioExterior, Empresa, CNAEHierarquia, EmpresasRecomendadas
@@ -73,6 +78,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Importação automática opcional do Excel no startup
+def _start_auto_import_excel_if_configured() -> None:
+    flag = os.getenv("AUTO_IMPORT_EXCEL_ON_START", "").strip().lower()
+    if flag not in {"1", "true", "yes", "y"}:
+        return
+
+    filename = os.getenv(
+        "AUTO_IMPORT_EXCEL_FILENAME",
+        "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx",
+    ).strip()
+    if not filename:
+        logger.warning("AUTO_IMPORT_EXCEL_FILENAME vazio; importação ignorada.")
+        return
+
+    base_dir = Path(__file__).parent
+    possible_paths = [
+        base_dir / "data" / filename,
+        base_dir.parent / "comex_data" / "comexstat_csv" / filename,
+        Path("/opt/render/project/src/backend/data") / filename,
+        Path("/opt/render/project/src/comex_data/comexstat_csv") / filename,
+    ]
+
+    source_path = next((p for p in possible_paths if p.exists()), None)
+    if not source_path:
+        logger.warning(
+            "Arquivo para importação automática não encontrado. Procurado em: "
+            f"{[str(p) for p in possible_paths]}"
+        )
+        return
+
+    only_if_empty = os.getenv("AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY", "true").strip().lower()
+    only_if_empty = only_if_empty not in {"0", "false", "no", "n"}
+
+    def run_import() -> None:
+        db = SessionLocal()
+        try:
+            total_existente = db.query(OperacaoComex.id).count()
+            if only_if_empty and total_existente > 0:
+                logger.info(
+                    f"Importação automática ignorada: {total_existente} registros já existem."
+                )
+                return
+        except Exception as e:
+            logger.warning(f"Falha ao verificar registros existentes: {e}")
+        finally:
+            db.close()
+
+        import tempfile
+        import shutil
+
+        fd, tmp_path = tempfile.mkstemp(suffix=source_path.suffix)
+        os.close(fd)
+        shutil.copy2(source_path, tmp_path)
+        logger.info(f"Iniciando importação automática do arquivo {source_path.name}...")
+        processar_excel_comex_task(tmp_path, source_path.name)
+
+    import threading
+
+    threading.Thread(target=run_import, daemon=True).start()
+
 # Incluir routers
 if EXPORT_ROUTER_AVAILABLE:
     app.include_router(export_router)
@@ -126,6 +191,8 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Erro ao inicializar banco de dados: {e}")
         # Não interrompe a aplicação, mas loga o erro
+
+    _start_auto_import_excel_if_configured()
     
     # Iniciar scheduler para atualização diária
     try:
@@ -186,11 +253,213 @@ class DashboardStats(BaseModel):
     valor_total_usd: float
     valor_total_importacoes: Optional[float] = None  # Valor total de importações
     valor_total_exportacoes: Optional[float] = None  # Valor total de exportações
+    quantidade_estatistica_importacoes: Optional[float] = None
+    quantidade_estatistica_exportacoes: Optional[float] = None
+    quantidade_estatistica_total: Optional[float] = None
     principais_ncms: List[dict]
     principais_paises: List[dict]
     registros_por_mes: dict
     valores_por_mes: Optional[dict] = None  # Valores FOB por mês
     pesos_por_mes: Optional[dict] = None  # Pesos por mês
+
+
+# Cache simples em memória para aliviar o /dashboard/stats
+_DASHBOARD_CACHE = {}
+_DASHBOARD_CACHE_LOCK = Lock()
+_DASHBOARD_CACHE_TTL_SECONDS = 300
+
+
+def _make_dashboard_cache_key(
+    meses: int,
+    tipo_operacao: Optional[str],
+    ncm: Optional[str],
+    ncms: Optional[List[str]],
+    empresa_importadora: Optional[str],
+    empresa_exportadora: Optional[str],
+) -> str:
+    ncms_key = ",".join(sorted(ncms)) if ncms else ""
+    parts = [
+        f"meses={meses}",
+        f"tipo={tipo_operacao or ''}",
+        f"ncm={ncm or ''}",
+        f"ncms={ncms_key}",
+        f"imp={empresa_importadora or ''}",
+        f"exp={empresa_exportadora or ''}",
+    ]
+    return "|".join(parts)
+
+
+def _get_cached_dashboard_stats(cache_key: str) -> Optional[dict]:
+    now = time.time()
+    with _DASHBOARD_CACHE_LOCK:
+        cached = _DASHBOARD_CACHE.get(cache_key)
+        if not cached:
+            return None
+        expires_at, payload = cached
+        if expires_at <= now:
+            _DASHBOARD_CACHE.pop(cache_key, None)
+            return None
+        return payload
+
+
+def _set_cached_dashboard_stats(cache_key: str, payload: dict) -> None:
+    expires_at = time.time() + _DASHBOARD_CACHE_TTL_SECONDS
+    with _DASHBOARD_CACHE_LOCK:
+        _DASHBOARD_CACHE[cache_key] = (expires_at, payload)
+
+
+_BIGQUERY_COMEX_TABLE = os.getenv(
+    "BIGQUERY_COMEX_TABLE",
+    "liquid-receiver-483923-n6.Projeto_Comex.Comex",
+)
+
+
+def _get_bigquery_client():
+    try:
+        from google.cloud import bigquery
+        from google.oauth2 import service_account
+    except ImportError:
+        return None
+
+    creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds_env and creds_env.strip().startswith("{"):
+        try:
+            creds_dict = json.loads(creds_env)
+            credentials = service_account.Credentials.from_service_account_info(creds_dict)
+            project_id = creds_dict.get("project_id")
+            return bigquery.Client(credentials=credentials, project=project_id)
+        except Exception:
+            return bigquery.Client()
+
+    return bigquery.Client()
+
+
+def _buscar_empresas_bigquery(q: str, tipo: Optional[str], limit: int) -> List[dict]:
+    if not q or limit <= 0:
+        return []
+
+    client = _get_bigquery_client()
+    if not client:
+        return []
+
+    tipo_filter = None
+    if tipo:
+        tipo_lower = tipo.lower()
+        if "import" in tipo_lower:
+            tipo_filter = "%import%"
+        elif "export" in tipo_lower:
+            tipo_filter = "%export%"
+
+    where_clauses = [
+        "razao_social IS NOT NULL",
+        "LOWER(razao_social) LIKE CONCAT('%', @q, '%')",
+    ]
+    if tipo_filter:
+        where_clauses.append("LOWER(id_exportacao_importacao) LIKE @tipo_filter")
+
+    query = f"""
+        SELECT razao_social, sigla_uf, id_exportacao_importacao
+        FROM `{_BIGQUERY_COMEX_TABLE}`
+        WHERE {" AND ".join(where_clauses)}
+        LIMIT @limit
+    """
+
+    try:
+        from google.cloud import bigquery
+
+        query_params = [
+            bigquery.ScalarQueryParameter("q", "STRING", q),
+            bigquery.ScalarQueryParameter("limit", "INT64", limit),
+        ]
+        if tipo_filter:
+            query_params.append(
+                bigquery.ScalarQueryParameter("tipo_filter", "STRING", tipo_filter)
+            )
+
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        query_job = client.query(query, job_config=job_config)
+        rows = query_job.result()
+    except Exception:
+        return []
+
+    resultados = []
+    for row in rows:
+        resultados.append({
+            "nome": row.get("razao_social"),
+            "total_operacoes": 0,
+            "valor_total": 0.0,
+            "fonte": "bigquery",
+            "uf": row.get("sigla_uf"),
+            "tipo_operacao": row.get("id_exportacao_importacao"),
+        })
+
+    return resultados
+
+
+def _buscar_empresas_bigquery_sugestoes(
+    uf: Optional[str],
+    tipo: Optional[str],
+    limit: int,
+) -> List[dict]:
+    if limit <= 0:
+        return []
+
+    client = _get_bigquery_client()
+    if not client:
+        return []
+
+    tipo_filter = None
+    if tipo:
+        tipo_lower = tipo.lower()
+        if "import" in tipo_lower:
+            tipo_filter = "%import%"
+        elif "export" in tipo_lower:
+            tipo_filter = "%export%"
+
+    where_clauses = ["razao_social IS NOT NULL"]
+    if uf:
+        where_clauses.append("sigla_uf = @uf")
+    if tipo_filter:
+        where_clauses.append("LOWER(id_exportacao_importacao) LIKE @tipo_filter")
+
+    query = f"""
+        SELECT razao_social, sigla_uf, id_exportacao_importacao
+        FROM `{_BIGQUERY_COMEX_TABLE}`
+        WHERE {" AND ".join(where_clauses)}
+        LIMIT @limit
+    """
+
+    try:
+        from google.cloud import bigquery
+
+        query_params = [
+            bigquery.ScalarQueryParameter("limit", "INT64", limit),
+        ]
+        if uf:
+            query_params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf))
+        if tipo_filter:
+            query_params.append(
+                bigquery.ScalarQueryParameter("tipo_filter", "STRING", tipo_filter)
+            )
+
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        query_job = client.query(query, job_config=job_config)
+        rows = query_job.result()
+    except Exception:
+        return []
+
+    resultados = []
+    for row in rows:
+        resultados.append({
+            "nome": row.get("razao_social"),
+            "valor_total": 0.0,
+            "peso": 0.0,
+            "tipo_operacao": row.get("id_exportacao_importacao"),
+            "uf": row.get("sigla_uf"),
+            "fonte": "bigquery",
+        })
+
+    return resultados
 
 
 class BuscaFiltros(BaseModel):
@@ -210,7 +479,7 @@ class BuscaFiltros(BaseModel):
     empresa_importadora: Optional[str] = None
     empresa_exportadora: Optional[str] = None
     page: int = 1
-    page_size: int = 100
+    page_size: int = 50
 
 
 # Endpoints
@@ -567,196 +836,380 @@ async def coletar_dados(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Erro ao coletar dados: {str(e)}")
 
 
+# ============================================================================
+# FUNÇÕES DE PROCESSAMENTO EM BACKGROUND
+# ============================================================================
+
+def processar_excel_comex_task(caminho_temp: str, nome_original: str):
+    """
+    Processa arquivo Excel de Comex em background.
+    Usa sessão própria e garante limpeza de recursos.
+    """
+    import os
+    db = SessionLocal()
+    
+    try:
+        logger.info(f"🔄 Iniciando processamento de: {nome_original}")
+        import pandas as pd
+        from datetime import date
+        import re
+        from database.models import OperacaoComex, TipoOperacao, ViaTransporte
+        
+        df = pd.read_excel(caminho_temp)
+        logger.info(f"✅ Arquivo lido: {len(df)} linhas")
+        
+        # Detectar ano pelo nome do arquivo
+        ano_match = re.search(r'20\d{2}', nome_original)
+        ano = int(ano_match.group()) if ano_match else date.today().year
+        
+        operacoes_para_inserir = []
+        
+        meses_map = {
+            'janeiro': 1, 'fevereiro': 2, 'março': 3, 'marco': 3,
+            'abril': 4, 'maio': 5, 'junho': 6,
+            'julho': 7, 'agosto': 8, 'setembro': 9,
+            'outubro': 10, 'novembro': 11, 'dezembro': 12
+        }
+        
+        stats = {
+            "total_registros": 0,
+            "importacoes": 0,
+            "exportacoes": 0,
+            "erros": 0
+        }
+        
+        # Processar linhas
+        for idx, row in df.iterrows():
+            try:
+                # Extrair NCM
+                ncm = str(row.get('Código NCM', '')).strip() if pd.notna(row.get('Código NCM')) else None
+                if not ncm or len(ncm) < 4:
+                    continue
+                
+                ncm_normalizado = ncm[:8] if len(ncm) >= 8 else ncm.zfill(8)
+                descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
+                uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
+                pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
+                
+                # Processar mês
+                mes_str = str(row.get('Mês', '')).strip() if pd.notna(row.get('Mês')) else ''
+                mes = None
+                
+                if mes_str:
+                    match = re.search(r'(\d{1,2})', mes_str)
+                    if match:
+                        mes = int(match.group(1))
+                    else:
+                        for nome, num in meses_map.items():
+                            if nome in mes_str.lower():
+                                mes = num
+                                break
+                
+                if not mes or mes < 1 or mes > 12:
+                    mes = 1
+                
+                data_operacao = date(ano, mes, 1)
+                mes_referencia = f"{ano}-{mes:02d}"
+                
+                # Processar EXPORTAÇÃO
+                valor_exp = (
+                    row.get('Exportação - 2025 - Valor US$ FOB', 0) or 
+                    row.get('Exportação - Valor US$ FOB', 0) or 
+                    row.get('Valor Exportação', 0)
+                )
+                peso_exp = (
+                    row.get('Exportação - 2025 - Quilograma Líquido', 0) or 
+                    row.get('Exportação - Quilograma Líquido', 0) or 
+                    row.get('Peso Exportação', 0)
+                )
+                quantidade_exp = (
+                    row.get('Exportação - 2025 - Quantidade Estatística', 0) or
+                    row.get('Exportação - Quantidade Estatística', 0) or
+                    row.get('Quantidade Exportação', 0)
+                )
+                
+                if pd.notna(valor_exp) and float(valor_exp) > 0:
+                    operacoes_para_inserir.append({
+                        'ncm': ncm_normalizado,
+                        'descricao_produto': descricao,
+                        'tipo_operacao': TipoOperacao.EXPORTACAO,
+                        'via_transporte': ViaTransporte.OUTRAS,
+                        'uf': uf,
+                        'pais_origem_destino': pais,
+                        'valor_fob': float(valor_exp),
+                        'peso_liquido_kg': float(peso_exp) if pd.notna(peso_exp) else 0,
+                        'quantidade_estatistica': float(quantidade_exp) if pd.notna(quantidade_exp) else 0,
+                        'data_operacao': data_operacao,
+                        'mes_referencia': mes_referencia,
+                        'arquivo_origem': nome_original
+                    })
+                    stats["exportacoes"] += 1
+                    stats["total_registros"] += 1
+                
+                # Processar IMPORTAÇÃO
+                valor_imp = (
+                    row.get('Importação - 2025 - Valor US$ FOB', 0) or 
+                    row.get('Importação - Valor US$ FOB', 0) or 
+                    row.get('Valor Importação', 0)
+                )
+                peso_imp = (
+                    row.get('Importação - 2025 - Quilograma Líquido', 0) or 
+                    row.get('Importação - Quilograma Líquido', 0) or 
+                    row.get('Peso Importação', 0)
+                )
+                quantidade_imp = (
+                    row.get('Importação - 2025 - Quantidade Estatística', 0) or
+                    row.get('Importação - Quantidade Estatística', 0) or
+                    row.get('Quantidade Importação', 0)
+                )
+                
+                if pd.notna(valor_imp) and float(valor_imp) > 0:
+                    operacoes_para_inserir.append({
+                        'ncm': ncm_normalizado,
+                        'descricao_produto': descricao,
+                        'tipo_operacao': TipoOperacao.IMPORTACAO,
+                        'via_transporte': ViaTransporte.OUTRAS,
+                        'uf': uf,
+                        'pais_origem_destino': pais,
+                        'valor_fob': float(valor_imp),
+                        'peso_liquido_kg': float(peso_imp) if pd.notna(peso_imp) else 0,
+                        'quantidade_estatistica': float(quantidade_imp) if pd.notna(quantidade_imp) else 0,
+                        'data_operacao': data_operacao,
+                        'mes_referencia': mes_referencia,
+                        'arquivo_origem': nome_original
+                    })
+                    stats["importacoes"] += 1
+                    stats["total_registros"] += 1
+            
+            except Exception as e:
+                logger.warning(f"Erro na linha {idx}: {e}")
+                stats["erros"] += 1
+                continue
+        
+        # Bulk Insert em chunks de 1000
+        logger.info(f"💾 Inserindo {len(operacoes_para_inserir)} operações no banco...")
+        
+        for i in range(0, len(operacoes_para_inserir), 1000):
+            chunk = operacoes_para_inserir[i:i + 1000]
+            
+            try:
+                db.bulk_insert_mappings(OperacaoComex, chunk)
+                db.commit()
+                logger.info(f"  ✅ Inseridos {min(i + 1000, len(operacoes_para_inserir))}/{len(operacoes_para_inserir)} registros")
+            
+            except SQLAlchemyError as e:
+                logger.error(f"❌ Erro no chunk {i}-{i+1000}: {e}")
+                db.rollback()
+                
+                # Tentar inserir um por um apenas se o chunk falhar
+                for item in chunk:
+                    try:
+                        db.bulk_insert_mappings(OperacaoComex, [item])
+                        db.commit()
+                    except Exception as e2:
+                        logger.error(f"Registro inválido: {item.get('ncm', 'N/A')} - {e2}")
+                        db.rollback()
+        
+        logger.success(f"✅ Importação concluída: {stats['total_registros']} registros ({stats['importacoes']} importações, {stats['exportacoes']} exportações, {stats['erros']} erros)")
+    
+    except Exception as e:
+        logger.error(f"❌ Falha crítica no processamento: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        db.rollback()
+    
+    finally:
+        db.close()
+        # Remover arquivo temporário
+        if os.path.exists(caminho_temp):
+            try:
+                os.unlink(caminho_temp)
+                logger.info(f"🗑️ Arquivo temporário removido: {caminho_temp}")
+            except:
+                pass
+
+
+def processar_cnae_task(caminho_temp: str, nome_original: str):
+    """
+    Processa arquivo CNAE em background.
+    """
+    import os
+    db = SessionLocal()
+    
+    try:
+        logger.info(f"🔄 Iniciando processamento CNAE: {nome_original}")
+        import pandas as pd
+        from database.models import CNAEHierarquia
+        
+        df = pd.read_excel(caminho_temp)
+        logger.info(f"✅ Arquivo lido: {len(df)} linhas")
+        
+        stats = {
+            "total_registros": 0,
+            "inseridos": 0,
+            "atualizados": 0,
+            "erros": 0
+        }
+        
+        # Buscar CNAEs existentes
+        logger.info("🔍 Verificando CNAEs existentes...")
+        existentes_db = db.query(CNAEHierarquia.cnae).all()
+        cnae_existentes = {row[0] for row in existentes_db}
+        logger.info(f"  Encontrados {len(cnae_existentes)} CNAEs existentes")
+        
+        cnae_para_inserir = []
+        
+        for idx, row in df.iterrows():
+            try:
+                # Extrair CNAE
+                cnae = (
+                    str(row.get('CNAE', '')) or
+                    str(row.get('Código CNAE', '')) or
+                    str(row.get('CNAE 2.0', '')) or
+                    str(row.get('Subclasse', ''))
+                ).strip()
+                
+                if not cnae or cnae == 'nan' or len(cnae) < 4:
+                    continue
+                
+                cnae_limpo = cnae.replace('.', '').replace('-', '').strip()
+                
+                descricao = (
+                    str(row.get('Descrição', '')) or
+                    str(row.get('Descrição Subclasse', '')) or
+                    str(row.get('Descrição CNAE', ''))
+                ).strip()[:500]
+                
+                classe = str(row.get('Classe', '')).strip()[:10] if pd.notna(row.get('Classe')) else None
+                grupo = str(row.get('Grupo', '')).strip()[:10] if pd.notna(row.get('Grupo')) else None
+                divisao = str(row.get('Divisão', '')).strip()[:10] if pd.notna(row.get('Divisão')) else None
+                secao = str(row.get('Seção', '')).strip()[:10] if pd.notna(row.get('Seção')) else None
+                
+                # Verificar se existe
+                if cnae_limpo in cnae_existentes:
+                    stats["atualizados"] += 1
+                    existente = db.query(CNAEHierarquia).filter(
+                        CNAEHierarquia.cnae == cnae_limpo
+                    ).first()
+                    
+                    if existente:
+                        if descricao:
+                            existente.descricao = descricao
+                        if classe:
+                            existente.classe = classe
+                        if grupo:
+                            existente.grupo = grupo
+                        if divisao:
+                            existente.divisao = divisao
+                        if secao:
+                            existente.secao = secao
+                else:
+                    cnae_para_inserir.append({
+                        'cnae': cnae_limpo,
+                        'descricao': descricao,
+                        'classe': classe,
+                        'grupo': grupo,
+                        'divisao': divisao,
+                        'secao': secao
+                    })
+                    cnae_existentes.add(cnae_limpo)
+                    stats["inseridos"] += 1
+                
+                stats["total_registros"] += 1
+            
+            except Exception as e:
+                logger.warning(f"Erro na linha {idx}: {e}")
+                stats["erros"] += 1
+                continue
+        
+        # Commit atualizações
+        if stats["atualizados"] > 0:
+            try:
+                db.commit()
+                logger.info(f"✅ {stats['atualizados']} registros atualizados")
+            except SQLAlchemyError as e:
+                logger.error(f"Erro ao commitar atualizações: {e}")
+                db.rollback()
+        
+        # Bulk insert novos
+        if cnae_para_inserir:
+            logger.info(f"💾 Inserindo {len(cnae_para_inserir)} novos CNAEs...")
+            
+            for i in range(0, len(cnae_para_inserir), 1000):
+                chunk = cnae_para_inserir[i:i + 1000]
+                try:
+                    db.bulk_insert_mappings(CNAEHierarquia, chunk)
+                    db.commit()
+                    logger.info(f"  ✅ Inseridos {min(i + 1000, len(cnae_para_inserir))}/{len(cnae_para_inserir)} registros")
+                except SQLAlchemyError as e:
+                    logger.error(f"Erro ao inserir chunk: {e}")
+                    db.rollback()
+        
+        logger.success(f"✅ Importação CNAE concluída: {stats['inseridos']} inseridos, {stats['atualizados']} atualizados, {stats['erros']} erros")
+    
+    except Exception as e:
+        logger.error(f"❌ Falha crítica no processamento CNAE: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        db.rollback()
+    
+    finally:
+        db.close()
+        if os.path.exists(caminho_temp):
+            try:
+                os.unlink(caminho_temp)
+                logger.info(f"🗑️ Arquivo temporário removido")
+            except:
+                pass
+
+
 @app.post("/upload-e-importar-excel", tags=["importacao"])
 async def upload_e_importar_excel(
-    arquivo: UploadFile = File(..., description="Arquivo Excel (.xlsx ou .xls) para importar"),
-    db: Session = Depends(get_db)
+    background_tasks: BackgroundTasks,
+    arquivo: UploadFile = File(..., description="Arquivo Excel (.xlsx ou .xls) para importar")
 ):
     """
     Faz upload de um arquivo Excel e importa automaticamente para o banco de dados.
-    
-    Aceita arquivos .xlsx e .xls via upload direto.
+    OTIMIZADO: Usa BackgroundTasks do FastAPI para processamento assíncrono seguro.
     """
+    import tempfile
+    import os
+    
+    # Validar extensão
+    if not (arquivo.filename.endswith('.xlsx') or arquivo.filename.endswith('.xls')):
+        raise HTTPException(status_code=400, detail="Arquivo deve ser Excel (.xlsx ou .xls)")
+    
+    logger.info(f"📤 Recebendo upload do arquivo: {arquivo.filename}")
+    
+    # Criar arquivo temporário de forma segura
+    fd, path = tempfile.mkstemp(suffix=".xlsx")
+    
     try:
-        from pathlib import Path
-        import pandas as pd
-        from datetime import date
-        import tempfile
-        import os
-        from database.models import OperacaoComex, TipoOperacao
-        
-        # Validar extensão do arquivo
-        nome_arquivo = arquivo.filename.lower()
-        if not (nome_arquivo.endswith('.xlsx') or nome_arquivo.endswith('.xls')):
-            raise HTTPException(
-                status_code=400,
-                detail="Arquivo deve ser Excel (.xlsx ou .xls)"
-            )
-        
-        logger.info(f"Iniciando upload e importação do arquivo: {arquivo.filename}")
-        
-        # Salvar arquivo temporariamente
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx' if nome_arquivo.endswith('.xlsx') else '.xls') as tmp_file:
+        with os.fdopen(fd, 'wb') as tmp:
             conteudo = await arquivo.read()
-            tmp_file.write(conteudo)
-            caminho_temp = tmp_file.name
+            tmp.write(conteudo)
         
-        try:
-            # Ler Excel
-            df = pd.read_excel(caminho_temp)
-            logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
-            
-            stats = {
-                "arquivo": arquivo.filename,
-                "total_registros": 0,
-                "importacoes": 0,
-                "exportacoes": 0,
-                "erros": []
-            }
-            
-            # Processar cada linha
-            for idx, row in df.iterrows():
-                try:
-                    # Extrair dados básicos
-                    ncm = str(row.get('Código NCM', '')).strip() if pd.notna(row.get('Código NCM')) else None
-                    if not ncm or len(ncm) < 4:
-                        continue
-                    
-                    descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
-                    uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
-                    pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
-                    
-                    # Processar mês
-                    mes_str = str(row.get('Mês', '')).strip() if pd.notna(row.get('Mês')) else ''
-                    mes = None
-                    if mes_str:
-                        import re
-                        match = re.search(r'(\d{1,2})', mes_str)
-                        if match:
-                            mes = int(match.group(1))
-                        else:
-                            meses_map = {
-                                'janeiro': 1, 'fevereiro': 2, 'março': 3, 'marco': 3,
-                                'abril': 4, 'maio': 5, 'junho': 6,
-                                'julho': 7, 'agosto': 8, 'setembro': 9,
-                                'outubro': 10, 'novembro': 11, 'dezembro': 12
-                            }
-                            for nome, num in meses_map.items():
-                                if nome in mes_str.lower():
-                                    mes = num
-                                    break
-                    
-                    if not mes:
-                        mes = 1  # Default
-                    
-                    # Tentar detectar ano do nome do arquivo ou usar padrão
-                    ano = 2025  # Default
-                    ano_match = re.search(r'20\d{2}', arquivo.filename)
-                    if ano_match:
-                        ano = int(ano_match.group())
-                    
-                    data_operacao = date(ano, mes, 1)
-                    mes_referencia = f"{ano}-{mes:02d}"
-                    
-                    # Processar EXPORTAÇÃO
-                    valor_exp = row.get('Exportação - 2025 - Valor US$ FOB', 0) or row.get('Exportação - Valor US$ FOB', 0) or row.get('Valor Exportação', 0)
-                    peso_exp = row.get('Exportação - 2025 - Quilograma Líquido', 0) or row.get('Exportação - Quilograma Líquido', 0) or row.get('Peso Exportação', 0)
-                    
-                    if pd.notna(valor_exp) and float(valor_exp) > 0:
-                        # Verificar se já existe
-                        existing = db.query(OperacaoComex).filter(
-                            and_(
-                                OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
-                                OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
-                                OperacaoComex.data_operacao == data_operacao,
-                                OperacaoComex.pais_origem_destino == pais,
-                                OperacaoComex.uf == uf
-                            )
-                        ).first()
-                        
-                        if not existing:
-                            operacao = OperacaoComex(
-                                ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
-                                descricao_produto=descricao,
-                                tipo_operacao=TipoOperacao.EXPORTACAO,
-                                uf=uf,
-                                pais_origem_destino=pais,
-                                valor_fob=float(valor_exp),
-                                peso_liquido_kg=float(peso_exp) if pd.notna(peso_exp) else 0,
-                                data_operacao=data_operacao,
-                                mes_referencia=mes_referencia,
-                                arquivo_origem=arquivo.filename
-                            )
-                            db.add(operacao)
-                            stats["exportacoes"] += 1
-                            stats["total_registros"] += 1
-                    
-                    # Processar IMPORTAÇÃO
-                    valor_imp = row.get('Importação - 2025 - Valor US$ FOB', 0) or row.get('Importação - Valor US$ FOB', 0) or row.get('Valor Importação', 0)
-                    peso_imp = row.get('Importação - 2025 - Quilograma Líquido', 0) or row.get('Importação - Quilograma Líquido', 0) or row.get('Peso Importação', 0)
-                    
-                    if pd.notna(valor_imp) and float(valor_imp) > 0:
-                        # Verificar se já existe
-                        existing = db.query(OperacaoComex).filter(
-                            and_(
-                                OperacaoComex.ncm == ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
-                                OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
-                                OperacaoComex.data_operacao == data_operacao,
-                                OperacaoComex.pais_origem_destino == pais,
-                                OperacaoComex.uf == uf
-                            )
-                        ).first()
-                        
-                        if not existing:
-                            operacao = OperacaoComex(
-                                ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
-                                descricao_produto=descricao,
-                                tipo_operacao=TipoOperacao.IMPORTACAO,
-                                uf=uf,
-                                pais_origem_destino=pais,
-                                valor_fob=float(valor_imp),
-                                peso_liquido_kg=float(peso_imp) if pd.notna(peso_imp) else 0,
-                                data_operacao=data_operacao,
-                                mes_referencia=mes_referencia,
-                                arquivo_origem=arquivo.filename
-                            )
-                            db.add(operacao)
-                            stats["importacoes"] += 1
-                            stats["total_registros"] += 1
-                    
-                    # Commit a cada 1000 registros
-                    if stats["total_registros"] % 1000 == 0:
-                        db.commit()
-                        logger.info(f"  Processados {stats['total_registros']} registros...")
-                
-                except Exception as e:
-                    logger.error(f"Erro ao processar linha {idx}: {e}")
-                    stats["erros"].append(f"Linha {idx}: {str(e)}")
-                    continue
-            
-            db.commit()
-            logger.success(f"✅ Importação concluída: {stats['total_registros']} registros ({stats['importacoes']} importações, {stats['exportacoes']} exportações)")
-            
-            return {
-                "success": True,
-                "message": "Upload e importação concluídos",
-                "stats": stats
-            }
+        logger.info(f"✅ Arquivo salvo temporariamente: {path}")
         
-        finally:
-            # Remover arquivo temporário
-            try:
-                os.unlink(caminho_temp)
-            except:
-                pass
+        # Adicionar à fila de tarefas do FastAPI
+        background_tasks.add_task(processar_excel_comex_task, path, arquivo.filename)
         
-    except HTTPException:
-        raise
+        return {
+            "success": True,
+            "message": "Upload recebido. Processamento iniciado em background.",
+            "arquivo": arquivo.filename,
+            "status": "processando",
+            "instrucoes": "Verifique os logs do Render para acompanhar o progresso."
+        }
+    
     except Exception as e:
-        logger.error(f"Erro no upload e importação: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Erro no upload e importação: {str(e)}")
+        logger.error(f"Erro no upload: {e}")
+        # Limpar arquivo se houver erro
+        try:
+            os.unlink(path)
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=f"Erro no upload: {str(e)}")
 
 
 @app.post("/importar-excel-automatico")
@@ -772,7 +1225,7 @@ async def importar_excel_automatico(
         from pathlib import Path
         import pandas as pd
         from datetime import date
-        from database.models import OperacaoComex, TipoOperacao
+        from database.models import OperacaoComex, TipoOperacao, ViaTransporte
         
         logger.info("Iniciando importação automática de arquivos Excel...")
         
@@ -890,6 +1343,11 @@ async def importar_excel_automatico(
                         # Processar EXPORTAÇÃO
                         valor_exp = row.get('Exportação - 2025 - Valor US$ FOB', 0) or row.get('Exportação - Valor US$ FOB', 0) or row.get('Valor Exportação', 0)
                         peso_exp = row.get('Exportação - 2025 - Quilograma Líquido', 0) or row.get('Exportação - Quilograma Líquido', 0) or row.get('Peso Exportação', 0)
+                        quantidade_exp = (
+                            row.get('Exportação - 2025 - Quantidade Estatística', 0)
+                            or row.get('Exportação - Quantidade Estatística', 0)
+                            or row.get('Quantidade Exportação', 0)
+                        )
                         
                         if pd.notna(valor_exp) and float(valor_exp) > 0:
                             # Verificar se já existe
@@ -908,10 +1366,12 @@ async def importar_excel_automatico(
                                     ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
                                     descricao_produto=descricao,
                                     tipo_operacao=TipoOperacao.EXPORTACAO,
+                                    via_transporte=ViaTransporte.OUTRAS,
                                     uf=uf,
                                     pais_origem_destino=pais,
                                     valor_fob=float(valor_exp),
                                     peso_liquido_kg=float(peso_exp) if pd.notna(peso_exp) else 0,
+                                    quantidade_estatistica=float(quantidade_exp) if pd.notna(quantidade_exp) else 0,
                                     data_operacao=data_operacao,
                                     mes_referencia=mes_referencia,
                                     arquivo_origem=arquivo_excel.name
@@ -925,6 +1385,11 @@ async def importar_excel_automatico(
                         # Processar IMPORTAÇÃO
                         valor_imp = row.get('Importação - 2025 - Valor US$ FOB', 0) or row.get('Importação - Valor US$ FOB', 0) or row.get('Valor Importação', 0)
                         peso_imp = row.get('Importação - 2025 - Quilograma Líquido', 0) or row.get('Importação - Quilograma Líquido', 0) or row.get('Peso Importação', 0)
+                        quantidade_imp = (
+                            row.get('Importação - 2025 - Quantidade Estatística', 0)
+                            or row.get('Importação - Quantidade Estatística', 0)
+                            or row.get('Quantidade Importação', 0)
+                        )
                         
                         if pd.notna(valor_imp) and float(valor_imp) > 0:
                             # Verificar se já existe
@@ -943,10 +1408,12 @@ async def importar_excel_automatico(
                                     ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
                                     descricao_produto=descricao,
                                     tipo_operacao=TipoOperacao.IMPORTACAO,
+                                    via_transporte=ViaTransporte.OUTRAS,
                                     uf=uf,
                                     pais_origem_destino=pais,
                                     valor_fob=float(valor_imp),
                                     peso_liquido_kg=float(peso_imp) if pd.notna(peso_imp) else 0,
+                                    quantidade_estatistica=float(quantidade_imp) if pd.notna(quantidade_imp) else 0,
                                     data_operacao=data_operacao,
                                     mes_referencia=mes_referencia,
                                     arquivo_origem=arquivo_excel.name
@@ -1094,6 +1561,7 @@ async def importar_excel_manual(
                 # Processar EXPORTAÇÃO
                 valor_exp = row.get('Exportação - 2025 - Valor US$ FOB', 0)
                 peso_exp = row.get('Exportação - 2025 - Quilograma Líquido', 0)
+                quantidade_exp = row.get('Exportação - 2025 - Quantidade Estatística', 0)
                 
                 if pd.notna(valor_exp) and float(valor_exp) > 0:
                     # Verificar se já existe
@@ -1112,10 +1580,12 @@ async def importar_excel_manual(
                             ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
                             descricao_produto=descricao,
                             tipo_operacao=TipoOperacao.EXPORTACAO,
+                            via_transporte=ViaTransporte.OUTRAS,
                             uf=uf,
                             pais_origem_destino=pais,
                             valor_fob=float(valor_exp),
                             peso_liquido_kg=float(peso_exp) if pd.notna(peso_exp) else 0,
+                            quantidade_estatistica=float(quantidade_exp) if pd.notna(quantidade_exp) else 0,
                             data_operacao=data_operacao,
                             mes_referencia=mes_referencia,
                             arquivo_origem=nome_arquivo
@@ -1127,6 +1597,7 @@ async def importar_excel_manual(
                 # Processar IMPORTAÇÃO
                 valor_imp = row.get('Importação - 2025 - Valor US$ FOB', 0)
                 peso_imp = row.get('Importação - 2025 - Quilograma Líquido', 0)
+                quantidade_imp = row.get('Importação - 2025 - Quantidade Estatística', 0)
                 
                 if pd.notna(valor_imp) and float(valor_imp) > 0:
                     # Verificar se já existe
@@ -1145,10 +1616,12 @@ async def importar_excel_manual(
                             ncm=ncm[:8] if len(ncm) >= 8 else ncm.zfill(8),
                             descricao_produto=descricao,
                             tipo_operacao=TipoOperacao.IMPORTACAO,
+                            via_transporte=ViaTransporte.OUTRAS,
                             uf=uf,
                             pais_origem_destino=pais,
                             valor_fob=float(valor_imp),
                             peso_liquido_kg=float(peso_imp) if pd.notna(peso_imp) else 0,
+                            quantidade_estatistica=float(quantidade_imp) if pd.notna(quantidade_imp) else 0,
                             data_operacao=data_operacao,
                             mes_referencia=mes_referencia,
                             arquivo_origem=nome_arquivo
@@ -1187,146 +1660,294 @@ async def importar_excel_manual(
 
 @app.post("/upload-e-importar-cnae", tags=["importacao"])
 async def upload_e_importar_cnae(
-    arquivo: UploadFile = File(..., description="Arquivo CNAE Excel (.xlsx ou .xls) para importar"),
-    db: Session = Depends(get_db)
+    background_tasks: BackgroundTasks,
+    arquivo: UploadFile = File(..., description="Arquivo CNAE Excel (.xlsx ou .xls) para importar")
 ):
     """
-    Faz upload de um arquivo CNAE Excel e importa automaticamente para o banco de dados.
+    Faz upload de um arquivo CNAE Excel e importa automaticamente.
+    OTIMIZADO: Usa BackgroundTasks do FastAPI para processamento assíncrono seguro.
+    """
+    import tempfile
+    import os
     
-    Aceita arquivos .xlsx e .xls via upload direto.
+    # Validar extensão
+    if not (arquivo.filename.endswith('.xlsx') or arquivo.filename.endswith('.xls')):
+        raise HTTPException(status_code=400, detail="Arquivo deve ser Excel (.xlsx ou .xls)")
+    
+    logger.info(f"📤 Recebendo upload do arquivo CNAE: {arquivo.filename}")
+    
+    # Criar arquivo temporário de forma segura
+    fd, path = tempfile.mkstemp(suffix=".xlsx")
+    
+    try:
+        with os.fdopen(fd, 'wb') as tmp:
+            conteudo = await arquivo.read()
+            tmp.write(conteudo)
+        
+        logger.info(f"✅ Arquivo salvo temporariamente: {path}")
+        
+        # Adicionar à fila de tarefas do FastAPI
+        background_tasks.add_task(processar_cnae_task, path, arquivo.filename)
+        
+        return {
+            "success": True,
+            "message": "Upload recebido. Processamento iniciado em background.",
+            "arquivo": arquivo.filename,
+            "status": "processando",
+            "instrucoes": "Verifique os logs do Render para acompanhar o progresso."
+        }
+    
+    except Exception as e:
+        logger.error(f"Erro no upload: {e}")
+        # Limpar arquivo se houver erro
+        try:
+            os.unlink(path)
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=f"Erro no upload: {str(e)}")
+
+
+# ============================================================================
+# ENDPOINTS DE TESTE E INVESTIGAÇÃO
+# ============================================================================
+
+@app.post("/testar-upload-banco", tags=["teste"])
+async def testar_upload_banco():
+    """
+    Endpoint de teste para verificar conexão com banco e inserir registro de teste.
     """
     try:
-        from pathlib import Path
-        import pandas as pd
-        import tempfile
-        import os
-        from database.models import CNAEHierarquia
-        
-        # Validar extensão do arquivo
-        nome_arquivo = arquivo.filename.lower()
-        if not (nome_arquivo.endswith('.xlsx') or nome_arquivo.endswith('.xls')):
-            raise HTTPException(
-                status_code=400,
-                detail="Arquivo deve ser Excel (.xlsx ou .xls)"
-            )
-        
-        logger.info(f"Iniciando upload e importação do arquivo CNAE: {arquivo.filename}")
-        
-        # Salvar arquivo temporariamente
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx' if nome_arquivo.endswith('.xlsx') else '.xls') as tmp_file:
-            conteudo = await arquivo.read()
-            tmp_file.write(conteudo)
-            caminho_temp = tmp_file.name
+        db = SessionLocal()
         
         try:
-            # Ler Excel
-            df = pd.read_excel(caminho_temp)
-            logger.info(f"✅ Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas")
-            logger.info(f"Colunas disponíveis: {list(df.columns)}")
+            # Testar conexão
+            result = db.execute(text("SELECT 1"))
+            logger.info("✅ Conexão com banco OK")
             
-            stats = {
-                "arquivo": arquivo.filename,
-                "total_registros": 0,
-                "inseridos": 0,
-                "atualizados": 0,
-                "erros": []
-            }
+            # Verificar tabela existe
+            result = db.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'operacoes_comex'
+                )
+            """))
+            tabela_existe = result.scalar()
             
-            # Processar cada linha
-            for idx, row in df.iterrows():
-                try:
-                    # Tentar diferentes nomes de colunas para CNAE
-                    cnae = (
-                        str(row.get('CNAE', '')) or
-                        str(row.get('Código CNAE', '')) or
-                        str(row.get('CNAE 2.0', '')) or
-                        str(row.get('Subclasse', ''))
-                    ).strip()
-                    
-                    if not cnae or cnae == 'nan' or len(cnae) < 4:
-                        continue
-                    
-                    # Limpar CNAE (remover pontos, traços, etc)
-                    cnae_limpo = cnae.replace('.', '').replace('-', '').strip()
-                    
-                    # Extrair informações adicionais
-                    descricao = (
-                        str(row.get('Descrição', '')) or
-                        str(row.get('Descrição Subclasse', '')) or
-                        str(row.get('Descrição CNAE', ''))
-                    ).strip()[:500]
-                    
-                    classe = str(row.get('Classe', '')).strip()[:10] if pd.notna(row.get('Classe')) else None
-                    grupo = str(row.get('Grupo', '')).strip()[:10] if pd.notna(row.get('Grupo')) else None
-                    divisao = str(row.get('Divisão', '')).strip()[:10] if pd.notna(row.get('Divisão')) else None
-                    secao = str(row.get('Seção', '')).strip()[:10] if pd.notna(row.get('Seção')) else None
-                    
-                    # Verificar se já existe
-                    existente = db.query(CNAEHierarquia).filter(
-                        CNAEHierarquia.cnae == cnae_limpo
-                    ).first()
-                    
-                    if existente:
-                        # Atualizar
-                        if descricao:
-                            existente.descricao = descricao
-                        if classe:
-                            existente.classe = classe
-                        if grupo:
-                            existente.grupo = grupo
-                        if divisao:
-                            existente.divisao = divisao
-                        if secao:
-                            existente.secao = secao
-                        stats["atualizados"] += 1
-                    else:
-                        # Criar novo
-                        cnae_hierarquia = CNAEHierarquia(
-                            cnae=cnae_limpo,
-                            descricao=descricao,
-                            classe=classe,
-                            grupo=grupo,
-                            divisao=divisao,
-                            secao=secao
-                        )
-                        db.add(cnae_hierarquia)
-                        stats["inseridos"] += 1
-                    
-                    stats["total_registros"] += 1
-                    
-                    # Commit a cada 100 registros
-                    if stats["total_registros"] % 100 == 0:
-                        db.commit()
-                        logger.info(f"  Processados {stats['total_registros']} registros...")
-                
-                except Exception as e:
-                    logger.error(f"Erro ao processar linha {idx}: {e}")
-                    stats["erros"].append(f"Linha {idx}: {str(e)}")
-                    continue
+            if not tabela_existe:
+                return {
+                    "success": False,
+                    "erro": "Tabela operacoes_comex não existe"
+                }
             
+            # Contar registros existentes
+            total = db.query(OperacaoComex).count()
+            
+            # Inserir registro de teste
+            from datetime import date
+            registro_teste = OperacaoComex(
+                ncm="00000000",
+                descricao_produto="TESTE DE UPLOAD",
+                tipo_operacao=TipoOperacao.EXPORTACAO,
+                valor_fob=1.0,
+                peso_liquido_kg=1.0,
+                data_operacao=date.today(),
+                mes_referencia=date.today().strftime("%Y-%m"),
+                arquivo_origem="teste_upload"
+            )
+            
+            db.add(registro_teste)
             db.commit()
-            logger.success(f"✅ Importação de CNAE concluída: {stats['inseridos']} inseridos, {stats['atualizados']} atualizados")
+            
+            novo_total = db.query(OperacaoComex).count()
             
             return {
                 "success": True,
-                "message": "Upload e importação de CNAE concluídos",
-                "stats": stats
+                "mensagem": "Teste de upload bem-sucedido",
+                "tabela_existe": True,
+                "registros_antes": total,
+                "registros_depois": novo_total,
+                "registro_teste_inserido": True
+            }
+        
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Erro no teste: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                "success": False,
+                "erro": str(e),
+                "traceback": traceback.format_exc()
             }
         
         finally:
-            # Remover arquivo temporário
-            try:
-                os.unlink(caminho_temp)
-            except:
-                pass
-        
-    except HTTPException:
-        raise
+            db.close()
+    
     except Exception as e:
-        logger.error(f"Erro no upload e importação de CNAE: {e}")
+        logger.error(f"Erro crítico no teste: {e}")
+        import traceback
+        return {
+            "success": False,
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+@app.post("/testar-upload-automatico", tags=["teste"])
+async def testar_upload_automatico():
+    """
+    Endpoint de teste para verificar se o processamento automático funciona.
+    Cria um arquivo Excel de teste em memória e tenta processá-lo.
+    """
+    import tempfile
+    import os
+    import pandas as pd
+    from datetime import date
+    
+    try:
+        # Criar DataFrame de teste
+        df_teste = pd.DataFrame({
+            'Código NCM': ['01010101', '02020202'],
+            'Descrição NCM': ['Produto Teste 1', 'Produto Teste 2'],
+            'UF do Produto': ['SP', 'RJ'],
+            'Países': ['EUA', 'China'],
+            'Mês': ['1', '2'],
+            'Exportação - 2025 - Valor US$ FOB': [100.0, 200.0],
+            'Exportação - 2025 - Quilograma Líquido': [10.0, 20.0],
+            'Importação - 2025 - Valor US$ FOB': [50.0, 75.0],
+            'Importação - 2025 - Quilograma Líquido': [5.0, 7.5]
+        })
+        
+        # Criar arquivo temporário
+        fd, path = tempfile.mkstemp(suffix=".xlsx")
+        
+        try:
+            with os.fdopen(fd, 'wb') as tmp:
+                df_teste.to_excel(tmp, index=False, engine='openpyxl')
+            
+            logger.info(f"✅ Arquivo de teste criado: {path}")
+            
+            # Testar processamento
+            processar_excel_comex_task(path, "teste_automatico.xlsx")
+            
+            # Verificar se registros foram inseridos
+            db = SessionLocal()
+            try:
+                registros_teste = db.query(OperacaoComex).filter(
+                    OperacaoComex.arquivo_origem == "teste_automatico.xlsx"
+                ).count()
+                
+                return {
+                    "success": True,
+                    "mensagem": "Teste de upload automático bem-sucedido",
+                    "arquivo_teste_criado": True,
+                    "processamento_executado": True,
+                    "registros_inseridos": registros_teste
+                }
+            
+            finally:
+                db.close()
+        
+        finally:
+            # Remover arquivo temporário
+            if os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except:
+                    pass
+    
+    except Exception as e:
+        logger.error(f"Erro no teste automático: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Erro no upload e importação de CNAE: {str(e)}")
+        return {
+            "success": False,
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+@app.get("/diagnostico-sistema", tags=["teste"])
+async def diagnostico_sistema():
+    """
+    Endpoint de diagnóstico completo do sistema.
+    """
+    import os
+    from pathlib import Path
+    
+    diagnostico = {
+        "timestamp": datetime.now().isoformat(),
+        "banco_dados": {},
+        "arquivos": {},
+        "ambiente": {}
+    }
+    
+    try:
+        # Testar banco de dados
+        db = SessionLocal()
+        try:
+            # Conexão
+            result = db.execute(text("SELECT version()"))
+            versao_pg = result.scalar()
+            diagnostico["banco_dados"]["conectado"] = True
+            diagnostico["banco_dados"]["versao"] = versao_pg
+            
+            # Tabelas
+            result = db.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+                ORDER BY table_name
+            """))
+            tabelas = [row[0] for row in result]
+            diagnostico["banco_dados"]["tabelas"] = tabelas
+            
+            # Contar registros
+            if 'operacoes_comex' in tabelas:
+                total = db.query(OperacaoComex).count()
+                diagnostico["banco_dados"]["total_operacoes_comex"] = total
+            
+            if 'cnae_hierarquia' in tabelas:
+                from database.models import CNAEHierarquia
+                total_cnae = db.query(CNAEHierarquia).count()
+                diagnostico["banco_dados"]["total_cnae"] = total_cnae
+        
+        except Exception as e:
+            diagnostico["banco_dados"]["erro"] = str(e)
+        
+        finally:
+            db.close()
+        
+        # Verificar diretórios de arquivos
+        diretorios_verificar = [
+            "/opt/render/project/src/comex_data/comexstat_csv",
+            "/opt/render/project/src/comex_data/mdic_csv",
+            str(Path(__file__).parent.parent / "comex_data" / "comexstat_csv")
+        ]
+        
+        arquivos_encontrados = []
+        for diretorio in diretorios_verificar:
+            if os.path.exists(diretorio):
+                arquivos = [f for f in os.listdir(diretorio) if f.endswith(('.xlsx', '.xls'))]
+                arquivos_encontrados.extend([os.path.join(diretorio, f) for f in arquivos])
+        
+        diagnostico["arquivos"]["diretorios_verificados"] = diretorios_verificar
+        diagnostico["arquivos"]["arquivos_excel_encontrados"] = arquivos_encontrados
+        diagnostico["arquivos"]["total_arquivos"] = len(arquivos_encontrados)
+        
+        # Variáveis de ambiente
+        diagnostico["ambiente"]["DATABASE_URL_configurado"] = bool(os.getenv("DATABASE_URL"))
+        diagnostico["ambiente"]["PYTHON_VERSION"] = os.getenv("PYTHON_VERSION", "não configurado")
+        diagnostico["ambiente"]["ENVIRONMENT"] = os.getenv("ENVIRONMENT", "não configurado")
+        
+        return diagnostico
+    
+    except Exception as e:
+        logger.error(f"Erro no diagnóstico: {e}")
+        import traceback
+        diagnostico["erro"] = str(e)
+        diagnostico["traceback"] = traceback.format_exc()
+        return diagnostico
 
 
 @app.post("/importar-cnae-automatico")
@@ -2698,6 +3319,18 @@ async def get_dashboard_stats(
     """
     from sqlalchemy import func, and_, or_
     from datetime import datetime, timedelta
+
+    cache_key = _make_dashboard_cache_key(
+        meses,
+        tipo_operacao,
+        ncm,
+        ncms,
+        empresa_importadora,
+        empresa_exportadora,
+    )
+    cached = _get_cached_dashboard_stats(cache_key)
+    if cached:
+        return cached
     
     # Calcular data inicial (padrão: 2 anos)
     data_inicio = datetime.now() - timedelta(days=30 * meses)
@@ -2768,14 +3401,25 @@ async def get_dashboard_stats(
     valor_total = db.query(func.sum(OperacaoComex.valor_fob)).filter(
         and_(*filtros_valor)
     ).scalar() or 0.0
+
+    # Quantidade estatística total
+    quantidade_total = db.query(func.sum(OperacaoComex.quantidade_estatistica)).filter(
+        and_(*filtros_valor)
+    ).scalar() or 0.0
     
-    # Valores separados por tipo de operação (se não houver filtro de tipo)
+    # Valores e quantidade separados por tipo de operação (se não houver filtro de tipo)
     valor_total_imp = 0.0
     valor_total_exp = 0.0
+    quantidade_imp = 0.0
+    quantidade_exp = 0.0
     if tipo_filtro is None:
         # Calcular valores separados apenas se não houver filtro de tipo
         filtros_valor_imp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO]
         valor_total_imp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
+            and_(*filtros_valor_imp)
+        ).scalar() or 0.0
+
+        quantidade_imp = db.query(func.sum(OperacaoComex.quantidade_estatistica)).filter(
             and_(*filtros_valor_imp)
         ).scalar() or 0.0
         
@@ -2783,10 +3427,15 @@ async def get_dashboard_stats(
         valor_total_exp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
             and_(*filtros_valor_exp)
         ).scalar() or 0.0
+        quantidade_exp = db.query(func.sum(OperacaoComex.quantidade_estatistica)).filter(
+            and_(*filtros_valor_exp)
+        ).scalar() or 0.0
     elif tipo_filtro == TipoOperacao.IMPORTACAO:
         valor_total_imp = valor_total
+        quantidade_imp = quantidade_total
     elif tipo_filtro == TipoOperacao.EXPORTACAO:
         valor_total_exp = valor_total
+        quantidade_exp = quantidade_total
     
     # Principais NCMs
     principais_ncms = db.query(
@@ -2947,7 +3596,7 @@ async def get_dashboard_stats(
     # PRIMEIRO: Tentar usar tabela consolidada EmpresasRecomendadas (mais eficiente)
     try:
         total_emp_rec = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
-        if total_emp_rec > 0:
+        if total_emp_rec > 0 and valor_total == 0 and not principais_ncms_list:
             logger.info(f"Usando tabela consolidada EmpresasRecomendadas ({total_emp_rec} empresas)")
             
             # Buscar empresas prováveis importadoras e exportadoras
@@ -3034,6 +3683,16 @@ async def get_dashboard_stats(
                 ComercioExterior.tipo == 'exportacao',
                 ComercioExterior.data >= data_corte.date()
             ).scalar() or 0.0
+
+            quantidade_imp = db.query(func.sum(ComercioExterior.quantidade)).filter(
+                ComercioExterior.tipo == 'importacao',
+                ComercioExterior.data >= data_corte.date()
+            ).scalar() or 0.0
+
+            quantidade_exp = db.query(func.sum(ComercioExterior.quantidade)).filter(
+                ComercioExterior.tipo == 'exportacao',
+                ComercioExterior.data >= data_corte.date()
+            ).scalar() or 0.0
             
             # Se não encontrou com filtro de data, tentar SEM filtro (buscar todos os dados)
             if importacoes == 0 and exportacoes == 0:
@@ -3051,6 +3710,14 @@ async def get_dashboard_stats(
                 ).scalar() or 0.0
                 
                 peso_exp = db.query(func.sum(ComercioExterior.peso_kg)).filter(
+                    ComercioExterior.tipo == 'exportacao'
+                ).scalar() or 0.0
+
+                quantidade_imp = db.query(func.sum(ComercioExterior.quantidade)).filter(
+                    ComercioExterior.tipo == 'importacao'
+                ).scalar() or 0.0
+
+                quantidade_exp = db.query(func.sum(ComercioExterior.quantidade)).filter(
                     ComercioExterior.tipo == 'exportacao'
                 ).scalar() or 0.0
                 
@@ -3187,6 +3854,7 @@ async def get_dashboard_stats(
                 volume_imp = float(peso_imp)
                 volume_exp = float(peso_exp)
                 valor_total = float(importacoes + exportacoes)
+                quantidade_total = float((quantidade_imp or 0) + (quantidade_exp or 0))
                 
                 logger.info("="*80)
                 logger.info("📊 TOTAIS DE COMÉRCIO EXTERIOR")
@@ -3244,14 +3912,262 @@ async def get_dashboard_stats(
         valor_total_usd=float(valor_total),
         valor_total_importacoes=float(valor_total_imp) if valor_total_imp > 0 else 0.0,
         valor_total_exportacoes=float(valor_total_exp) if valor_total_exp > 0 else 0.0,
+        quantidade_estatistica_importacoes=float(quantidade_imp) if quantidade_imp > 0 else 0.0,
+        quantidade_estatistica_exportacoes=float(quantidade_exp) if quantidade_exp > 0 else 0.0,
+        quantidade_estatistica_total=float(quantidade_total) if quantidade_total > 0 else 0.0,
         principais_ncms=principais_ncms_list if principais_ncms_list else [],
         principais_paises=principais_paises_list if principais_paises_list else [],
         registros_por_mes=registros_dict if registros_dict else {},
         valores_por_mes=valores_por_mes_dict if valores_por_mes_dict else {},
         pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {}
     )
-    
-    return stats_response
+
+    payload = stats_response.model_dump() if hasattr(stats_response, "model_dump") else stats_response.dict()
+    _set_cached_dashboard_stats(cache_key, payload)
+    return payload
+
+
+def _read_json_file(relative_path: str) -> Optional[dict]:
+    try:
+        file_path = Path(__file__).parent.parent / relative_path
+        if not file_path.exists():
+            return None
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+@app.get("/dashboard/dados-comexstat")
+async def dashboard_dados_comexstat():
+    dados = _read_json_file("data/resumo_dados_comexstat.json")
+    if not dados:
+        return {"success": False, "data": None, "message": "Arquivo não encontrado"}
+    return {"success": True, "data": dados}
+
+
+@app.get("/dashboard/dados-ncm-comexstat")
+async def dashboard_dados_ncm_comexstat(
+    limite: int = Query(default=100, ge=1, le=1000),
+    uf: Optional[str] = Query(default=None),
+    tipo: Optional[str] = Query(default=None),
+):
+    dados = _read_json_file("data/dados_ncm_comexstat.json")
+    if not dados:
+        return {"success": False, "data": [], "message": "Arquivo não encontrado"}
+
+    resultados = dados
+    if uf:
+        resultados = [item for item in resultados if str(item.get("uf", "")).upper() == uf.upper()]
+    if tipo:
+        tipo_lower = tipo.lower()
+        if "import" in tipo_lower:
+            resultados = [item for item in resultados if item.get("valor_importacao_usd", 0) > 0]
+        elif "export" in tipo_lower:
+            resultados = [item for item in resultados if item.get("valor_exportacao_usd", 0) > 0]
+
+    return {"success": True, "data": resultados[:limite]}
+
+
+@app.get("/dashboard/empresas-recomendadas")
+async def dashboard_empresas_recomendadas(
+    limite: int = Query(default=100, ge=1, le=500),
+    tipo: Optional[str] = Query(default=None),
+    uf: Optional[str] = Query(default=None),
+    ncm: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        from sqlalchemy import or_
+
+        query = db.query(EmpresasRecomendadas)
+        if uf:
+            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
+        if tipo:
+            tipo_lower = tipo.lower()
+            if "import" in tipo_lower:
+                query = query.filter(EmpresasRecomendadas.provavel_importador == 1)
+            elif "export" in tipo_lower:
+                query = query.filter(EmpresasRecomendadas.provavel_exportador == 1)
+        if ncm:
+            ncm_limpo = ncm.replace(".", "").replace(" ", "").strip()
+            query = query.filter(
+                or_(
+                    EmpresasRecomendadas.ncms_importacao.ilike(f"%{ncm_limpo}%"),
+                    EmpresasRecomendadas.ncms_exportacao.ilike(f"%{ncm_limpo}%"),
+                )
+            )
+
+        resultados = query.order_by(EmpresasRecomendadas.peso_participacao.desc()).limit(limite).all()
+        data = [
+            {
+                "nome": emp.nome,
+                "cnpj": emp.cnpj,
+                "uf": emp.estado,
+                "tipo": emp.tipo_principal,
+                "peso_participacao": float(emp.peso_participacao or 0),
+                "valor_total": float((emp.valor_total_importacao_usd or 0) + (emp.valor_total_exportacao_usd or 0)),
+                "valor_importacao_usd": float(emp.valor_total_importacao_usd or 0),
+                "valor_exportacao_usd": float(emp.valor_total_exportacao_usd or 0),
+            }
+            for emp in resultados
+        ]
+        return {"success": True, "data": data}
+    except Exception:
+        return {"success": False, "data": [], "message": "Erro ao consultar empresas recomendadas"}
+
+
+@app.get("/dashboard/empresas-importadoras")
+async def dashboard_empresas_importadoras(
+    limite: int = Query(default=10, ge=1, le=100),
+    uf: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        query = db.query(EmpresasRecomendadas).filter(
+            EmpresasRecomendadas.provavel_importador == 1
+        )
+        if uf:
+            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
+        resultados = query.order_by(EmpresasRecomendadas.peso_participacao.desc()).limit(limite).all()
+        data = [
+            {
+                "nome": emp.nome,
+                "cnpj": emp.cnpj,
+                "uf": emp.estado,
+                "valor_total": float(emp.valor_total_importacao_usd or 0),
+                "peso_participacao": float(emp.peso_participacao or 0),
+            }
+            for emp in resultados
+        ]
+        if data:
+            return {"success": True, "data": data}
+    except Exception:
+        pass
+
+    fallback = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo="importacao", limit=limite)
+    return {"success": True, "data": fallback}
+
+
+@app.get("/dashboard/empresas-exportadoras")
+async def dashboard_empresas_exportadoras(
+    limite: int = Query(default=10, ge=1, le=100),
+    uf: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        query = db.query(EmpresasRecomendadas).filter(
+            EmpresasRecomendadas.provavel_exportador == 1
+        )
+        if uf:
+            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
+        resultados = query.order_by(EmpresasRecomendadas.peso_participacao.desc()).limit(limite).all()
+        data = [
+            {
+                "nome": emp.nome,
+                "cnpj": emp.cnpj,
+                "uf": emp.estado,
+                "valor_total": float(emp.valor_total_exportacao_usd or 0),
+                "peso_participacao": float(emp.peso_participacao or 0),
+            }
+            for emp in resultados
+        ]
+        if data:
+            return {"success": True, "data": data}
+    except Exception:
+        pass
+
+    fallback = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo="exportacao", limit=limite)
+    return {"success": True, "data": fallback}
+
+
+@app.get("/dashboard/sinergias-estado")
+async def dashboard_sinergias_estado(
+    uf: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if SINERGIA_AVAILABLE and SinergiaAnalyzer is not None:
+        analyzer = SinergiaAnalyzer()
+        return analyzer.analisar_sinergias_por_estado(db, uf)
+
+    try:
+        from sqlalchemy import func
+
+        filtros_imp = [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO]
+        filtros_exp = [OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO]
+        if uf:
+            filtros_imp.append(OperacaoComex.uf == uf.upper())
+            filtros_exp.append(OperacaoComex.uf == uf.upper())
+
+        importacoes = db.query(
+            OperacaoComex.uf,
+            func.sum(OperacaoComex.valor_fob).label("valor_total"),
+            func.sum(OperacaoComex.peso_liquido_kg).label("peso_total"),
+        ).filter(and_(*filtros_imp)).group_by(OperacaoComex.uf).all()
+
+        exportacoes = db.query(
+            OperacaoComex.uf,
+            func.sum(OperacaoComex.valor_fob).label("valor_total"),
+            func.sum(OperacaoComex.peso_liquido_kg).label("peso_total"),
+        ).filter(and_(*filtros_exp)).group_by(OperacaoComex.uf).all()
+
+        resultado = {}
+        for uf_row, valor, peso in importacoes:
+            resultado.setdefault(uf_row, {}).update({
+                "uf": uf_row,
+                "importacao_valor": float(valor or 0),
+                "importacao_peso": float(peso or 0),
+            })
+        for uf_row, valor, peso in exportacoes:
+            resultado.setdefault(uf_row, {}).update({
+                "uf": uf_row,
+                "exportacao_valor": float(valor or 0),
+                "exportacao_peso": float(peso or 0),
+            })
+
+        return {"success": True, "data": list(resultado.values())}
+    except Exception:
+        return {"success": False, "data": []}
+
+
+@app.get("/dashboard/sugestoes-empresas")
+async def dashboard_sugestoes_empresas(
+    limite: int = Query(default=20, ge=1, le=100),
+    tipo: Optional[str] = Query(default=None),
+    uf: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        query = db.query(EmpresasRecomendadas)
+        if uf:
+            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
+        if tipo:
+            tipo_lower = tipo.lower()
+            if "import" in tipo_lower:
+                query = query.filter(EmpresasRecomendadas.provavel_importador == 1)
+            elif "export" in tipo_lower:
+                query = query.filter(EmpresasRecomendadas.provavel_exportador == 1)
+
+        resultados = query.order_by(EmpresasRecomendadas.peso_participacao.desc()).limit(limite).all()
+        sugestoes = [
+            {
+                "nome": emp.nome,
+                "cnpj": emp.cnpj,
+                "uf": emp.estado,
+                "peso_participacao": float(emp.peso_participacao or 0),
+                "valor_total": float((emp.valor_total_importacao_usd or 0) + (emp.valor_total_exportacao_usd or 0)),
+                "tipo": emp.tipo_principal,
+                "fonte": "empresas_recomendadas",
+            }
+            for emp in resultados
+        ]
+        if sugestoes:
+            return {"success": True, "sugestoes": sugestoes}
+    except Exception:
+        pass
+
+    sugestoes = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo=tipo, limit=limite)
+    return {"success": True, "sugestoes": sugestoes}
 
 
 @app.post("/buscar")
@@ -3413,7 +4329,24 @@ async def autocomplete_importadoras(
             for empresa, total_operacoes, valor_total in empresas
         ]
         
-        # 2. Se não encontrou resultados ou quer incluir sugestões, buscar no MDIC
+        # 2. Complementar com BigQuery (cadastro histórico)
+        if len(resultado) < limit:
+            try:
+                resultados_bq = _buscar_empresas_bigquery(
+                    q=q,
+                    tipo="importacao",
+                    limit=limit - len(resultado)
+                )
+                for item in resultados_bq:
+                    nome = item.get("nome")
+                    if not nome:
+                        continue
+                    if nome.lower() not in {r["nome"].lower() for r in resultado}:
+                        resultado.append(item)
+            except Exception as e:
+                logger.debug(f"Erro ao buscar BigQuery (importadoras): {e}")
+
+        # 3. Se não encontrou resultados ou quer incluir sugestões, buscar no MDIC
         if (len(resultado) < limit and incluir_sugestoes) or len(resultado) == 0:
             try:
                 from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
@@ -3449,7 +4382,7 @@ async def autocomplete_importadoras(
             except Exception as e:
                 logger.debug(f"Erro ao buscar empresas MDIC para autocomplete: {e}")
         
-        # 3. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
+        # 4. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
         if len(resultado) < limit and incluir_sugestoes:
             try:
                 # Importação condicional - apenas quando necessário
@@ -3555,7 +4488,24 @@ async def autocomplete_exportadoras(
         
         logger.info(f"✅ Encontradas {len(resultado)} exportadoras nas operações para '{q}'")
         
-        # 2. Se não encontrou resultados ou query vazia, buscar no MDIC
+        # 2. Complementar com BigQuery (cadastro histórico)
+        if len(resultado) < limit:
+            try:
+                resultados_bq = _buscar_empresas_bigquery(
+                    q=q,
+                    tipo="exportacao",
+                    limit=limit - len(resultado)
+                )
+                for item in resultados_bq:
+                    nome = item.get("nome")
+                    if not nome:
+                        continue
+                    if nome.lower() not in {r["nome"].lower() for r in resultado}:
+                        resultado.append(item)
+            except Exception as e:
+                logger.debug(f"Erro ao buscar BigQuery (exportadoras): {e}")
+
+        # 3. Se não encontrou resultados ou query vazia, buscar no MDIC
         if (len(resultado) < limit and incluir_sugestoes) or not q:
             try:
                 from data_collector.empresas_mdic_scraper import EmpresasMDICScraper
@@ -3590,7 +4540,7 @@ async def autocomplete_exportadoras(
             except Exception as e:
                 logger.debug(f"Erro ao buscar empresas MDIC: {e}")
         
-        # 3. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
+        # 4. Se ainda não tem resultados suficientes, buscar sugestões de sinergias
         if len(resultado) < limit and incluir_sugestoes:
             try:
                 # Importação condicional - apenas quando necessário
