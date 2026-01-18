@@ -535,6 +535,8 @@ const Dashboard = () => {
     valores_por_mes: {},
     pesos_por_mes: {}
   };
+  const principaisPaises = statsFinal.principais_paises || [];
+  const principaisNcms = statsFinal.principais_ncms || [];
 
   // Se houver erro mas não tiver stats, mostrar erro mas continuar renderizando
   if (error && !stats) {
