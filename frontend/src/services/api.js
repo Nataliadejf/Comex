@@ -138,7 +138,7 @@ export const dashboardAPI = {
       console.log('🔗 Fazendo requisição para:', `${API_BASE_URL}${url}`);
       
       const response = await api.get(url, {
-        timeout: 10000,
+        timeout: 30000,
         validateStatus: (status) => status < 500, // Aceitar até 499 sem lançar erro
       });
       

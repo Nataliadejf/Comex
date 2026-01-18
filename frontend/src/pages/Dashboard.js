@@ -309,6 +309,9 @@ const Dashboard = () => {
           volume_importacoes: 0,
           volume_exportacoes: 0,
           valor_total_usd: 0,
+          quantidade_estatistica_importacoes: 0,
+          quantidade_estatistica_exportacoes: 0,
+          quantidade_estatistica_total: 0,
           principais_ncms: [],
           principais_paises: [],
           registros_por_mes: {},
@@ -530,6 +533,9 @@ const Dashboard = () => {
     valor_total_usd: 0,
     valor_total_importacoes: 0,
     valor_total_exportacoes: 0,
+    quantidade_estatistica_importacoes: 0,
+    quantidade_estatistica_exportacoes: 0,
+    quantidade_estatistica_total: 0,
     principais_ncms: [],
     principais_paises: [],
     registros_por_mes: {},
@@ -721,6 +727,27 @@ const Dashboard = () => {
     }).format(value);
   };
 
+  const formatQuantity = (value) => {
+    return new Intl.NumberFormat('pt-BR', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  const quantidadeImportacoes = statsFinal.quantidade_estatistica_importacoes || 0;
+  const quantidadeExportacoes = statsFinal.quantidade_estatistica_exportacoes || 0;
+  const quantidadeTotal = tipoOperacao === 'Importação'
+    ? quantidadeImportacoes
+    : tipoOperacao === 'Exportação'
+      ? quantidadeExportacoes
+      : (statsFinal.quantidade_estatistica_total || (quantidadeImportacoes + quantidadeExportacoes));
+
+  const pesoTotal = tipoOperacao === 'Importação'
+    ? (statsFinal.volume_importacoes || 0)
+    : tipoOperacao === 'Exportação'
+      ? (statsFinal.volume_exportacoes || 0)
+      : ((statsFinal.volume_importacoes || 0) + (statsFinal.volume_exportacoes || 0));
+
   return (
     <div style={{ padding: '24px', background: '#f5f5f5', minHeight: '100vh' }}>
       {/* Barra de Filtros */}
@@ -849,7 +876,7 @@ const Dashboard = () => {
 
       {/* Cards de Métricas Principais */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
-        <Col xs={24} sm={12} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
           <Card 
             style={{ 
               borderRadius: '8px',
@@ -862,49 +889,23 @@ const Dashboard = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
-                  Valor Total Importado no Período
+                  Valor Importações
                 </div>
                 <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatCurrency(
-                    tipoOperacao === 'Exportação' ? 0 : 
+                    tipoOperacao === 'Exportação' ? 0 :
                     (statsFinal.valor_total_importacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
-                  Total FOB pago pelo mercado na importação dos produtos desta pesquisa
+                  Total FOB importado no período
                 </div>
               </div>
               <DollarOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
             </div>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card 
-            style={{ 
-              borderRadius: '8px',
-              background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-              border: 'none',
-              height: '100%',
-            }}
-            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
-                  Quantidade em Peso
-                </div>
-                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
-                  {formatWeight(statsFinal.volume_importacoes || 0)} KG
-                </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
-                  Peso total transportado no período
-                </div>
-              </div>
-              <GlobalOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
-            </div>
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
           <Card 
             style={{ 
               borderRadius: '8px',
@@ -917,19 +918,71 @@ const Dashboard = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
-                  Valor Total Exportado no Período
+                  Valor Exportações
                 </div>
                 <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatCurrency(
-                    tipoOperacao === 'Importação' ? 0 : 
+                    tipoOperacao === 'Importação' ? 0 :
                     (statsFinal.valor_total_exportacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
-                  Total FOB recebido pelo mercado na exportação dos produtos desta pesquisa
+                  Total FOB exportado no período
                 </div>
               </div>
               <DollarOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card 
+            style={{ 
+              borderRadius: '8px',
+              background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+              border: 'none',
+              height: '100%',
+            }}
+            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+                  Quantidade Estatística
+                </div>
+                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                  {formatQuantity(quantidadeTotal)}
+                </div>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
+                  Soma das quantidades estatísticas
+                </div>
+              </div>
+              <GlobalOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card 
+            style={{ 
+              borderRadius: '8px',
+              background: 'linear-gradient(135deg, #36d1dc 0%, #5b86e5 100%)',
+              border: 'none',
+              height: '100%',
+            }}
+            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+                  Peso (Quilograma Líquido)
+                </div>
+                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                  {formatWeight(pesoTotal)} KG
+                </div>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
+                  Peso total transportado no período
+                </div>
+              </div>
+              <GlobalOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
             </div>
           </Card>
         </Col>
