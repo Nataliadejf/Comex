@@ -19,8 +19,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  # Teste o endpoint que o dashboard usa
-  Invoke-WebRequest -Uri "https://comex-backend-gecp.onrender.com/dashboard/stats?meses=24" -UseBasicParsing -TimeoutSec 30 | ConvertFrom-Json | ConvertTo-Json -Depth 3  Legend,
+  Legend,
   ResponsiveContainer,
   Cell,
 } from 'recharts';
