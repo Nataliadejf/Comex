@@ -1,9 +1,10 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://comex-backend-gecp.onrender.com';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 60000, // 60 segundos (aumentado de 30s)
   headers: {
     'Content-Type': 'application/json',
   },
