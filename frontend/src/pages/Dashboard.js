@@ -19,8 +19,8 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
-  Legend,
+  # Teste o endpoint que o dashboard usa
+  Invoke-WebRequest -Uri "https://comex-backend-gecp.onrender.com/dashboard/stats?meses=24" -UseBasicParsing -TimeoutSec 30 | ConvertFrom-Json | ConvertTo-Json -Depth 3  Legend,
   ResponsiveContainer,
   Cell,
 } from 'recharts';
@@ -339,6 +339,31 @@ const Dashboard = () => {
     loadDashboardData();
   }, [loadDashboardData]);
 
+  // Carregar empresas recomendadas quando stats carregar
+  useEffect(() => {
+    const loadEmpresasRecomendadas = async () => {
+      try {
+        // Carregar empresas importadoras
+        const impData = await empresasRecomendadasAPI.getEmpresasImportadoras(10);
+        if (impData.success && impData.data) {
+          setEmpresasImportadorasRecomendadas(impData.data);
+        }
+
+        // Carregar empresas exportadoras
+        const expData = await empresasRecomendadasAPI.getEmpresasExportadoras(10);
+        if (expData.success && expData.data) {
+          setEmpresasExportadorasRecomendadas(expData.data);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar empresas recomendadas:', error);
+      }
+    };
+
+    if (stats) {
+      loadEmpresasRecomendadas();
+    }
+  }, [stats]);
+
   // Função para carregar sugestões de empresas
   const loadSugestoesEmpresas = useCallback(async (tipo = null) => {
     setLoadingSugestoes(true);
@@ -562,31 +587,6 @@ const Dashboard = () => {
         peso: pesoMensal,
       };
     });
-
-  // Carregar empresas recomendadas quando stats carregar
-  useEffect(() => {
-    const loadEmpresasRecomendadas = async () => {
-      try {
-        // Carregar empresas importadoras
-        const impData = await empresasRecomendadasAPI.getEmpresasImportadoras(10);
-        if (impData.success && impData.data) {
-          setEmpresasImportadorasRecomendadas(impData.data);
-        }
-        
-        // Carregar empresas exportadoras
-        const expData = await empresasRecomendadasAPI.getEmpresasExportadoras(10);
-        if (expData.success && expData.data) {
-          setEmpresasExportadorasRecomendadas(expData.data);
-        }
-      } catch (error) {
-        console.error('Erro ao carregar empresas recomendadas:', error);
-      }
-    };
-    
-    if (statsFinal) {
-      loadEmpresasRecomendadas();
-    }
-  }, [statsFinal]);
 
   // Top Importadores (usando empresas recomendadas se disponível, senão países)
   const topImportadores = (() => {
