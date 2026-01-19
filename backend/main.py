@@ -80,7 +80,7 @@ app.add_middleware(
 
 # Importação automática opcional do Excel no startup
 def _start_auto_import_excel_if_configured() -> None:
-    flag = os.getenv("AUTO_IMPORT_EXCEL_ON_START", "").strip().lower()
+    flag = os.getenv("AUTO_IMPORT_EXCEL_ON_START", "true").strip().lower()
     if flag not in {"1", "true", "yes", "y"}:
         return
 
@@ -3967,6 +3967,62 @@ def _read_json_file(relative_path: str) -> Optional[dict]:
         return None
 
 
+def _load_empresas_recomendadas_fallback(
+    limite: int,
+    tipo: Optional[str],
+    uf: Optional[str],
+    ncm: Optional[str],
+) -> List[dict]:
+    try:
+        arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.xlsx"
+        if not arquivo_empresas.exists():
+            arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.csv"
+            if not arquivo_empresas.exists():
+                return []
+
+        import pandas as pd
+
+        if arquivo_empresas.suffix == ".xlsx":
+            df = pd.read_excel(arquivo_empresas)
+        else:
+            df = pd.read_csv(arquivo_empresas, encoding="utf-8-sig")
+
+        if uf:
+            df = df[df["Estado"].astype(str).str.upper() == uf.upper()]
+
+        if tipo:
+            tipo_lower = tipo.lower()
+            if "import" in tipo_lower:
+                df = df[df["Importado (R$)"].fillna(0) > 0]
+            elif "export" in tipo_lower:
+                df = df[df["Exportado (R$)"].fillna(0) > 0]
+
+        if ncm:
+            df = df[df["NCM Relacionado"].astype(str) == str(ncm)]
+
+        df = df.head(limite)
+
+        data = []
+        for _, row in df.iterrows():
+            valor_importacao = float(row.get("Importado (R$)", 0) or 0)
+            valor_exportacao = float(row.get("Exportado (R$)", 0) or 0)
+            data.append(
+                {
+                    "nome": row.get("Razão Social") or row.get("Nome Fantasia") or "N/A",
+                    "cnpj": row.get("CNPJ"),
+                    "uf": row.get("Estado"),
+                    "tipo": row.get("Sugestão"),
+                    "peso_participacao": float(row.get("Peso Participação (0-100)", 0) or 0),
+                    "valor_total": (valor_importacao + valor_exportacao) / 5.0,
+                    "valor_importacao_usd": valor_importacao / 5.0,
+                    "valor_exportacao_usd": valor_exportacao / 5.0,
+                }
+            )
+        return data
+    except Exception:
+        return []
+
+
 @app.get("/dashboard/dados-comexstat")
 async def dashboard_dados_comexstat():
     dados = _read_json_file("data/resumo_dados_comexstat.json")
@@ -4041,9 +4097,13 @@ async def dashboard_empresas_recomendadas(
             }
             for emp in resultados
         ]
-        return {"success": True, "data": data}
+        if data:
+            return {"success": True, "data": data}
+        fallback = _load_empresas_recomendadas_fallback(limite, tipo, uf, ncm)
+        return {"success": True, "data": fallback}
     except Exception:
-        return {"success": False, "data": [], "message": "Erro ao consultar empresas recomendadas"}
+        fallback = _load_empresas_recomendadas_fallback(limite, tipo, uf, ncm)
+        return {"success": True, "data": fallback}
 
 
 @app.get("/dashboard/empresas-importadoras")
@@ -4073,7 +4133,9 @@ async def dashboard_empresas_importadoras(
             return {"success": True, "data": data}
     except Exception:
         pass
-
+    fallback = _buscar_empresas_importadoras_recomendadas(limite)
+    if fallback:
+        return {"success": True, "data": fallback}
     fallback = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo="importacao", limit=limite)
     return {"success": True, "data": fallback}
 
@@ -4105,7 +4167,9 @@ async def dashboard_empresas_exportadoras(
             return {"success": True, "data": data}
     except Exception:
         pass
-
+    fallback = _buscar_empresas_exportadoras_recomendadas(limite)
+    if fallback:
+        return {"success": True, "data": fallback}
     fallback = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo="exportacao", limit=limite)
     return {"success": True, "data": fallback}
 
