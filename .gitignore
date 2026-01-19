@@ -48,7 +48,7 @@ env/
 logs/
 
 # Data directory
-D:\comex_data\
+D:/comex_data/
 comex_data/
 
 # Node

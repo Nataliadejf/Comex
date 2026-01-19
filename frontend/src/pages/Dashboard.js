@@ -878,6 +878,7 @@ const Dashboard = () => {
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
         <Col xs={24} sm={12} lg={6}>
           <Card 
+            className="dashboard-metric-card"
             style={{ 
               borderRadius: '8px',
               background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -888,10 +889,10 @@ const Dashboard = () => {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
                   Valor Importações
                 </div>
-                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatCurrency(
                     tipoOperacao === 'Exportação' ? 0 :
                     (statsFinal.valor_total_importacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
@@ -907,6 +908,7 @@ const Dashboard = () => {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card 
+            className="dashboard-metric-card"
             style={{ 
               borderRadius: '8px',
               background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
@@ -917,10 +919,10 @@ const Dashboard = () => {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
                   Valor Exportações
                 </div>
-                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatCurrency(
                     tipoOperacao === 'Importação' ? 0 :
                     (statsFinal.valor_total_exportacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
@@ -936,6 +938,7 @@ const Dashboard = () => {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card 
+            className="dashboard-metric-card"
             style={{ 
               borderRadius: '8px',
               background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
@@ -946,10 +949,10 @@ const Dashboard = () => {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
                   Quantidade Estatística
                 </div>
-                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatQuantity(quantidadeTotal)}
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
@@ -962,6 +965,7 @@ const Dashboard = () => {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card 
+            className="dashboard-metric-card"
             style={{ 
               borderRadius: '8px',
               background: 'linear-gradient(135deg, #36d1dc 0%, #5b86e5 100%)',
@@ -972,10 +976,10 @@ const Dashboard = () => {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
                   Peso (Quilograma Líquido)
                 </div>
-                <div style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
                   {formatWeight(pesoTotal)} KG
                 </div>
                 <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>

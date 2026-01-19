@@ -1,7 +1,7 @@
 """
 Aplicação principal FastAPI.
 """
-from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text, and_
@@ -4777,6 +4777,32 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
     import secrets
     from datetime import timedelta
     
+    ADMIN_APPROVAL_TOKEN = os.getenv("ADMIN_APPROVAL_TOKEN", "").strip()
+    
+    def _normalize_document(value: Optional[str], expected_len: int) -> Optional[str]:
+        """Normaliza CPF/CNPJ para apenas dígitos e trata placeholders."""
+        if not value:
+            return None
+        digits = "".join(ch for ch in str(value) if ch.isdigit())
+        if not digits or len(digits) != expected_len:
+            return None
+        if digits == ("0" * expected_len):
+            return None
+        return digits
+    
+    def _get_public_base_url(request: Request) -> str:
+        base_url = os.getenv("PUBLIC_BASE_URL", "").strip()
+        if base_url:
+            return base_url.rstrip("/")
+        return str(request.base_url).rstrip("/")
+    
+    def _require_admin_token(request: Request) -> None:
+        if not ADMIN_APPROVAL_TOKEN:
+            return
+        header_token = request.headers.get("X-Admin-Token")
+        if not header_token or header_token != ADMIN_APPROVAL_TOKEN:
+            raise HTTPException(status_code=401, detail="Token de administração inválido")
+    
     @app.post("/login")
     async def login(
         username: str = Form(...),
@@ -4865,6 +4891,26 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             if usuario_existente:
                 raise HTTPException(status_code=400, detail="Email já cadastrado")
             
+            # Normalizar CPF/CNPJ e validar duplicidade
+            cpf_normalizado = _normalize_document(cadastro.cpf, 11)
+            cnpj_normalizado = _normalize_document(cadastro.cnpj, 14)
+            
+            if cadastro.cpf and not cpf_normalizado:
+                raise HTTPException(status_code=400, detail="CPF inválido. Informe um CPF válido.")
+            
+            if cadastro.cnpj and not cnpj_normalizado:
+                raise HTTPException(status_code=400, detail="CNPJ inválido. Informe um CNPJ válido.")
+            
+            if cpf_normalizado:
+                cpf_existente = db.query(Usuario).filter(Usuario.cpf == cpf_normalizado).first()
+                if cpf_existente:
+                    raise HTTPException(status_code=400, detail="CPF já cadastrado")
+            
+            if cnpj_normalizado:
+                cnpj_existente = db.query(Usuario).filter(Usuario.cnpj == cnpj_normalizado).first()
+                if cnpj_existente:
+                    raise HTTPException(status_code=400, detail="CNPJ já cadastrado")
+            
             # Truncar senha antes do hash
             senha_para_hash = cadastro.password
             senha_bytes = len(senha_para_hash.encode('utf-8'))
@@ -4880,8 +4926,8 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 nome_completo=cadastro.nome_completo,
                 data_nascimento=cadastro.data_nascimento,
                 nome_empresa=cadastro.nome_empresa,
-                cpf=cadastro.cpf,
-                cnpj=cadastro.cnpj,
+                cpf=cpf_normalizado,
+                cnpj=cnpj_normalizado,
                 status_aprovacao="pendente",
                 ativo=0  # Inativo até aprovação
             )
@@ -4920,6 +4966,10 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             }
         except HTTPException:
             raise
+        except SQLAlchemyError as e:
+            db.rollback()
+            logger.error(f"Erro de banco no cadastro: {e}")
+            raise HTTPException(status_code=400, detail="Dados já cadastrados ou inválidos")
         except Exception as e:
             logger.error(f"❌ Erro inesperado no cadastro: {e}")
             raise HTTPException(status_code=500, detail=f"Erro interno do servidor: {str(e)}")
@@ -5069,10 +5119,12 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
     
     @app.get("/cadastros-pendentes")
     async def listar_cadastros_pendentes(
+        request: Request,
         db: Session = Depends(get_db)
     ):
         """Lista todos os cadastros pendentes de aprovação."""
         try:
+            base_url = _get_public_base_url(request)
             cadastros = db.query(Usuario).filter(
                 Usuario.status_aprovacao == "pendente"
             ).all()
@@ -5092,9 +5144,13 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                     "nome_empresa": c.nome_empresa,
                     "cpf": c.cpf,
                     "cnpj": c.cnpj,
+                    "data_nascimento": c.data_nascimento.isoformat() if c.data_nascimento else None,
                     "data_criacao": c.data_criacao.isoformat() if c.data_criacao else None,
+                    "status_aprovacao": c.status_aprovacao,
                     "token_aprovacao": aprovacao.token_aprovacao if aprovacao else None,
-                    "link_aprovacao": f"http://localhost:8000/docs#/default/aprovar_cadastro_aprovar_cadastro_post" if aprovacao else None
+                    "data_expiracao": aprovacao.data_expiracao.isoformat() if aprovacao else None,
+                    "link_aprovacao": f"{base_url}/docs#/default/aprovar_cadastro_aprovar_cadastro_post" if aprovacao else None,
+                    "endpoint_aprovar_admin": f"{base_url}/admin/cadastros/{c.id}/aprovar",
                 })
             
             return {
@@ -5106,6 +5162,106 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             import traceback
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail="Erro ao listar cadastros pendentes")
+    
+    @app.post("/admin/cadastros/{usuario_id}/aprovar")
+    async def aprovar_cadastro_admin(
+        usuario_id: int,
+        request: Request,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db)
+    ):
+        """Aprova cadastro diretamente por ID (uso administrativo)."""
+        try:
+            _require_admin_token(request)
+            usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
+            if not usuario:
+                raise HTTPException(status_code=404, detail="Usuário não encontrado")
+            
+            if usuario.status_aprovacao == "aprovado" and usuario.ativo == 1:
+                return {
+                    "message": "Usuário já aprovado",
+                    "email": usuario.email,
+                    "status": usuario.status_aprovacao
+                }
+            
+            aprovacao = db.query(AprovacaoCadastro).filter(
+                AprovacaoCadastro.usuario_id == usuario.id,
+                AprovacaoCadastro.status == "pendente"
+            ).order_by(AprovacaoCadastro.data_criacao.desc()).first()
+            
+            usuario.status_aprovacao = "aprovado"
+            usuario.ativo = 1
+            if aprovacao:
+                aprovacao.status = "aprovado"
+                aprovacao.data_aprovacao = datetime.utcnow()
+            
+            db.commit()
+            
+            logger.info(f"✅ Cadastro aprovado via admin para: {usuario.email}")
+            
+            if EMAIL_SERVICE_AVAILABLE:
+                background_tasks.add_task(
+                    enviar_email_cadastro_aprovado,
+                    usuario.email,
+                    usuario.nome_completo
+                )
+            
+            return {
+                "message": "Cadastro aprovado com sucesso!",
+                "email": usuario.email,
+                "nome": usuario.nome_completo
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erro ao aprovar cadastro via admin: {e}")
+            raise HTTPException(status_code=500, detail="Erro ao aprovar cadastro")
+    
+    class DeletarUsuarioRequest(BaseModel):
+        """Schema para deletar usuário."""
+        email: Optional[str] = None
+        usuario_id: Optional[int] = None
+    
+    @app.post("/admin/usuarios/deletar")
+    async def deletar_usuario_admin(
+        payload: DeletarUsuarioRequest,
+        request: Request,
+        db: Session = Depends(get_db)
+    ):
+        """Deleta usuário por email ou ID (uso administrativo)."""
+        try:
+            _require_admin_token(request)
+            if not payload.email and not payload.usuario_id:
+                raise HTTPException(status_code=400, detail="Informe email ou usuario_id")
+            
+            query = db.query(Usuario)
+            if payload.usuario_id:
+                query = query.filter(Usuario.id == payload.usuario_id)
+            else:
+                query = query.filter(Usuario.email == payload.email)
+            
+            usuario = query.first()
+            if not usuario:
+                raise HTTPException(status_code=404, detail="Usuário não encontrado")
+            
+            db.query(AprovacaoCadastro).filter(
+                AprovacaoCadastro.usuario_id == usuario.id
+            ).delete(synchronize_session=False)
+            
+            db.delete(usuario)
+            db.commit()
+            
+            logger.info(f"🗑️ Usuário deletado: {usuario.email}")
+            return {
+                "message": "Usuário deletado com sucesso",
+                "email": usuario.email,
+                "usuario_id": usuario.id
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erro ao deletar usuário: {e}")
+            raise HTTPException(status_code=500, detail="Erro ao deletar usuário")
     
     @app.post("/criar-usuario-teste")
     async def criar_usuario_teste(
