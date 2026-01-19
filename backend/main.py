@@ -120,8 +120,20 @@ def _start_auto_import_excel_if_configured() -> None:
                     f"Importação automática ignorada: {total_existente} registros já existem."
                 )
                 return
+
+            clear_by_file = os.getenv("AUTO_IMPORT_EXCEL_CLEAR_BY_FILE", "false").strip().lower()
+            clear_by_file = clear_by_file in {"1", "true", "yes", "y"}
+            if clear_by_file:
+                removidos = (
+                    db.query(OperacaoComex)
+                    .filter(OperacaoComex.arquivo_origem == source_path.name)
+                    .delete(synchronize_session=False)
+                )
+                db.commit()
+                logger.info(f"Registros removidos para reimportação: {removidos}")
         except Exception as e:
             logger.warning(f"Falha ao verificar registros existentes: {e}")
+            db.rollback()
         finally:
             db.close()
 
@@ -912,23 +924,40 @@ def processar_excel_comex_task(caminho_temp: str, nome_original: str):
                 mes_referencia = f"{ano}-{mes:02d}"
                 
                 # Processar EXPORTAÇÃO
-                valor_exp = (
-                    row.get('Exportação - 2025 - Valor US$ FOB', 0) or 
-                    row.get('Exportação - Valor US$ FOB', 0) or 
+                def _parse_number(value) -> float:
+                    if pd.isna(value):
+                        return 0.0
+                    if isinstance(value, (int, float)):
+                        return float(value)
+                    text = str(value).strip()
+                    if not text:
+                        return 0.0
+                    if "," in text and "." in text:
+                        text = text.replace(".", "").replace(",", ".")
+                    elif "," in text:
+                        text = text.replace(",", ".")
+                    try:
+                        return float(text)
+                    except ValueError:
+                        return 0.0
+
+                valor_exp = _parse_number(
+                    row.get('Exportação - 2025 - Valor US$ FOB', 0) or
+                    row.get('Exportação - Valor US$ FOB', 0) or
                     row.get('Valor Exportação', 0)
                 )
-                peso_exp = (
-                    row.get('Exportação - 2025 - Quilograma Líquido', 0) or 
-                    row.get('Exportação - Quilograma Líquido', 0) or 
+                peso_exp = _parse_number(
+                    row.get('Exportação - 2025 - Quilograma Líquido', 0) or
+                    row.get('Exportação - Quilograma Líquido', 0) or
                     row.get('Peso Exportação', 0)
                 )
-                quantidade_exp = (
+                quantidade_exp = _parse_number(
                     row.get('Exportação - 2025 - Quantidade Estatística', 0) or
                     row.get('Exportação - Quantidade Estatística', 0) or
                     row.get('Quantidade Exportação', 0)
                 )
                 
-                if pd.notna(valor_exp) and float(valor_exp) > 0:
+                if valor_exp > 0:
                     operacoes_para_inserir.append({
                         'ncm': ncm_normalizado,
                         'descricao_produto': descricao,
@@ -937,8 +966,8 @@ def processar_excel_comex_task(caminho_temp: str, nome_original: str):
                         'uf': uf,
                         'pais_origem_destino': pais,
                         'valor_fob': float(valor_exp),
-                        'peso_liquido_kg': float(peso_exp) if pd.notna(peso_exp) else 0,
-                        'quantidade_estatistica': float(quantidade_exp) if pd.notna(quantidade_exp) else 0,
+                        'peso_liquido_kg': float(peso_exp),
+                        'quantidade_estatistica': float(quantidade_exp),
                         'data_operacao': data_operacao,
                         'mes_referencia': mes_referencia,
                         'arquivo_origem': nome_original
@@ -947,23 +976,23 @@ def processar_excel_comex_task(caminho_temp: str, nome_original: str):
                     stats["total_registros"] += 1
                 
                 # Processar IMPORTAÇÃO
-                valor_imp = (
-                    row.get('Importação - 2025 - Valor US$ FOB', 0) or 
-                    row.get('Importação - Valor US$ FOB', 0) or 
+                valor_imp = _parse_number(
+                    row.get('Importação - 2025 - Valor US$ FOB', 0) or
+                    row.get('Importação - Valor US$ FOB', 0) or
                     row.get('Valor Importação', 0)
                 )
-                peso_imp = (
-                    row.get('Importação - 2025 - Quilograma Líquido', 0) or 
-                    row.get('Importação - Quilograma Líquido', 0) or 
+                peso_imp = _parse_number(
+                    row.get('Importação - 2025 - Quilograma Líquido', 0) or
+                    row.get('Importação - Quilograma Líquido', 0) or
                     row.get('Peso Importação', 0)
                 )
-                quantidade_imp = (
+                quantidade_imp = _parse_number(
                     row.get('Importação - 2025 - Quantidade Estatística', 0) or
                     row.get('Importação - Quantidade Estatística', 0) or
                     row.get('Quantidade Importação', 0)
                 )
                 
-                if pd.notna(valor_imp) and float(valor_imp) > 0:
+                if valor_imp > 0:
                     operacoes_para_inserir.append({
                         'ncm': ncm_normalizado,
                         'descricao_produto': descricao,
@@ -972,8 +1001,8 @@ def processar_excel_comex_task(caminho_temp: str, nome_original: str):
                         'uf': uf,
                         'pais_origem_destino': pais,
                         'valor_fob': float(valor_imp),
-                        'peso_liquido_kg': float(peso_imp) if pd.notna(peso_imp) else 0,
-                        'quantidade_estatistica': float(quantidade_imp) if pd.notna(quantidade_imp) else 0,
+                        'peso_liquido_kg': float(peso_imp),
+                        'quantidade_estatistica': float(quantidade_imp),
                         'data_operacao': data_operacao,
                         'mes_referencia': mes_referencia,
                         'arquivo_origem': nome_original
