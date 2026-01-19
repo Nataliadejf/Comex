@@ -749,11 +749,11 @@ const Dashboard = () => {
       : ((statsFinal.volume_importacoes || 0) + (statsFinal.volume_exportacoes || 0));
 
   return (
-    <div style={{ padding: '24px', background: '#f5f5f5', minHeight: '100vh' }}>
+    <div style={{ padding: 'clamp(8px, 2vw, 24px)', background: '#f5f5f5', minHeight: '100vh' }}>
       {/* Barra de Filtros */}
       <Card 
-        style={{ marginBottom: '24px', borderRadius: '8px' }}
-        bodyStyle={{ padding: '16px' }}
+        style={{ marginBottom: 'clamp(12px, 3vw, 24px)', borderRadius: '8px' }}
+        bodyStyle={{ padding: 'clamp(8px, 2vw, 16px)' }}
       >
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} sm={8} md={6}>
@@ -875,7 +875,7 @@ const Dashboard = () => {
       )}
 
       {/* Cards de Métricas Principais */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
+      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }}>
         <Col xs={24} sm={12} lg={6}>
           <Card 
             className="dashboard-metric-card"
@@ -885,24 +885,24 @@ const Dashboard = () => {
               border: 'none',
               height: '100%',
             }}
-            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+            bodyStyle={{ padding: 'clamp(12px, 3vw, 24px)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ flex: '1', minWidth: 0 }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Valor Importações
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
                   {formatCurrency(
                     tipoOperacao === 'Exportação' ? 0 :
                     (statsFinal.valor_total_importacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
                   Total FOB importado no período
                 </div>
               </div>
-              <DollarOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
+              <DollarOutlined style={{ fontSize: 'clamp(24px, 6vw, 40px)', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
             </div>
           </Card>
         </Col>
@@ -915,24 +915,24 @@ const Dashboard = () => {
               border: 'none',
               height: '100%',
             }}
-            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+            bodyStyle={{ padding: 'clamp(12px, 3vw, 24px)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ flex: '1', minWidth: 0 }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Valor Exportações
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
                   {formatCurrency(
                     tipoOperacao === 'Importação' ? 0 :
                     (statsFinal.valor_total_exportacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
                   Total FOB exportado no período
                 </div>
               </div>
-              <DollarOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
+              <DollarOutlined style={{ fontSize: 'clamp(24px, 6vw, 40px)', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
             </div>
           </Card>
         </Col>
@@ -945,21 +945,21 @@ const Dashboard = () => {
               border: 'none',
               height: '100%',
             }}
-            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+            bodyStyle={{ padding: 'clamp(12px, 3vw, 24px)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ flex: '1', minWidth: 0 }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Quantidade Estatística
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
                   {formatQuantity(quantidadeTotal)}
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
                   Soma das quantidades estatísticas
                 </div>
               </div>
-              <GlobalOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
+              <GlobalOutlined style={{ fontSize: 'clamp(24px, 6vw, 40px)', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
             </div>
           </Card>
         </Col>
@@ -972,28 +972,28 @@ const Dashboard = () => {
               border: 'none',
               height: '100%',
             }}
-            bodyStyle={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+            bodyStyle={{ padding: 'clamp(12px, 3vw, 24px)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ flex: '1', minWidth: 0 }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Peso (Quilograma Líquido)
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: '28px', fontWeight: 'bold' }}>
+                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
                   {formatWeight(pesoTotal)} KG
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '8px' }}>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
                   Peso total transportado no período
                 </div>
               </div>
-              <GlobalOutlined style={{ fontSize: '48px', color: 'rgba(255,255,255,0.3)' }} />
+              <GlobalOutlined style={{ fontSize: 'clamp(24px, 6vw, 40px)', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
             </div>
           </Card>
         </Col>
       </Row>
 
       {/* Seção Principal: Importadores e Exportadores */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
+      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }}>
         {/* Top Importadores */}
         <Col xs={24} lg={12}>
           <Card 
@@ -1023,12 +1023,12 @@ const Dashboard = () => {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                          {imp.nome}
+                        <div style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: 'clamp(12px, 3vw, 14px)' }}>
+                          {imp.nome.length > (window.innerWidth < 768 ? 30 : 50) ? imp.nome.substring(0, window.innerWidth < 768 ? 30 : 50) + '...' : imp.nome}
                         </div>
-                        <div style={{ fontSize: '12px', color: '#666' }}>
-                          FOB: {formatCurrency(imp.fob)} ({imp.percentual.toFixed(2)}%) | 
-                          Peso: {formatWeight(imp.peso)} KG
+                        <div style={{ fontSize: 'clamp(10px, 2.5vw, 12px)', color: '#666', lineHeight: '1.4' }}>
+                          <div>FOB: {formatCurrency(imp.fob)} ({imp.percentual.toFixed(2)}%)</div>
+                          <div>Peso: {formatWeight(imp.peso)} KG</div>
                         </div>
                       </div>
                     </div>
@@ -1061,11 +1061,11 @@ const Dashboard = () => {
               Total FOB estimado importado por mês
             </div>
             {importadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={Math.max(200, window.innerHeight * 0.25)}>
                 <LineChart data={importadoresTempoData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" />
-                  <YAxis />
+                  <XAxis dataKey="mes" tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
+                  <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
                   {topImportadores.map((imp, idx) => (
@@ -1075,7 +1075,7 @@ const Dashboard = () => {
                       dataKey={`imp_${idx}`}
                       stroke={imp.cor}
                       strokeWidth={2}
-                      name={imp.nome.length > 15 ? imp.nome.substring(0, 15) + '...' : imp.nome}
+                      name={imp.nome.length > (window.innerWidth < 768 ? 10 : 15) ? imp.nome.substring(0, window.innerWidth < 768 ? 10 : 15) + '...' : imp.nome}
                       dot={{ r: 4 }}
                     />
                   ))}
@@ -1121,12 +1121,12 @@ const Dashboard = () => {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                          {exp.nome}
+                        <div style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: 'clamp(12px, 3vw, 14px)' }}>
+                          {exp.nome.length > (window.innerWidth < 768 ? 30 : 50) ? exp.nome.substring(0, window.innerWidth < 768 ? 30 : 50) + '...' : exp.nome}
                         </div>
-                        <div style={{ fontSize: '12px', color: '#666' }}>
-                          FOB: {formatCurrency(exp.fob)} ({exp.percentual.toFixed(2)}%) | 
-                          Peso: {formatWeight(exp.peso)} KG
+                        <div style={{ fontSize: 'clamp(10px, 2.5vw, 12px)', color: '#666', lineHeight: '1.4' }}>
+                          <div>FOB: {formatCurrency(exp.fob)} ({exp.percentual.toFixed(2)}%)</div>
+                          <div>Peso: {formatWeight(exp.peso)} KG</div>
                         </div>
                       </div>
                     </div>
@@ -1159,11 +1159,11 @@ const Dashboard = () => {
               Total FOB estimado exportado por mês
             </div>
             {exportadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={Math.max(200, window.innerHeight * 0.25)}>
                 <LineChart data={exportadoresTempoData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" />
-                  <YAxis />
+                  <XAxis dataKey="mes" tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
+                  <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
                   {topExportadores.map((exp, idx) => (
@@ -1173,7 +1173,7 @@ const Dashboard = () => {
                       dataKey={`exp_${idx}`}
                       stroke={exp.cor}
                       strokeWidth={2}
-                      name={exp.nome.length > 15 ? exp.nome.substring(0, 15) + '...' : exp.nome}
+                      name={exp.nome.length > (window.innerWidth < 768 ? 10 : 15) ? exp.nome.substring(0, window.innerWidth < 768 ? 10 : 15) + '...' : exp.nome}
                       dot={{ r: 4 }}
                     />
                   ))}
@@ -1189,7 +1189,7 @@ const Dashboard = () => {
       </Row>
 
       {/* Gráfico de Tendências (FOB e Peso) */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
+      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }}>
         <Col xs={24}>
           <Card 
             title="Tendências"
@@ -1199,18 +1199,20 @@ const Dashboard = () => {
               Valor total importado e peso
             </div>
             {tendenciasData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={400}>
+              <ResponsiveContainer width="100%" height={Math.max(250, window.innerHeight * 0.3)}>
                 <ComposedChart data={tendenciasData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" />
+                  <XAxis dataKey="mes" tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis 
                     yAxisId="left"
-                    label={{ value: 'FOB (USD)', angle: -90, position: 'insideLeft' }}
+                    label={{ value: 'FOB (USD)', angle: -90, position: 'insideLeft', style: { fontSize: 'clamp(10px, 2.5vw, 12px)' } }}
+                    tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }}
                   />
                   <YAxis 
                     yAxisId="right"
                     orientation="right"
-                    label={{ value: 'Peso (Kg)', angle: 90, position: 'insideRight' }}
+                    label={{ value: 'Peso (Kg)', angle: 90, position: 'insideRight', style: { fontSize: 'clamp(10px, 2.5vw, 12px)' } }}
+                    tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }}
                   />
                   <Tooltip 
                     formatter={(value, name) => {
@@ -1243,7 +1245,7 @@ const Dashboard = () => {
       </Row>
 
       {/* Top NCMs */}
-      <Row gutter={[16, 16]}>
+      <Row gutter={[8, 8]}>
         <Col xs={24}>
           <Card 
             title={
@@ -1263,11 +1265,11 @@ const Dashboard = () => {
                   const percentual = (ncm.valor_total / statsFinal.valor_total_usd) * 100;
                   return (
                     <div key={idx} style={{ marginBottom: '16px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <span style={{ fontWeight: 'bold' }}>
-                          {ncm.ncm} {ncm.descricao ? ncm.descricao.substring(0, 50) + '...' : ''}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', flexWrap: 'wrap', gap: '4px' }}>
+                        <span style={{ fontWeight: 'bold', fontSize: 'clamp(12px, 3vw, 14px)', flex: '1', minWidth: 0 }}>
+                          {ncm.ncm} {ncm.descricao ? ncm.descricao.substring(0, window.innerWidth < 768 ? 30 : 50) + '...' : ''}
                         </span>
-                        <span style={{ fontWeight: 'bold', color: '#722ed1' }}>
+                        <span style={{ fontWeight: 'bold', color: '#722ed1', fontSize: 'clamp(11px, 2.8vw, 13px)', flexShrink: 0 }}>
                           {formatCurrency(ncm.valor_total)}
                         </span>
                       </div>
@@ -1298,7 +1300,7 @@ const Dashboard = () => {
       </Row>
 
       {/* Tabela de Dados Detalhados */}
-      <Row gutter={[16, 16]} style={{ marginTop: '24px' }}>
+      <Row gutter={[8, 8]} style={{ marginTop: 'clamp(12px, 3vw, 24px)' }}>
         <Col xs={24}>
           <Card 
             title="Dados Detalhados"
@@ -1401,7 +1403,7 @@ const Dashboard = () => {
               dataSource={tabelaDados}
               loading={loadingTabela}
               rowKey="id"
-              scroll={{ x: 1500 }}
+              scroll={{ x: 'max-content', y: Math.max(300, window.innerHeight * 0.4) }}
               pagination={{
                 current: paginacaoTabela.current,
                 pageSize: paginacaoTabela.pageSize,
@@ -1422,7 +1424,7 @@ const Dashboard = () => {
       </Row>
 
       {/* Seção de Sinergias e Sugestões */}
-      <Row gutter={[16, 16]} style={{ marginTop: 24 }}>
+      <Row gutter={[8, 8]} style={{ marginTop: 'clamp(12px, 3vw, 24px)' }}>
         <Col xs={24} lg={12}>
           <Card 
             title="📊 Sinergias por Estado" 

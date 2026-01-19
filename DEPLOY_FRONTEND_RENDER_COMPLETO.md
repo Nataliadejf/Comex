@@ -23,7 +23,7 @@
 3. **Conecte o repositório**:
    - **Connect Repository**: Selecione seu repositório (`Nataliadjf/Comex`)
    - **Branch**: `main`
-   - **Root Directory**: Deixe vazio ou coloque `frontend` (se o Render não detectar automaticamente)
+   - **Root Directory**: `frontend` ⚠️ **IMPORTANTE: Configure como `frontend`**
 
 ### 3️⃣ Configurar Build
 
@@ -35,20 +35,28 @@ comex-frontend
 ```
 (ou qualquer nome que você preferir)
 
+#### **Root Directory** ⚠️ CRÍTICO
+```
+frontend
+```
+**Deve ser configurado como `frontend`!**
+
 #### **Build Command**
 ```bash
-cd frontend && npm install && npm run build
+npm install && npm run build
 ```
+⚠️ **NÃO use `cd frontend`** porque o Root Directory já é `frontend`!
 
 #### **Publish Directory**
 ```
-frontend/build
+build
 ```
+⚠️ **NÃO use `frontend/build`** porque já está dentro de `frontend`!
 
 **⚠️ IMPORTANTE**: 
-- O `Publish Directory` deve ser o caminho **relativo ao root do repositório**
-- Se você colocou `frontend` no Root Directory, use apenas `build`
-- Se deixou vazio, use `frontend/build`
+- Se **Root Directory = `frontend`**: Build Command NÃO deve ter `cd frontend`, e Publish Directory deve ser apenas `build`
+- Se **Root Directory = vazio**: Build Command DEVE ter `cd frontend`, e Publish Directory deve ser `frontend/build`
+- **Recomendação**: Use Root Directory = `frontend` (mais simples)
 
 ### 4️⃣ Configurar Variáveis de Ambiente
 

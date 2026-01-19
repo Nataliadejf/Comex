@@ -16,7 +16,7 @@ import os
 
 router = APIRouter(prefix="/api", tags=["coleta"])
 
-# Query SQL para executar no BigQuery (apenas 2021)
+# Query SQL para executar no BigQuery (últimos 3 anos: 2019, 2020, 2021)
 QUERY_SQL = """
 WITH 
 dicionario_id_exportacao_importacao AS (
@@ -61,7 +61,7 @@ LEFT JOIN (SELECT DISTINCT id_municipio,nome  FROM `basedosdados.br_bd_diretorio
     ON dados.id_municipio = diretorio_id_municipio.id_municipio
 LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf
     ON dados.sigla_uf = diretorio_sigla_uf.sigla
-WHERE dados.ano = 2021
+WHERE dados.ano IN (2019, 2020, 2021)
 """
 
 
@@ -99,7 +99,7 @@ def coletar_dados_bigquery():
             logger.info("📋 Usando cliente padrão do BigQuery")
             client = bigquery.Client()
         
-        logger.info("📊 Executando query no BigQuery (ano 2021)...")
+        logger.info("📊 Executando query no BigQuery (anos 2019, 2020, 2021)...")
         logger.info("⚠️ Esta operação pode demorar alguns minutos...")
         
         # Executar query

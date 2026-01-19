@@ -5263,6 +5263,42 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             logger.error(f"Erro ao deletar usuário: {e}")
             raise HTTPException(status_code=500, detail="Erro ao deletar usuário")
     
+    @app.post("/admin/usuarios/deletar-por-email")
+    async def deletar_usuario_por_email(
+        email: str = Query(...),
+        db: Session = Depends(get_db)
+    ):
+        """Deleta usuário por email (endpoint simplificado para uso administrativo)."""
+        try:
+            usuario = db.query(Usuario).filter(Usuario.email == email).first()
+            if not usuario:
+                return {
+                    "success": False,
+                    "message": f"Usuário não encontrado: {email}",
+                    "email": email
+                }
+            
+            # Deletar aprovações associadas
+            db.query(AprovacaoCadastro).filter(
+                AprovacaoCadastro.usuario_id == usuario.id
+            ).delete(synchronize_session=False)
+            
+            # Deletar usuário
+            db.delete(usuario)
+            db.commit()
+            
+            logger.info(f"🗑️ Usuário deletado: {usuario.email}")
+            return {
+                "success": True,
+                "message": "Usuário deletado com sucesso",
+                "email": usuario.email,
+                "usuario_id": usuario.id
+            }
+        except Exception as e:
+            logger.error(f"Erro ao deletar usuário: {e}")
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Erro ao deletar usuário: {str(e)}")
+    
     @app.post("/criar-usuario-teste")
     async def criar_usuario_teste(
         email: str = Form(...),

@@ -1,0 +1,152 @@
+{
+  "total_registros": 44991,
+  "importacoes": {
+    "total_registros": 41020,
+    "valor_total_usd": 3079829888.0,
+    "valor_total_brl": 15399149440.0,
+    "por_estado": {
+      "Acre": 7428,
+      "Alagoas": 4376559,
+      "Amapá": 34857,
+      "Amazonas": 111335361,
+      "Bahia": 18282513,
+      "Ceará": 5533438,
+      "Distrito Federal": 2238795,
+      "Espírito Santo": 14073703,
+      "Goiás": 136829479,
+      "Maranhão": 1530164,
+      "Mato Grosso": 1079500,
+      "Mato Grosso do Sul": 2514032,
+      "Minas Gerais": 197488978,
+      "Paraná": 341900002,
+      "Paraíba": 814399,
+      "Pará": 16056892,
+      "Pernambuco": 187351823,
+      "Piauí": 329734,
+      "Rio Grande do Norte": 1204429,
+      "Rio Grande do Sul": 124244982,
+      "Rio de Janeiro": 147948191,
+      "Rondônia": 4263836,
+      "Roraima": 115918,
+      "Santa Catarina": 270701415,
+      "Sergipe": 810100,
+      "São Paulo": 1488600177,
+      "Tocantins": 163183
+    },
+    "top_ncms": {
+      "87089990": {
+        "Importação - 2025 - Valor US$ FOB": 1108613594,
+        "Descrição NCM": "Outras partes e acessórios para tratores e veículos automóveis"
+      },
+      "87083090": {
+        "Importação - 2025 - Valor US$ FOB": 492474420,
+        "Descrição NCM": "Outros freios e partes, para tratores/veículos automóveis"
+      },
+      "73181500": {
+        "Importação - 2025 - Valor US$ FOB": 450373559,
+        "Descrição NCM": "Outros parafusos e pinos ou pernos, mesmo com as porcas e arruelas, de ferro fundido, ferro ou aço"
+      },
+      "85365090": {
+        "Importação - 2025 - Valor US$ FOB": 387655449,
+        "Descrição NCM": "Outros interruptores, etc, de circuitos elétricos, para uma tensão não superior a 1.000 V"
+      },
+      "76169900": {
+        "Importação - 2025 - Valor US$ FOB": 186638597,
+        "Descrição NCM": "Outras obras de alumínio"
+      },
+      "73181600": {
+        "Importação - 2025 - Valor US$ FOB": 154164244,
+        "Descrição NCM": "Porcas de ferro fundido, ferro ou aço"
+      },
+      "85364900": {
+        "Importação - 2025 - Valor US$ FOB": 113044004,
+        "Descrição NCM": "Outros reles, para tensão maior que 60 Volts, mas menor que 1.000 Volts"
+      },
+      "84313900": {
+        "Importação - 2025 - Valor US$ FOB": 91644284,
+        "Descrição NCM": "Partes de outras máquinas e aparelhos de elevação de carga, etc."
+      },
+      "84836090": {
+        "Importação - 2025 - Valor US$ FOB": 67168316,
+        "Descrição NCM": "Dispositivos de acoplamento, inclusive juntas de articulação"
+      },
+      "86079900": {
+        "Importação - 2025 - Valor US$ FOB": 28053421,
+        "Descrição NCM": "Outras partes de veículos para vias férreas"
+      }
+    }
+  },
+  "exportacoes": {
+    "total_registros": 10141,
+    "valor_total_usd": 801751209.0,
+    "valor_total_brl": 4008756045.0,
+    "por_estado": {
+      "Alagoas": 22,
+      "Amazonas": 1384321,
+      "Bahia": 512122,
+      "Ceará": 8792814,
+      "Distrito Federal": 176,
+      "Espírito Santo": 208815,
+      "Goiás": 21077,
+      "Maranhão": 1391,
+      "Mato Grosso": 3984,
+      "Mato Grosso do Sul": 2510,
+      "Minas Gerais": 93080208,
+      "Não Declarada": 95484,
+      "Paraná": 44242976,
+      "Pará": 3899,
+      "Pernambuco": 165636,
+      "Piauí": 1910,
+      "Rio Grande do Norte": 437,
+      "Rio Grande do Sul": 234704292,
+      "Rio de Janeiro": 20130994,
+      "Santa Catarina": 86467613,
+      "São Paulo": 311930347,
+      "Tocantins": 181
+    },
+    "top_ncms": {
+      "87089990": {
+        "Exportação - 2025 - Valor US$ FOB": 407433779,
+        "Descrição NCM": "Outras partes e acessórios para tratores e veículos automóveis"
+      },
+      "87083090": {
+        "Exportação - 2025 - Valor US$ FOB": 232795572,
+        "Descrição NCM": "Outros freios e partes, para tratores/veículos automóveis"
+      },
+      "73181500": {
+        "Exportação - 2025 - Valor US$ FOB": 48978719,
+        "Descrição NCM": "Outros parafusos e pinos ou pernos, mesmo com as porcas e arruelas, de ferro fundido, ferro ou aço"
+      },
+      "85365090": {
+        "Exportação - 2025 - Valor US$ FOB": 35765942,
+        "Descrição NCM": "Outros interruptores, etc, de circuitos elétricos, para uma tensão não superior a 1.000 V"
+      },
+      "73181600": {
+        "Exportação - 2025 - Valor US$ FOB": 23778940,
+        "Descrição NCM": "Porcas de ferro fundido, ferro ou aço"
+      },
+      "76169900": {
+        "Exportação - 2025 - Valor US$ FOB": 17012731,
+        "Descrição NCM": "Outras obras de alumínio"
+      },
+      "86079900": {
+        "Exportação - 2025 - Valor US$ FOB": 10960893,
+        "Descrição NCM": "Outras partes de veículos para vias férreas"
+      },
+      "84313900": {
+        "Exportação - 2025 - Valor US$ FOB": 10838986,
+        "Descrição NCM": "Partes de outras máquinas e aparelhos de elevação de carga, etc."
+      },
+      "85364900": {
+        "Exportação - 2025 - Valor US$ FOB": 10510202,
+        "Descrição NCM": "Outros reles, para tensão maior que 60 Volts, mas menor que 1.000 Volts"
+      },
+      "84836090": {
+        "Exportação - 2025 - Valor US$ FOB": 3675445,
+        "Descrição NCM": "Dispositivos de acoplamento, inclusive juntas de articulação"
+      }
+    }
+  },
+  "por_estado": {},
+  "por_ncm": {}
+}

@@ -1,0 +1,4 @@
+flask
+pandas
+google-cloud-bigquery
+psycopg2-binary

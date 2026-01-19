@@ -1,3 +1,52 @@
+# projeto_comex
+
+Instruções rápidas para rodar e deploy no Render
+
+Variáveis de ambiente necessárias (Render / .env):
+
+- `GOOGLE_APPLICATION_CREDENTIALS_JSON` — JSON completo da service account do GCP (string). Marque como secret.
+- `DATABASE_URL` — URL completa do Postgres (ex: `postgres://user:pass@host:5432/dbname`). Opcionalmente, você pode usar as variáveis abaixo em vez da URL:
+  - `DATABASE_HOST`
+  - `DATABASE_NAME`
+  - `DATABASE_USER`
+  - `DATABASE_PASSWORD`
+- `SECRET_KEY` — chave secreta do Flask (marcar como secret).
+- `GCP_PROJECT` — opcional; usado se quiser sobrescrever o project do BigQuery.
+- `PORT` — Render define automaticamente; não é obrigatório localmente.
+
+Como funciona o deploy no Render
+
+1. Configure as Environment Variables no painel do seu serviço (Environment -> Edit).
+2. Certifique-se que `GOOGLE_APPLICATION_CREDENTIALS_JSON` contém o JSON inteiro (sem truncamento).
+3. Garanta que a tabela `empresas` existe no seu Postgres e que `cnpj` possui constraint UNIQUE ou PRIMARY KEY.
+4. O endpoint exposto é `POST /api/coletar-empresas-base-dados`.
+
+Executando localmente
+
+1. Crie um arquivo `.env` com as variáveis acima (ou exporte no seu ambiente).
+2. Instale dependências:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+3. Rode a aplicação:
+
+```bash
+python app.py
+```
+
+4. Teste o endpoint:
+
+```bash
+curl -X POST http://localhost:5000/api/coletar-empresas-base-dados
+```
+
+Observações de produção
+
+- Em produção, não rode com `debug=True`.
+- Se o provedor de Postgres exigir SSL, acrescente `?sslmode=require` ao `DATABASE_URL`.
+- Considere limitar o número de linhas retornadas do BigQuery ou paginar para evitar custos e timeouts.
 # Comex Analyzer
 
 Sistema desktop para análise de dados do comércio exterior brasileiro (Comex Stat).

@@ -1,27 +1,3 @@
-services:
-  - type: web
-    name: comex-backend
-    env: python
-    rootDir: backend
-    buildCommand: pip install -r requirements-render-ultra-minimal.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: COMEX_STAT_API_URL
-        sync: false
-      - key: COMEX_STAT_API_KEY
-        sync: false
-      - key: SECRET_KEY
-        sync: false
-      - key: AUTO_IMPORT_EXCEL_ON_START
-        value: "true"
-      - key: AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY
-        value: "false"
-      - key: AUTO_IMPORT_EXCEL_CLEAR_BY_FILE
-        value: "true"
-      - key: AUTO_IMPORT_EXCEL_FILENAME
-        value: "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"
 # Render.com Blueprint - Deploy Automático via Git
 # Este arquivo permite deploy automático conectando o repositório GitHub ao Render
 
@@ -32,9 +8,9 @@ services:
     env: python
     region: oregon
     plan: free
-    buildCommand: "pip install --upgrade pip setuptools wheel && pip install --only-binary :all: --no-cache-dir -r backend/requirements-render-ultra-minimal.txt 2>&1 || pip install --no-build-isolation --no-cache-dir -r backend/requirements-render-ultra-minimal.txt"
-    startCommand: "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
-    rootDir: .
+    rootDir: backend
+    buildCommand: pip install -r requirements-render-ultra-minimal.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       # Database - Configure manualmente no Render Dashboard após criar PostgreSQL
@@ -50,7 +26,7 @@ services:
       
       # Secret Key para JWT
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
       
       # Ambiente
       - key: ENVIRONMENT
@@ -59,14 +35,23 @@ services:
       - key: DEBUG
         value: "false"
       
-      # Python - IMPORTANTE: Usar 3.11.8 para compatibilidade com versões antigas
+      # Python
       - key: PYTHON_VERSION
         value: "3.11.8"
+      
+      # Auto import Excel
+      - key: AUTO_IMPORT_EXCEL_ON_START
+        value: "true"
+      
+      - key: AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY
+        value: "false"
+      
+      - key: AUTO_IMPORT_EXCEL_CLEAR_BY_FILE
+        value: "true"
+      
+      - key: AUTO_IMPORT_EXCEL_FILENAME
+        value: "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"
 
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"
 # Veja DEPLOY_FRONTEND_RENDER.md para instruções detalhadas
-
-
-
-

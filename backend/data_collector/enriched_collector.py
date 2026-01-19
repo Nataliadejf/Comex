@@ -125,13 +125,35 @@ class EnrichedDataCollector:
             if not arquivos:
                 logger.info(f"Nenhum arquivo CSV encontrado. Tentando baixar dados...")
                 
-                # Tentar primeiro com o coletor CSV tradicional
+                # Tentar primeiro com CSVDataScraper (mais confiável)
                 try:
-                    arquivos = await self.csv_collector.download_recent_months(meses)
-                    if not arquivos:
-                        logger.warning("Coletor CSV tradicional não retornou arquivos")
+                    from .csv_scraper import CSVDataScraper
+                    csv_scraper = CSVDataScraper()
+                    logger.info("Tentando baixar via CSVDataScraper...")
+                    arquivos_baixados = await csv_scraper.download_recent_months(meses)
+                    if arquivos_baixados:
+                        arquivos = arquivos_baixados
+                        logger.success(f"✅ CSVDataScraper baixou {len(arquivos)} arquivo(s)")
+                    else:
+                        logger.warning("CSVDataScraper não conseguiu baixar arquivos")
                 except Exception as e:
-                    logger.warning(f"Erro no coletor CSV tradicional: {e}")
+                    logger.warning(f"Erro no CSVDataScraper: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                
+                # Tentar com o coletor CSV tradicional (fallback)
+                if not arquivos:
+                    try:
+                        logger.info("Tentando baixar via MDICCSVCollector...")
+                        arquivos = await self.csv_collector.download_recent_months(meses)
+                        if arquivos:
+                            logger.success(f"✅ MDICCSVCollector baixou {len(arquivos)} arquivo(s)")
+                        else:
+                            logger.warning("MDICCSVCollector não retornou arquivos")
+                    except Exception as e:
+                        logger.warning(f"Erro no coletor CSV tradicional: {e}")
+                        import traceback
+                        logger.debug(traceback.format_exc())
                 
                 # Se ainda não tem arquivos, tentar scraper automático
                 if not arquivos and self.comexstat_scraper:
@@ -155,6 +177,8 @@ class EnrichedDataCollector:
                     logger.info("   1. Baixe manualmente do site e coloque em data/raw/")
                     logger.info("   2. Instale Selenium e ChromeDriver para download automático")
                     logger.info("   3. Verifique se as URLs do MDIC estão corretas")
+                    logger.info("   4. Tente usar POST /coletar-dados que usa CSVDataScraper diretamente")
+                    stats["erros"].append("Não foi possível baixar arquivos CSV de nenhuma fonte")
             else:
                 logger.info(f"✅ Total de {len(arquivos)} arquivos CSV para processar")
             
