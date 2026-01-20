@@ -486,6 +486,7 @@ def _buscar_empresas_bigquery_sugestoes(
 
     try:
         from google.cloud import bigquery
+        from google.api_core import exceptions as gcp_exceptions
 
         query_params = [
             bigquery.ScalarQueryParameter("limit", "INT64", limit),
@@ -551,10 +552,18 @@ def _buscar_empresas_bigquery_sugestoes(
         
         return resultados
     except Exception as e:
-        logger.error(f"❌ BigQuery: Erro ao buscar empresas: {str(e)}")
-        import traceback
-        logger.error(f"❌ BigQuery: Traceback: {traceback.format_exc()}")
-        return []
+        error_msg = str(e)
+        # Se for erro de permissão, apenas avisar e retornar vazio (não quebrar a aplicação)
+        if "Access Denied" in error_msg or "Permission" in error_msg or "403" in error_msg or "bigquery.jobs.create" in error_msg:
+            logger.warning(f"⚠️ BigQuery: Sem permissão para criar jobs no BigQuery.")
+            logger.warning(f"⚠️ BigQuery: Verifique se a service account tem a role 'BigQuery Job User' no projeto Google Cloud.")
+            logger.warning(f"⚠️ BigQuery: Retornando lista vazia (não quebra a aplicação).")
+            return []  # Retorna vazio silenciosamente para não quebrar a aplicação
+        else:
+            logger.error(f"❌ BigQuery: Erro ao buscar empresas: {error_msg}")
+            import traceback
+            logger.error(f"❌ BigQuery: Traceback: {traceback.format_exc()}")
+            return []
 
 
 class BuscaFiltros(BaseModel):

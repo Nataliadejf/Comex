@@ -7,7 +7,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
-    "postbuild": "echo '/* /index.html 200' > build/_redirects",
+    "postbuild": "node -e \"const fs = require('fs'); const path = require('path'); const buildDir = path.join(__dirname, 'build'); if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir, { recursive: true }); fs.writeFileSync(path.join(buildDir, '_redirects'), '/* /index.html 200', 'utf8'); console.log('✅ _redirects criado em build/');\"",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "electron": "electron .",
