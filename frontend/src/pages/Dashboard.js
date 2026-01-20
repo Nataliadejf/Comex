@@ -232,6 +232,26 @@ const Dashboard = () => {
     setLoading(true);
     setError(null);
     
+    // Tentar carregar dados do cache primeiro (se disponível)
+    const cachedData = localStorage.getItem('dashboard_stats_cache');
+    const cacheTimestamp = localStorage.getItem('dashboard_stats_cache_timestamp');
+    if (cachedData && cacheTimestamp) {
+      const cacheAge = Date.now() - parseInt(cacheTimestamp);
+      // Usar cache se tiver menos de 5 minutos
+      if (cacheAge < 5 * 60 * 1000) {
+        try {
+          const parsedCache = JSON.parse(cachedData);
+          console.log('📦 Usando dados do cache (idade:', Math.round(cacheAge / 1000), 'segundos)');
+          setStats(parsedCache);
+          setLoading(false);
+          isLoadingRef.current = false;
+          // Continuar tentando buscar dados atualizados em background
+        } catch (e) {
+          console.warn('⚠️ Erro ao ler cache, continuando com requisição...');
+        }
+      }
+    }
+    
     try {
       const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
       // Usar múltiplos NCMs se disponível, senão usar NCM único
@@ -297,7 +317,7 @@ const Dashboard = () => {
         if (dadosVazios) {
           console.log('⚠️ Dados vazios recebidos do backend');
           // Definir stats vazio mas válido
-          setStats({
+          const emptyStats = {
             volume_importacoes: 0,
             volume_exportacoes: 0,
             valor_total_usd: 0,
@@ -308,9 +328,19 @@ const Dashboard = () => {
             registros_por_mes: {},
             valores_por_mes: {},
             pesos_por_mes: {}
-          });
+          };
+          setStats(emptyStats);
+          // Não cachear dados vazios
         } else {
           setStats(response.data);
+          // Cachear dados válidos para uso offline
+          try {
+            localStorage.setItem('dashboard_stats_cache', JSON.stringify(response.data));
+            localStorage.setItem('dashboard_stats_cache_timestamp', Date.now().toString());
+            console.log('💾 Dados salvos no cache');
+          } catch (e) {
+            console.warn('⚠️ Erro ao salvar cache:', e);
+          }
         }
       } else {
         // Fallback: definir stats vazio se resposta não tiver data
@@ -344,9 +374,24 @@ const Dashboard = () => {
           errorMessage = `Erro ${err.response.status}: ${err.response.statusText}`;
         }
       } else if (err.request) {
-        // Erro de conexão
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-        errorMessage = `Não foi possível conectar ao backend em ${apiUrl}. Verifique se o servidor está rodando.`;
+        // Erro de conexão - tentar usar cache se disponível
+        const cachedData = localStorage.getItem('dashboard_stats_cache');
+        if (cachedData) {
+          try {
+            const parsedCache = JSON.parse(cachedData);
+            console.log('📦 Backend offline, usando dados do cache');
+            setStats(parsedCache);
+            setError('⚠️ Backend temporariamente indisponível. Exibindo dados em cache. Tente novamente em alguns instantes.');
+            isLoadingRef.current = false;
+            setLoading(false);
+            return; // Sair sem mostrar erro crítico
+          } catch (e) {
+            console.warn('⚠️ Erro ao ler cache:', e);
+          }
+        }
+        
+        const apiUrl = process.env.REACT_APP_API_URL || 'https://comex-backend-gecp.onrender.com';
+        errorMessage = `Não foi possível conectar ao servidor em ${apiUrl}. O backend pode estar temporariamente indisponível ou em modo sleep. Tente novamente em alguns instantes.`;
       } else {
         // Outro erro
         errorMessage = err.message || 'Erro desconhecido';
@@ -371,18 +416,42 @@ const Dashboard = () => {
         });
       } else {
         // Erro real de conexão ou servidor
-        setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+        // Tentar usar cache antes de mostrar erro
+        const cachedData = localStorage.getItem('dashboard_stats_cache');
+        if (cachedData) {
+          try {
+            const parsedCache = JSON.parse(cachedData);
+            console.log('📦 Usando dados do cache devido a erro de conexão');
+            setStats(parsedCache);
+            setError('⚠️ Backend temporariamente indisponível. Exibindo dados em cache. Clique em "Tentar Novamente" para atualizar.');
+          } catch (e) {
+            setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+          }
+        } else {
+          setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+        }
+        
         console.error('❌ Erro completo:', err);
         console.error('❌ Detalhes:', {
           message: err.message,
           response: err.response?.data,
           status: err.response?.status,
-          url: err.config?.url
+          url: err.config?.url,
+          code: err.code
         });
       }
       
-      // Em caso de erro, manter dados anteriores se existirem
-      setStats((prevStats) => prevStats || null);
+      // Em caso de erro, manter dados anteriores se existirem (ou cache)
+      if (!stats) {
+        const cachedData = localStorage.getItem('dashboard_stats_cache');
+        if (cachedData) {
+          try {
+            setStats(JSON.parse(cachedData));
+          } catch (e) {
+            // Ignorar erro de parse
+          }
+        }
+      }
     } finally {
       setLoading(false);
       isLoadingRef.current = false;

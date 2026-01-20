@@ -3451,18 +3451,24 @@ async def get_dashboard_stats(
     from sqlalchemy import func, and_, or_
     from datetime import datetime, timedelta
 
-    cache_key = _make_dashboard_cache_key(
-        meses,
-        tipo_operacao,
-        ncm,
-        ncms,
-        empresa_importadora,
-        empresa_exportadora,
-    )
-    cached = _get_cached_dashboard_stats(cache_key)
-    if cached:
-        return cached
+    try:
+        cache_key = _make_dashboard_cache_key(
+            meses,
+            tipo_operacao,
+            ncm,
+            ncms,
+            empresa_importadora,
+            empresa_exportadora,
+        )
+        cached = _get_cached_dashboard_stats(cache_key)
+        if cached:
+            return cached
+    except Exception as e:
+        logger.warning(f"⚠️ Erro ao verificar cache: {e}")
+        # Continuar mesmo se cache falhar
+        cache_key = f"dashboard_{meses}_{tipo_operacao}_{ncm}"
     
+    # Inicializar variáveis com valores padrão para evitar erros
     # Calcular data inicial (padrão: 2 anos)
     data_inicio = datetime.now() - timedelta(days=30 * meses)
     
@@ -4052,9 +4058,15 @@ async def get_dashboard_stats(
         valores_por_mes=valores_por_mes_dict if valores_por_mes_dict else {},
         pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {}
     )
-
+    
     payload = stats_response.model_dump() if hasattr(stats_response, "model_dump") else stats_response.dict()
-    _set_cached_dashboard_stats(cache_key, payload)
+    
+    try:
+        _set_cached_dashboard_stats(cache_key, payload)
+    except Exception as e:
+        logger.warning(f"⚠️ Erro ao salvar cache: {e}")
+        # Continuar mesmo se cache falhar
+    
     return payload
 
 

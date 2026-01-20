@@ -100,45 +100,72 @@ export default api;
 // Função auxiliar para verificar se backend está acessível
 const checkBackendHealth = async () => {
   try {
-    const healthResponse = await api.get('/health', { timeout: 3000 });
-    return healthResponse.data?.status === 'healthy';
+    const healthResponse = await api.get('/health', { timeout: 5000 });
+    return healthResponse.data?.status === 'healthy' || healthResponse.status === 200;
   } catch (error) {
     console.warn('⚠️ Backend health check falhou:', error.message);
     return false;
   }
 };
 
+// Função de retry com backoff exponencial
+const retryWithBackoff = async (fn, maxRetries = 3, baseDelay = 1000) => {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      // Se não for erro de conexão ou timeout, não fazer retry
+      const isConnectionError = 
+        error.code === 'ERR_NETWORK' || 
+        error.code === 'ECONNREFUSED' ||
+        error.code === 'ETIMEDOUT' ||
+        error.message?.includes('Network Error') ||
+        error.message?.includes('timeout') ||
+        error.message?.includes('Não foi possível conectar');
+      
+      if (!isConnectionError || attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Calcular delay exponencial: 1s, 2s, 4s
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.log(`⚠️ Tentativa ${attempt + 1}/${maxRetries + 1} falhou. Tentando novamente em ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
+
 // Endpoints
 export const dashboardAPI = {
   getStats: async (paramsObj = {}) => {
-    try {
-      // Sempre usar objeto de parâmetros
-      const params = paramsObj || {};
+    // Sempre usar objeto de parâmetros
+    const params = paramsObj || {};
 
+    const urlParams = new URLSearchParams();
+    urlParams.append('meses', params.meses || 24);
+    if (params.tipoOperacao) urlParams.append('tipo_operacao', params.tipoOperacao);
+    if (params.ncm) urlParams.append('ncm', params.ncm);
+    if (params.ncms && Array.isArray(params.ncms)) {
+      params.ncms.forEach(ncm => urlParams.append('ncms', ncm));
+    }
+    
+    const url = `/dashboard/stats?${urlParams.toString()}`;
+    console.log('🔗 Fazendo requisição para:', `${API_BASE_URL}${url}`);
+    
+    // Usar retry com backoff exponencial
+    return await retryWithBackoff(async () => {
       // Verificar saúde do backend primeiro (não bloqueante)
       try {
         const isHealthy = await checkBackendHealth();
         if (!isHealthy) {
-          console.warn('⚠️ Backend health check falhou, mas continuando...');
+          console.warn('⚠️ Backend health check falhou, mas tentando requisição mesmo assim...');
         }
       } catch (healthError) {
         console.warn('⚠️ Erro no health check, mas continuando:', healthError.message);
-        // Não bloquear, apenas logar o aviso
       }
 
-      const urlParams = new URLSearchParams();
-      urlParams.append('meses', params.meses || 24);
-      if (params.tipoOperacao) urlParams.append('tipo_operacao', params.tipoOperacao);
-      if (params.ncm) urlParams.append('ncm', params.ncm);
-      if (params.ncms && Array.isArray(params.ncms)) {
-        params.ncms.forEach(ncm => urlParams.append('ncms', ncm));
-      }
-      
-      const url = `/dashboard/stats?${urlParams.toString()}`;
-      console.log('🔗 Fazendo requisição para:', `${API_BASE_URL}${url}`);
-      
       const response = await api.get(url, {
-        timeout: 30000,
+        timeout: 45000, // 45 segundos (reduzido de 60s para evitar timeouts muito longos)
         validateStatus: (status) => status < 500, // Aceitar até 499 sem lançar erro
       });
       
@@ -164,21 +191,7 @@ export const dashboardAPI = {
       
       console.log('✅ Resposta válida recebida');
       return response;
-    } catch (error) {
-      console.error('❌ Erro na requisição:', error);
-      
-      // Melhorar mensagem de erro
-      if (error.message.includes('Network Error') || error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED') {
-        const apiUrl = API_BASE_URL;
-        throw new Error(`Não foi possível conectar ao backend em ${apiUrl}. Verifique se o servidor está rodando.`);
-      }
-      
-      if (error.message.includes('timeout')) {
-        throw new Error('Timeout ao conectar ao backend. O servidor pode estar sobrecarregado.');
-      }
-      
-      throw error;
-    }
+    }, 3, 1000); // 3 retries, começando com 1 segundo
   },
 };
 
