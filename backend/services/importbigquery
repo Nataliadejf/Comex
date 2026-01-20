@@ -1,0 +1,58 @@
+from google.cloud import bigquery
+import json
+import os
+from typing import List, Dict
+
+class BigQueryService:
+    def __init__(self):
+        credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        credentials_dict = json.loads(credentials_json)
+        self.client = bigquery.Client.from_service_account_info(credentials_dict)
+
+    def fetch_ncm_exportacao(self) -> List[Dict]:
+        """Busca dados de NCM Exportação"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.NCMExportacao`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_empresas_imex(self) -> List[Dict]:
+        """Busca dados de Empresas ImEx"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.EmpresasImEx`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_municipio_exportacao(self) -> List[Dict]:
+        """Busca dados de Exportação por Município"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.municipio_exportacao`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_municipio_importacao(self) -> List[Dict]:
+        """Busca dados de Importação por Município"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.municipio_importacao`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_ncm_importacao(self) -> List[Dict]:
+        """Busca dados de NCM Importação"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.NCMImportacao`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_empresas_mes_2025(self) -> List[Dict]:
+        """Busca dados de Empresas Mês 7/2025"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.EmpresasMes7_2025`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_estabelecimentos_cnpj(self) -> List[Dict]:
+        """Busca dados de Estabelecimentos CNPJ"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.Estabelecimentoscnpj`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
+
+    def fetch_socios_cnpj(self) -> List[Dict]:
+        """Busca dados de Sócios CNPJ"""
+        query = "SELECT * FROM `liquid-receiver-483923-n6.Projeto_Comex.SociosCNPJ`"
+        results = self.client.query(query).result()
+        return [dict(row) for row in results]
