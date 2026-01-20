@@ -44,7 +44,7 @@ services:
         value: "true"
       
       - key: AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY
-        value: "false"
+        value: "true"
       
       - key: AUTO_IMPORT_EXCEL_CLEAR_BY_FILE
         value: "true"

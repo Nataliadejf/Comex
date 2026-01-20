@@ -14,7 +14,8 @@ import { message } from 'antd';
 const { Header, Sider } = Layout;
 
 const AppLayout = ({ children }) => {
-  const [collapsed, setCollapsed] = useState(false);
+  // Começar com sidebar encolhido por padrão (desktop)
+  const [collapsed, setCollapsed] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
