@@ -1,0 +1,98 @@
+from sqlalchemy import Column, Integer, String, Float, DateTime, Date
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
+
+Base = declarative_base()
+
+class NCMExportacao(Base):
+    __tablename__ = "ncm_exportacao"
+    id = Column(Integer, primary_key=True)
+    ano = Column(Integer)
+    mes = Column(Integer)
+    id_sh4 = Column(String(10))
+    id_pais = Column(String(50))
+    sigla_pais_iso3 = Column(String(3))
+    sigla_pais_iso3_nome = Column(String(255))
+    peso_liquido_kg = Column(Float)
+    valor_fob_dolar = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class EmpresasImEx(Base):
+    __tablename__ = "empresas_imex"
+    id = Column(Integer, primary_key=True)
+    cnpj = Column(String(14), unique=True)
+    razao_social = Column(String(255))
+    porte = Column(String(50))
+    natureza_juridica = Column(String(255))
+    capital_social = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class EmpresasMes2025(Base):
+    __tablename__ = "empresas_mes_2025"
+    id = Column(Integer, primary_key=True)
+    ano = Column(Integer)
+    mes = Column(Integer)
+    cnpj = Column(String(14))
+    razao_social = Column(String(255))
+    porte = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class EstabelecimentosCNPJ(Base):
+    __tablename__ = "estabelecimentos_cnpj"
+    id = Column(Integer, primary_key=True)
+    cnpj = Column(String(14), unique=True)
+    razao_social = Column(String(255))
+    sigla_uf = Column(String(2))
+    id_municipio = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class MunicipioExportacao(Base):
+    __tablename__ = "municipio_exportacao"
+    id = Column(Integer, primary_key=True)
+    ano = Column(Integer)
+    mes = Column(Integer)
+    id_sh4 = Column(String(10))
+    id_pais = Column(String(50))
+    sigla_uf = Column(String(2))
+    sigla_uf_nome = Column(String(255))
+    id_municipio = Column(String(50))
+    id_municipio_nome = Column(String(255))
+    peso_liquido_kg = Column(Float)
+    valor_fob_dolar = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class MunicipioImportacao(Base):
+    __tablename__ = "municipio_importacao"
+    id = Column(Integer, primary_key=True)
+    ano = Column(Integer)
+    mes = Column(Integer)
+    id_sh4 = Column(String(10))
+    id_pais = Column(String(50))
+    sigla_uf = Column(String(2))
+    sigla_uf_nome = Column(String(255))
+    id_municipio = Column(String(50))
+    id_municipio_nome = Column(String(255))
+    peso_liquido_kg = Column(Float)
+    valor_fob_dolar = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class NCMImportacao(Base):
+    __tablename__ = "ncm_importacao"
+    id = Column(Integer, primary_key=True)
+    ano = Column(Integer)
+    mes = Column(Integer)
+    id_sh4 = Column(String(10))
+    id_pais = Column(String(50))
+    sigla_pais_iso3 = Column(String(3))
+    sigla_pais_iso3_nome = Column(String(255))
+    peso_liquido_kg = Column(Float)
+    valor_fob_dolar = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SociosCNPJ(Base):
+    __tablename__ = "socios_cnpj"
+    id = Column(Integer, primary_key=True)
+    cnpj = Column(String(14))
+    nome_socio = Column(String(255))
+    qualificacao = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
