@@ -112,6 +112,16 @@ const Dashboard = () => {
   // Estado para detectar mobile
   const [isMobile, setIsMobile] = useState(false);
 
+  // Detectar se está em mobile (deve estar antes de qualquer cálculo)
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   // Função debounce simples
   const debounce = (func, wait) => {
     let timeout;
@@ -788,16 +798,6 @@ const Dashboard = () => {
     : tipoOperacao === 'Exportação'
       ? (statsFinal.volume_exportacoes || 0)
       : ((statsFinal.volume_importacoes || 0) + (statsFinal.volume_exportacoes || 0));
-
-  // Detectar se está em mobile
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
 
   return (
     <div style={{ padding: isMobile ? '8px' : 'clamp(8px, 2vw, 24px)', background: '#f5f5f5', minHeight: '100vh' }}>
