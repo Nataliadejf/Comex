@@ -242,6 +242,45 @@ async def startup_event():
         # Não interrompe a aplicação se o scheduler falhar
 
 
+# Mapeamento de UF para Nome Completo do Estado
+UF_PARA_ESTADO = {
+    'AC': 'Acre',
+    'AL': 'Alagoas',
+    'AP': 'Amapá',
+    'AM': 'Amazonas',
+    'BA': 'Bahia',
+    'CE': 'Ceará',
+    'DF': 'Distrito Federal',
+    'ES': 'Espírito Santo',
+    'GO': 'Goiás',
+    'MA': 'Maranhão',
+    'MT': 'Mato Grosso',
+    'MS': 'Mato Grosso do Sul',
+    'MG': 'Minas Gerais',
+    'PA': 'Pará',
+    'PB': 'Paraíba',
+    'PR': 'Paraná',
+    'PE': 'Pernambuco',
+    'PI': 'Piauí',
+    'RJ': 'Rio de Janeiro',
+    'RN': 'Rio Grande do Norte',
+    'RS': 'Rio Grande do Sul',
+    'RO': 'Rondônia',
+    'RR': 'Roraima',
+    'SC': 'Santa Catarina',
+    'SP': 'São Paulo',
+    'SE': 'Sergipe',
+    'TO': 'Tocantins',
+}
+
+def obter_nome_estado(uf: str) -> str:
+    """Retorna o nome completo do estado a partir da sigla UF."""
+    if not uf:
+        return ''
+    uf_upper = str(uf).strip().upper()[:2]
+    return UF_PARA_ESTADO.get(uf_upper, uf_upper)
+
+
 # Schemas Pydantic
 class OperacaoResponse(BaseModel):
     """Schema de resposta para operação."""
@@ -251,6 +290,7 @@ class OperacaoResponse(BaseModel):
     tipo_operacao: str
     pais_origem_destino: str
     uf: str
+    uf_nome_completo: str
     valor_fob: float
     data_operacao: date
     
@@ -435,9 +475,12 @@ def _buscar_empresas_bigquery_sugestoes(
         where_clauses.append("LOWER(id_exportacao_importacao) LIKE @tipo_filter")
 
     query = f"""
-        SELECT razao_social, sigla_uf, id_exportacao_importacao
+        SELECT DISTINCT razao_social, sigla_uf, id_exportacao_importacao
         FROM `{_BIGQUERY_COMEX_TABLE}`
         WHERE {" AND ".join(where_clauses)}
+        AND razao_social IS NOT NULL
+        AND razao_social != ''
+        ORDER BY razao_social
         LIMIT @limit
     """
 
@@ -448,30 +491,70 @@ def _buscar_empresas_bigquery_sugestoes(
             bigquery.ScalarQueryParameter("limit", "INT64", limit),
         ]
         if uf:
-            query_params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf))
+            query_params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper() if uf else None))
         if tipo_filter:
             query_params.append(
                 bigquery.ScalarQueryParameter("tipo_filter", "STRING", tipo_filter)
             )
 
         job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        logger.info(f"🔍 BigQuery: Executando query para sugestões de empresas. UF: {uf}, Tipo: {tipo}, Limit: {limit}")
         query_job = client.query(query, job_config=job_config)
         rows = query_job.result()
-    except Exception:
+        
+        resultados = []
+        count = 0
+        for row in rows:
+            count += 1
+            # BigQuery retorna objetos Row que podem ser acessados como atributos ou como dicionário
+            try:
+                # Tentar acesso como atributo primeiro (método preferido do BigQuery)
+                razao_social = getattr(row, 'razao_social', None)
+                sigla_uf = getattr(row, 'sigla_uf', None)
+                id_exportacao_importacao = getattr(row, 'id_exportacao_importacao', None)
+                
+                # Se não funcionar como atributo, tentar como dicionário
+                if razao_social is None:
+                    try:
+                        razao_social = row['razao_social']
+                    except (KeyError, TypeError):
+                        pass
+                if sigla_uf is None:
+                    try:
+                        sigla_uf = row['sigla_uf']
+                    except (KeyError, TypeError):
+                        pass
+                if id_exportacao_importacao is None:
+                    try:
+                        id_exportacao_importacao = row['id_exportacao_importacao']
+                    except (KeyError, TypeError):
+                        pass
+            except Exception as e:
+                logger.warning(f"⚠️ BigQuery: Erro ao acessar dados da linha {count}: {e}")
+                continue
+            
+            if razao_social and str(razao_social).strip():
+                resultados.append({
+                    "nome": str(razao_social).strip(),
+                    "valor_total": 0.0,
+                    "peso": 0.0,
+                    "tipo_operacao": str(id_exportacao_importacao).strip() if id_exportacao_importacao else None,
+                    "uf": str(sigla_uf).strip() if sigla_uf else None,
+                    "fonte": "bigquery",
+                })
+        
+        logger.info(f"✅ BigQuery: Retornando {len(resultados)} empresas (de {count} linhas processadas)")
+        if len(resultados) == 0 and count > 0:
+            logger.warning(f"⚠️ BigQuery: Processou {count} linhas mas nenhuma tinha razao_social válida")
+        elif len(resultados) == 0 and count == 0:
+            logger.warning(f"⚠️ BigQuery: Nenhuma linha retornada da query. Verifique se há dados na tabela {_BIGQUERY_COMEX_TABLE}")
+        
+        return resultados
+    except Exception as e:
+        logger.error(f"❌ BigQuery: Erro ao buscar empresas: {str(e)}")
+        import traceback
+        logger.error(f"❌ BigQuery: Traceback: {traceback.format_exc()}")
         return []
-
-    resultados = []
-    for row in rows:
-        resultados.append({
-            "nome": row.get("razao_social"),
-            "valor_total": 0.0,
-            "peso": 0.0,
-            "tipo_operacao": row.get("id_exportacao_importacao"),
-            "uf": row.get("sigla_uf"),
-            "fonte": "bigquery",
-        })
-
-    return resultados
 
 
 class BuscaFiltros(BaseModel):
@@ -900,7 +983,12 @@ def processar_excel_comex_task(caminho_temp: str, nome_original: str):
                 
                 ncm_normalizado = ncm[:8] if len(ncm) >= 8 else ncm.zfill(8)
                 descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
-                uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
+                # Usar "UF Produto" ou "UF do Produto" (prioridade para "UF Produto")
+                uf = (
+                    str(row.get('UF Produto', '')).strip()[:2] if pd.notna(row.get('UF Produto')) else
+                    str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else
+                    None
+                )
                 pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
                 
                 # Processar mês
@@ -1333,7 +1421,12 @@ async def importar_excel_automatico(
                             continue
                         
                         descricao = str(row.get('Descrição NCM', '')).strip()[:500] if pd.notna(row.get('Descrição NCM')) else ''
-                        uf = str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else None
+                        # Usar "UF Produto" ou "UF do Produto" (prioridade para "UF Produto")
+                        uf = (
+                            str(row.get('UF Produto', '')).strip()[:2] if pd.notna(row.get('UF Produto')) else
+                            str(row.get('UF do Produto', '')).strip()[:2] if pd.notna(row.get('UF do Produto')) else
+                            None
+                        )
                         pais = str(row.get('Países', '')).strip() if pd.notna(row.get('Países')) else None
                         
                         # Processar mês
@@ -4368,6 +4461,7 @@ async def buscar_operacoes(
                 "tipo_operacao": op.tipo_operacao.value,
                 "pais_origem_destino": op.pais_origem_destino,
                 "uf": op.uf,
+                "uf_nome_completo": obter_nome_estado(op.uf),
                 "valor_fob": op.valor_fob,
                 "peso_liquido_kg": op.peso_liquido_kg,
                 "data_operacao": op.data_operacao.isoformat(),

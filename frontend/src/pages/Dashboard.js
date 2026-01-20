@@ -35,6 +35,44 @@ const { Option } = Select;
 
 const COLORS = ['#0088FE', '#FF8042', '#FFBB28', '#00C49F', '#8884d8', '#82ca9d'];
 
+// Mapeamento de UF para Nome Completo do Estado
+const UF_PARA_ESTADO = {
+  'AC': 'Acre',
+  'AL': 'Alagoas',
+  'AP': 'Amapá',
+  'AM': 'Amazonas',
+  'BA': 'Bahia',
+  'CE': 'Ceará',
+  'DF': 'Distrito Federal',
+  'ES': 'Espírito Santo',
+  'GO': 'Goiás',
+  'MA': 'Maranhão',
+  'MT': 'Mato Grosso',
+  'MS': 'Mato Grosso do Sul',
+  'MG': 'Minas Gerais',
+  'PA': 'Pará',
+  'PB': 'Paraíba',
+  'PR': 'Paraná',
+  'PE': 'Pernambuco',
+  'PI': 'Piauí',
+  'RJ': 'Rio de Janeiro',
+  'RN': 'Rio Grande do Norte',
+  'RS': 'Rio Grande do Sul',
+  'RO': 'Rondônia',
+  'RR': 'Roraima',
+  'SC': 'Santa Catarina',
+  'SP': 'São Paulo',
+  'SE': 'Sergipe',
+  'TO': 'Tocantins',
+};
+
+// Função para obter nome completo do estado
+const obterNomeEstado = (uf) => {
+  if (!uf) return '';
+  const ufUpper = String(uf).trim().toUpperCase().substring(0, 2);
+  return UF_PARA_ESTADO[ufUpper] || ufUpper;
+};
+
 const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState(null);
@@ -70,6 +108,9 @@ const Dashboard = () => {
   // Estados para empresas importadoras/exportadoras recomendadas (movido para cima para evitar erro React #310)
   const [empresasImportadorasRecomendadas, setEmpresasImportadorasRecomendadas] = useState([]);
   const [empresasExportadorasRecomendadas, setEmpresasExportadorasRecomendadas] = useState([]);
+  
+  // Estado para detectar mobile
+  const [isMobile, setIsMobile] = useState(false);
 
   // Função debounce simples
   const debounce = (func, wait) => {
@@ -748,12 +789,22 @@ const Dashboard = () => {
       ? (statsFinal.volume_exportacoes || 0)
       : ((statsFinal.volume_importacoes || 0) + (statsFinal.volume_exportacoes || 0));
 
+  // Detectar se está em mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   return (
-    <div style={{ padding: 'clamp(8px, 2vw, 24px)', background: '#f5f5f5', minHeight: '100vh' }}>
+    <div style={{ padding: isMobile ? '8px' : 'clamp(8px, 2vw, 24px)', background: '#f5f5f5', minHeight: '100vh' }}>
       {/* Barra de Filtros */}
       <Card 
-        style={{ marginBottom: 'clamp(12px, 3vw, 24px)', borderRadius: '8px' }}
-        bodyStyle={{ padding: 'clamp(8px, 2vw, 16px)' }}
+        style={{ marginBottom: isMobile ? '12px' : 'clamp(12px, 3vw, 24px)', borderRadius: '8px' }}
+        bodyStyle={{ padding: isMobile ? '12px' : 'clamp(8px, 2vw, 16px)' }}
       >
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} sm={8} md={6}>
@@ -892,13 +943,27 @@ const Dashboard = () => {
                 <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Valor Importações
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
+                <div className="metric-value" style={{ 
+                  color: '#fff', 
+                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)', 
+                  fontWeight: 'bold', 
+                  lineHeight: '1.2', 
+                  wordBreak: 'break-word',
+                  whiteSpace: 'normal',
+                  overflow: 'visible',
+                }}>
                   {formatCurrency(
                     tipoOperacao === 'Exportação' ? 0 :
                     (statsFinal.valor_total_importacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
+                <div style={{ 
+                  color: 'rgba(255,255,255,0.7)', 
+                  fontSize: isMobile ? '11px' : '10px', 
+                  marginTop: '4px', 
+                  lineHeight: '1.3',
+                  display: isMobile ? 'none' : 'block',
+                }}>
                   Total FOB importado no período
                 </div>
               </div>
@@ -922,13 +987,27 @@ const Dashboard = () => {
                 <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Valor Exportações
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
+                <div className="metric-value" style={{ 
+                  color: '#fff', 
+                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)', 
+                  fontWeight: 'bold', 
+                  lineHeight: '1.2', 
+                  wordBreak: 'break-word',
+                  whiteSpace: 'normal',
+                  overflow: 'visible',
+                }}>
                   {formatCurrency(
                     tipoOperacao === 'Importação' ? 0 :
                     (statsFinal.valor_total_exportacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
                   )}
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
+                <div style={{ 
+                  color: 'rgba(255,255,255,0.7)', 
+                  fontSize: isMobile ? '11px' : '10px', 
+                  marginTop: '4px', 
+                  lineHeight: '1.3',
+                  display: isMobile ? 'none' : 'block',
+                }}>
                   Total FOB exportado no período
                 </div>
               </div>
@@ -952,10 +1031,24 @@ const Dashboard = () => {
                 <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Quantidade Estatística
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
+                <div className="metric-value" style={{ 
+                  color: '#fff', 
+                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)', 
+                  fontWeight: 'bold', 
+                  lineHeight: '1.2', 
+                  wordBreak: 'break-word',
+                  whiteSpace: 'normal',
+                  overflow: 'visible',
+                }}>
                   {formatQuantity(quantidadeTotal)}
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
+                <div style={{ 
+                  color: 'rgba(255,255,255,0.7)', 
+                  fontSize: isMobile ? '11px' : '10px', 
+                  marginTop: '4px', 
+                  lineHeight: '1.3',
+                  display: isMobile ? 'none' : 'block',
+                }}>
                   Soma das quantidades estatísticas
                 </div>
               </div>
@@ -979,10 +1072,24 @@ const Dashboard = () => {
                 <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
                   Peso (Quilograma Líquido)
                 </div>
-                <div className="metric-value" style={{ color: '#fff', fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', lineHeight: '1.2', wordBreak: 'break-word' }}>
+                <div className="metric-value" style={{ 
+                  color: '#fff', 
+                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)', 
+                  fontWeight: 'bold', 
+                  lineHeight: '1.2', 
+                  wordBreak: 'break-word',
+                  whiteSpace: 'normal',
+                  overflow: 'visible',
+                }}>
                   {formatWeight(pesoTotal)} KG
                 </div>
-                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', marginTop: '4px', lineHeight: '1.3' }}>
+                <div style={{ 
+                  color: 'rgba(255,255,255,0.7)', 
+                  fontSize: isMobile ? '11px' : '10px', 
+                  marginTop: '4px', 
+                  lineHeight: '1.3',
+                  display: isMobile ? 'none' : 'block',
+                }}>
                   Peso total transportado no período
                 </div>
               </div>
@@ -1061,10 +1168,10 @@ const Dashboard = () => {
               Total FOB estimado importado por mês
             </div>
             {importadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={Math.max(200, window.innerHeight * 0.25)}>
+              <ResponsiveContainer width="100%" height={isMobile ? Math.max(250, window.innerHeight * 0.3) : Math.max(200, window.innerHeight * 0.25)}>
                 <LineChart data={importadoresTempoData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
+                  <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
@@ -1159,10 +1266,10 @@ const Dashboard = () => {
               Total FOB estimado exportado por mês
             </div>
             {exportadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={Math.max(200, window.innerHeight * 0.25)}>
+              <ResponsiveContainer width="100%" height={isMobile ? Math.max(250, window.innerHeight * 0.3) : Math.max(200, window.innerHeight * 0.25)}>
                 <LineChart data={exportadoresTempoData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
+                  <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
@@ -1199,10 +1306,10 @@ const Dashboard = () => {
               Valor total importado e peso
             </div>
             {tendenciasData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={Math.max(250, window.innerHeight * 0.3)}>
+              <ResponsiveContainer width="100%" height={isMobile ? Math.max(280, window.innerHeight * 0.35) : Math.max(250, window.innerHeight * 0.3)}>
                 <ComposedChart data={tendenciasData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
+                  <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis 
                     yAxisId="left"
                     label={{ value: 'FOB (USD)', angle: -90, position: 'insideLeft', style: { fontSize: 'clamp(10px, 2.5vw, 12px)' } }}
@@ -1365,10 +1472,20 @@ const Dashboard = () => {
                   width: 150,
                 },
                 {
-                  title: 'UF',
+                  title: 'Estado',
                   dataIndex: 'uf',
                   key: 'uf',
-                  width: 80,
+                  width: isMobile ? 120 : 150,
+                  render: (uf, record) => {
+                    // Priorizar uf_nome_completo se disponível (vindo do backend)
+                    const nomeCompleto = record.uf_nome_completo || obterNomeEstado(uf);
+                    return nomeCompleto || uf || '-';
+                  },
+                  sorter: (a, b) => {
+                    const nomeA = a.uf_nome_completo || obterNomeEstado(a.uf) || '';
+                    const nomeB = b.uf_nome_completo || obterNomeEstado(b.uf) || '';
+                    return nomeA.localeCompare(nomeB);
+                  },
                 },
                 {
                   title: 'Valor FOB (USD)',
@@ -1403,7 +1520,7 @@ const Dashboard = () => {
               dataSource={tabelaDados}
               loading={loadingTabela}
               rowKey="id"
-              scroll={{ x: 'max-content', y: Math.max(300, window.innerHeight * 0.4) }}
+              scroll={{ x: 'max-content', y: isMobile ? Math.max(350, window.innerHeight * 0.45) : Math.max(300, window.innerHeight * 0.4) }}
               pagination={{
                 current: paginacaoTabela.current,
                 pageSize: paginacaoTabela.pageSize,
@@ -1466,10 +1583,16 @@ const Dashboard = () => {
                     pagination={false}
                     columns={[
                       {
-                        title: 'UF',
+                        title: 'Estado',
                         dataIndex: 'uf',
                         key: 'uf',
-                        width: 60,
+                        width: isMobile ? 100 : 120,
+                        render: (uf) => obterNomeEstado(uf) || uf || '-',
+                        sorter: (a, b) => {
+                          const nomeA = obterNomeEstado(a.uf) || '';
+                          const nomeB = obterNomeEstado(b.uf) || '';
+                          return nomeA.localeCompare(nomeB);
+                        },
                       },
                       {
                         title: 'Índice Sinergia',
