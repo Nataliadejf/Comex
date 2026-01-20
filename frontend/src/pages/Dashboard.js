@@ -1544,11 +1544,22 @@ const Dashboard = () => {
                   title: 'Estado',
                   dataIndex: 'uf',
                   key: 'uf',
-                  width: isMobile ? 120 : 150,
+                  width: isMobile ? 180 : 220,
                   render: (uf, record) => {
                     // Priorizar uf_nome_completo se disponível (vindo do backend)
                     const nomeCompleto = record.uf_nome_completo || obterNomeEstado(uf);
-                    return nomeCompleto || uf || '-';
+                    const texto = nomeCompleto || uf || '-';
+                    return (
+                      <div
+                        style={{
+                          whiteSpace: 'normal',
+                          wordBreak: 'break-word',
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {texto}
+                      </div>
+                    );
                   },
                   sorter: (a, b) => {
                     const nomeA = a.uf_nome_completo || obterNomeEstado(a.uf) || '';
@@ -1655,8 +1666,21 @@ const Dashboard = () => {
                         title: 'Estado',
                         dataIndex: 'uf',
                         key: 'uf',
-                        width: isMobile ? 100 : 120,
-                        render: (uf) => obterNomeEstado(uf) || uf || '-',
+                        width: isMobile ? 160 : 200,
+                        render: (uf) => {
+                          const texto = obterNomeEstado(uf) || uf || '-';
+                          return (
+                            <div
+                              style={{
+                                whiteSpace: 'normal',
+                                wordBreak: 'break-word',
+                                lineHeight: 1.2,
+                              }}
+                            >
+                              {texto}
+                            </div>
+                          );
+                        },
                         sorter: (a, b) => {
                           const nomeA = obterNomeEstado(a.uf) || '';
                           const nomeB = obterNomeEstado(b.uf) || '';
@@ -1763,7 +1787,11 @@ const Dashboard = () => {
                       render: (text, record) => (
                         <div>
                           <div style={{ fontWeight: 600 }}>{text || record.nome_fantasia}</div>
-                          {record.uf && <Tag size="small">{record.uf}</Tag>}
+                          {record.uf && (
+                            <Tag size="small">
+                              {obterNomeEstado(record.uf) || record.uf}
+                            </Tag>
+                          )}
                           {record.cnae && <Tag size="small" color="blue">CNAE: {record.cnae}</Tag>}
                         </div>
                       ),
