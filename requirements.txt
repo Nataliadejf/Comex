@@ -1,4 +1,9 @@
 flask
+fastapi
+uvicorn
 pandas
 google-cloud-bigquery
 psycopg2-binary
+sqlalchemy
+pydantic
+python-dotenv
