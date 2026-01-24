@@ -34,6 +34,14 @@ except ImportError:
     EXPORT_ROUTER_AVAILABLE = False
     logger.warning("Router de exportação não disponível")
 
+# Import opcional do router de sincronização
+try:
+    from routes.sync import router as sync_router
+    SYNC_ROUTER_AVAILABLE = True
+except ImportError:
+    SYNC_ROUTER_AVAILABLE = False
+    logger.warning("Router de sincronização não disponível")
+
 # Imports opcionais para funcionalidades de autenticação
 try:
     from database.models import Usuario, AprovacaoCadastro
@@ -154,6 +162,13 @@ def _start_auto_import_excel_if_configured() -> None:
 if EXPORT_ROUTER_AVAILABLE:
     app.include_router(export_router)
 
+# Incluir router de sincronização
+if SYNC_ROUTER_AVAILABLE:
+    app.include_router(sync_router)
+    logger.info("✅ Router de sincronização incluído")
+else:
+    logger.warning("Router de sincronização não incluído")
+
 # Router de análise de empresas
 try:
     from api.analise_empresas import router as analise_router
@@ -169,6 +184,13 @@ try:
     logger.info("✅ Router de coleta Base dos Dados incluído")
 except ImportError as e:
     logger.warning(f"Router de coleta Base dos Dados não disponível: {e}")
+
+# Incluir router de sincronização
+if SYNC_ROUTER_AVAILABLE:
+    app.include_router(sync_router)
+    logger.info("✅ Router de sincronização incluído")
+else:
+    logger.warning("Router de sincronização não incluído")
 
 
 # Inicializar banco de dados na startup
