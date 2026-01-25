@@ -11,7 +11,12 @@ from typing import Dict, List, Optional, Any, Tuple
 from loguru import logger
 import time
 from datetime import datetime, date
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+    logger.warning("⚠️ BeautifulSoup4 (bs4) não disponível - funcionalidade DOU limitada")
 import json
 
 # Adicionar backend ao path
@@ -160,78 +165,130 @@ class PublicCompanyCollector:
                 return municipio, estado
         return None, None
     
-    def coletar_dou(self, termos_busca: List[str] = None, limite: int = 100) -> List[Dict[str, Any]]:
-        """Coleta dados do Diário Oficial da União (DOU)."""
+    def coletar_dou(self, termos_busca: List[str] = None, limite: int = 50000) -> List[Dict[str, Any]]:
+        """
+        Coleta dados do Diário Oficial da União (DOU).
+        Usa a API de busca do DOU para encontrar licenças de importação/exportação.
+        """
+        if not BS4_AVAILABLE:
+            logger.warning("⚠️ BeautifulSoup4 não disponível - pulando coleta DOU")
+            return []
+        
         if termos_busca is None:
             termos_busca = [
-                "licença de importação deferida",
-                "licença de exportação deferida",
+                "licença de importação",
+                "licença de exportação",
+                "importação deferida",
+                "exportação deferida",
                 "empresa habilitada radar",
                 "exportação autorizada",
                 "importação autorizada",
+                "comércio exterior",
+                "NCM",
             ]
         
         dados = []
-        logger.info(f"🔍 Iniciando coleta no DOU com {len(termos_busca)} termos de busca...")
+        logger.info(f"🔍 Iniciando coleta no DOU - Meta: {limite} registros")
         
-        base_url = "https://www.in.gov.br/en/web/dou"
+        # API do DOU - buscar por termos e datas
+        base_url = "https://www.in.gov.br/consulta/-/buscar/dou"
+        
+        # Buscar nos últimos 2 anos
+        from datetime import timedelta
+        data_fim = datetime.now().date()
+        data_inicio = data_fim - timedelta(days=730)  # 2 anos
+        
+        total_coletado = 0
         
         for termo in termos_busca:
+            if total_coletado >= limite:
+                break
+                
             try:
-                logger.info(f"Buscando: {termo}")
-                url = f"{base_url}/-/extrato-de-licenca-de-importacao"
-                response = self.session.get(url, timeout=self.timeout)
-                response.raise_for_status()
+                logger.info(f"🔍 Buscando DOU: '{termo}' ({total_coletado}/{limite})")
                 
-                soup = BeautifulSoup(response.text, 'html.parser')
-                textos = soup.find_all("div", class_="texto-dou")
-                if not textos:
-                    textos = soup.find_all("p")
+                # Parâmetros da busca DOU
+                params = {
+                    "q": termo,
+                    "s": "do1",  # Seção 1 do DOU
+                    "sd": data_inicio.strftime("%d-%m-%Y"),
+                    "ed": data_fim.strftime("%d-%m-%Y"),
+                    "p": 1,  # Página
+                }
                 
-                # Processar todos os textos (não limitar por termo, mas por total)
-                textos_processados = 0
-                for texto_elem in textos:
-                    if len(dados) >= limite:
-                        break
-                    texto = texto_elem.get_text()
+                pagina = 1
+                max_paginas = 100  # Limitar páginas para não sobrecarregar
+                
+                while pagina <= max_paginas and total_coletado < limite:
+                    params["p"] = pagina
                     
-                    if any(t.lower() in texto.lower() for t in ["importação", "exportação", "ncm"]):
-                        empresa_nome = self.extrair_nome_empresa(texto)
-                        cnpj = self.extrair_cnpj(texto)
-                        ncm = self.extrair_ncm(texto)
-                        data_operacao = self.extrair_data(texto)
-                        valor_fob = self.extrair_valor_fob(texto)
-                        quantidade = self.extrair_quantidade(texto)
-                        municipio, estado = self.extrair_municipio_estado(texto)
+                    try:
+                        response = self.session.get(base_url, params=params, timeout=self.timeout)
+                        response.raise_for_status()
                         
-                        tipo_operacao = None
-                        if "importação" in texto.lower() or "importacao" in texto.lower():
-                            tipo_operacao = "Importação"
-                        elif "exportação" in texto.lower() or "exportacao" in texto.lower():
-                            tipo_operacao = "Exportação"
+                        soup = BeautifulSoup(response.text, 'html.parser')
                         
-                        if empresa_nome and (ncm or tipo_operacao):
-                            registro = {
-                                "empresa_nome": empresa_nome,
-                                "cnpj": cnpj,
-                                "tipo_operacao": tipo_operacao,
-                                "ncm": ncm,
-                                "valor_fob": valor_fob,
-                                "quantidade": quantidade,
-                                "data_operacao": data_operacao.isoformat() if data_operacao else None,
-                                "municipio": municipio,
-                                "estado": estado,
-                                "fonte": "DOU",
-                                "texto_origem": texto[:500],
-                            }
-                            dados.append(registro)
-                            textos_processados += 1
+                        # Buscar resultados na página
+                        resultados = soup.find_all("div", class_="resultado")
+                        if not resultados:
+                            resultados = soup.find_all("article")
+                        if not resultados:
+                            resultados = soup.find_all("div", class_="texto-dou")
+                        
+                        if not resultados:
+                            logger.debug(f"   Nenhum resultado encontrado na página {pagina}")
+                            break
+                        
+                        logger.info(f"   📄 Página {pagina}: {len(resultados)} resultados encontrados")
+                        
+                        for resultado in resultados:
+                            if total_coletado >= limite:
+                                break
+                                
+                            texto = resultado.get_text()
                             
-                            # Log a cada 1000 registros
-                            if len(dados) % 1000 == 0:
-                                logger.info(f"📊 Progresso DOU: {len(dados)}/{limite} registros coletados")
-                
-                time.sleep(self.delay_between_requests)
+                            # Verificar se contém termos relevantes
+                            if any(t.lower() in texto.lower() for t in ["importação", "exportação", "ncm", "comércio exterior"]):
+                                empresa_nome = self.extrair_nome_empresa(texto)
+                                cnpj = self.extrair_cnpj(texto)
+                                ncm = self.extrair_ncm(texto)
+                                data_operacao = self.extrair_data(texto)
+                                valor_fob = self.extrair_valor_fob(texto)
+                                quantidade = self.extrair_quantidade(texto)
+                                municipio, estado = self.extrair_municipio_estado(texto)
+                                
+                                tipo_operacao = None
+                                if "importação" in texto.lower() or "importacao" in texto.lower():
+                                    tipo_operacao = "Importação"
+                                elif "exportação" in texto.lower() or "exportacao" in texto.lower():
+                                    tipo_operacao = "Exportação"
+                                
+                                if empresa_nome and (ncm or tipo_operacao):
+                                    registro = {
+                                        "empresa_nome": empresa_nome,
+                                        "cnpj": cnpj,
+                                        "tipo_operacao": tipo_operacao,
+                                        "ncm": ncm,
+                                        "valor_fob": valor_fob,
+                                        "quantidade": quantidade,
+                                        "data_operacao": data_operacao.isoformat() if data_operacao else None,
+                                        "municipio": municipio,
+                                        "estado": estado,
+                                        "fonte": "DOU",
+                                        "texto_origem": texto[:500],
+                                    }
+                                    dados.append(registro)
+                                    total_coletado += 1
+                                    
+                                    if total_coletado % 1000 == 0:
+                                        logger.info(f"📊 Progresso DOU: {total_coletado}/{limite} registros coletados")
+                        
+                        pagina += 1
+                        time.sleep(self.delay_between_requests)
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao processar página {pagina} do termo '{termo}': {e}")
+                        break
                 
             except Exception as e:
                 logger.error(f"❌ Erro ao coletar DOU para termo '{termo}': {e}")
