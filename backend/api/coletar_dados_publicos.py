@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api", tags=["coleta-publica"])
 
 class ColetaRequest(BaseModel):
     """Modelo de requisição para coleta."""
-    limite_por_fonte: int = 100
+    limite_por_fonte: int = 50000  # Padrão: 50.000 registros por fonte
     termos_busca: Optional[List[str]] = None
     salvar_csv: bool = False
     salvar_json: bool = False
