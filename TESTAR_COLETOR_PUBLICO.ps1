@@ -1,7 +1,8 @@
 # Script para testar o coletor de dados públicos via API
 # Execute: .\TESTAR_COLETOR_PUBLICO.ps1
 
-$url = "http://localhost:8000/api/coletar-dados-publicos"
+# URL do backend no Render
+$url = "https://comex-backend-gecp.onrender.com/api/coletar-dados-publicos"
 $body = @{
     limite_por_fonte = 50
     integrar_banco = $true
@@ -26,7 +27,7 @@ try {
 Write-Host ""
 Write-Host "📊 Verificando status..."
 try {
-    $statusUrl = "http://localhost:8000/api/coletar-dados-publicos/status"
+    $statusUrl = "https://comex-backend-gecp.onrender.com/api/coletar-dados-publicos/status"
     $status = Invoke-RestMethod -Uri $statusUrl -Method Get
     Write-Host ($status | ConvertTo-Json)
 } catch {

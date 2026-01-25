@@ -7,7 +7,7 @@ from loguru import logger
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
-from database import get_db
+from database import get_db, SessionLocal
 
 try:
     from data_collector.public_company_collector import PublicCompanyCollector
@@ -45,6 +45,8 @@ async def coletar_dados_publicos(
         collector = PublicCompanyCollector()
         
         def executar_coleta():
+            # Criar nova sessão para background task
+            db_bg = SessionLocal()
             try:
                 logger.info("🔄 Iniciando coleta de dados públicos...")
                 dados = collector.coletar_todos(limite_por_fonte=request.limite_por_fonte)
@@ -56,13 +58,16 @@ async def coletar_dados_publicos(
                     collector.salvar_json()
                 
                 if request.integrar_banco:
-                    stats = collector.integrar_banco_dados(db)
+                    stats = collector.integrar_banco_dados(db_bg)
                     logger.info(f"✅ Coleta concluída: {stats['registros_inseridos']} registros inseridos")
                 
                 logger.success("✅ Coleta de dados públicos concluída")
             except Exception as e:
                 logger.error(f"❌ Erro na coleta: {e}")
-                raise
+                import traceback
+                logger.error(traceback.format_exc())
+            finally:
+                db_bg.close()
         
         background_tasks.add_task(executar_coleta)
         
