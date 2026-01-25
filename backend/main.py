@@ -185,6 +185,14 @@ try:
 except ImportError as e:
     logger.warning(f"Router de coleta Base dos Dados não disponível: {e}")
 
+# Router de coleta de dados públicos
+try:
+    from api.coletar_dados_publicos import router as coletar_publicos_router
+    app.include_router(coletar_publicos_router)
+    logger.info("✅ Router de coleta de dados públicos incluído")
+except ImportError as e:
+    logger.warning(f"Router de coleta de dados públicos não disponível: {e}")
+
 # Incluir router de sincronização
 if SYNC_ROUTER_AVAILABLE:
     app.include_router(sync_router)
