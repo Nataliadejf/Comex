@@ -12,9 +12,13 @@ from database import get_db, SessionLocal
 try:
     from data_collector.public_company_collector import PublicCompanyCollector
     COLLECTOR_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     COLLECTOR_AVAILABLE = False
-    logger.warning("PublicCompanyCollector não disponível")
+    logger.error(f"❌ Erro ao importar PublicCompanyCollector: {e}")
+    logger.error(f"   Traceback completo: {__import__('traceback').format_exc()}")
+except Exception as e:
+    COLLECTOR_AVAILABLE = False
+    logger.error(f"❌ Erro inesperado ao importar PublicCompanyCollector: {e}")
 
 router = APIRouter(prefix="/api", tags=["coleta-publica"])
 
@@ -36,9 +40,12 @@ async def coletar_dados_publicos(
 ) -> Dict[str, Any]:
     """Coleta dados públicos de empresas importadoras/exportadoras."""
     if not COLLECTOR_AVAILABLE:
+        import traceback
+        error_detail = f"PublicCompanyCollector não está disponível. Verifique os logs do servidor para mais detalhes."
+        logger.error(f"❌ {error_detail}")
         raise HTTPException(
             status_code=503,
-            detail="PublicCompanyCollector não está disponível."
+            detail=error_detail
         )
     
     try:
@@ -85,7 +92,21 @@ async def coletar_dados_publicos(
 @router.get("/coletar-dados-publicos/status")
 async def status_coleta_publica() -> Dict[str, Any]:
     """Verifica o status do coletor de dados públicos."""
+    import traceback
+    error_info = None
+    if not COLLECTOR_AVAILABLE:
+        try:
+            # Tentar importar novamente para capturar o erro
+            from data_collector.public_company_collector import PublicCompanyCollector
+        except Exception as e:
+            error_info = {
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            }
+    
     return {
         "collector_available": COLLECTOR_AVAILABLE,
-        "status": "ok" if COLLECTOR_AVAILABLE else "unavailable"
+        "status": "ok" if COLLECTOR_AVAILABLE else "unavailable",
+        "error_info": error_info
     }

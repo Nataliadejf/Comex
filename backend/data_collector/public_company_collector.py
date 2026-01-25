@@ -188,7 +188,11 @@ class PublicCompanyCollector:
                 if not textos:
                     textos = soup.find_all("p")
                 
-                for texto_elem in textos[:limite]:
+                # Processar todos os textos (não limitar por termo, mas por total)
+                textos_processados = 0
+                for texto_elem in textos:
+                    if len(dados) >= limite:
+                        break
                     texto = texto_elem.get_text()
                     
                     if any(t.lower() in texto.lower() for t in ["importação", "exportação", "ncm"]):
@@ -221,7 +225,11 @@ class PublicCompanyCollector:
                                 "texto_origem": texto[:500],
                             }
                             dados.append(registro)
-                            logger.debug(f"✅ Coletado: {empresa_nome} - {ncm}")
+                            textos_processados += 1
+                            
+                            # Log a cada 1000 registros
+                            if len(dados) % 1000 == 0:
+                                logger.info(f"📊 Progresso DOU: {len(dados)}/{limite} registros coletados")
                 
                 time.sleep(self.delay_between_requests)
                 
@@ -246,7 +254,138 @@ class PublicCompanyCollector:
         # Implementação futura
         return dados
     
-    def coletar_todos(self, limite_por_fonte: int = 100) -> List[Dict[str, Any]]:
+    def coletar_bigquery_empresas_ncm(self, limite: int = 50000) -> List[Dict[str, Any]]:
+        """
+        Coleta dados do BigQuery relacionando empresas com NCM e município.
+        Usa as tabelas já disponíveis no BigQuery.
+        """
+        dados = []
+        logger.info(f"🔍 Iniciando coleta no BigQuery - Meta: {limite} registros")
+        
+        try:
+            from google.cloud import bigquery
+            import os
+            import json
+            
+            # Obter credenciais
+            creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+            if not creds_env:
+                logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS_JSON não configurada")
+                return dados
+            
+            # Carregar credenciais
+            if creds_env.startswith('{'):
+                creds_dict = json.loads(creds_env)
+                from google.oauth2 import service_account
+                credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                client = bigquery.Client(credentials=credentials)
+            else:
+                client = bigquery.Client()
+            
+            logger.info("✅ Conectado ao BigQuery")
+            
+            # Query para relacionar empresas com NCM usando tabela de estabelecimentos
+            # e cruzando com dados de município/NCM se disponíveis
+            import os
+            bigquery_table = os.getenv("BIGQUERY_COMEX_TABLE", "basedosdados.br_me_exportadoras_importadoras.estabelecimentos")
+            
+            # Query para buscar empresas e cruzar com dados de NCM por município
+            # Usar tabelas NCMImportacao e NCMExportacao que já relacionam NCM com empresas
+            query = """
+            WITH empresas_ncm AS (
+                -- Importações
+                SELECT DISTINCT
+                    imp.razao_social_importador as empresa_nome,
+                    imp.cnpj_importador as cnpj,
+                    imp.ncm,
+                    imp.uf as estado,
+                    imp.municipio,
+                    'Importação' as tipo_operacao,
+                    imp.data_operacao,
+                    imp.valor_fob
+                FROM `liquid-receiver-483923-n6.Projeto_Comex.NCMImportacao` imp
+                WHERE imp.razao_social_importador IS NOT NULL
+                    AND imp.cnpj_importador IS NOT NULL
+                    AND imp.ncm IS NOT NULL
+                    AND imp.uf IS NOT NULL
+                
+                UNION ALL
+                
+                -- Exportações
+                SELECT DISTINCT
+                    exp.razao_social_exportador as empresa_nome,
+                    exp.cnpj_exportador as cnpj,
+                    exp.ncm,
+                    exp.uf as estado,
+                    exp.municipio,
+                    'Exportação' as tipo_operacao,
+                    exp.data_operacao,
+                    exp.valor_fob
+                FROM `liquid-receiver-483923-n6.Projeto_Comex.NCMExportacao` exp
+                WHERE exp.razao_social_exportador IS NOT NULL
+                    AND exp.cnpj_exportador IS NOT NULL
+                    AND exp.ncm IS NOT NULL
+                    AND exp.uf IS NOT NULL
+            )
+            SELECT * FROM empresas_ncm
+            LIMIT @limite
+            """
+            
+            # Executar query
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("limite", "INT64", limite)
+                ]
+            )
+            
+            query_job = client.query(query, job_config=job_config)
+            rows = query_job.result()
+            
+            logger.info(f"📊 Processando resultados do BigQuery...")
+            
+            for row in rows:
+                empresa_nome = row.get("empresa_nome")
+                cnpj = row.get("cnpj")
+                ncm = row.get("ncm")
+                estado = row.get("estado")
+                municipio = row.get("municipio")
+                tipo_operacao = row.get("tipo_operacao")
+                data_operacao = row.get("data_operacao")
+                valor_fob = row.get("valor_fob")
+                
+                if not empresa_nome or not ncm:
+                    continue
+                
+                registro = {
+                    "empresa_nome": empresa_nome,
+                    "cnpj": str(cnpj).zfill(14) if cnpj else None,
+                    "tipo_operacao": tipo_operacao,
+                    "ncm": str(ncm)[:8] if ncm else None,  # Garantir 8 dígitos
+                    "valor_fob": float(valor_fob) if valor_fob else None,
+                    "quantidade": None,
+                    "data_operacao": data_operacao.isoformat() if data_operacao else None,
+                    "municipio": municipio,
+                    "estado": estado,
+                    "fonte": "BigQuery",
+                }
+                
+                dados.append(registro)
+                
+                if len(dados) % 10000 == 0:
+                    logger.info(f"📊 Progresso BigQuery: {len(dados)}/{limite} registros coletados")
+            
+            logger.info(f"✅ Coletados {len(dados)} registros do BigQuery")
+            
+        except ImportError:
+            logger.warning("⚠️ google-cloud-bigquery não instalado - pulando coleta BigQuery")
+        except Exception as e:
+            logger.error(f"❌ Erro ao coletar BigQuery: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        return dados
+    
+    def coletar_todos(self, limite_por_fonte: int = 50000) -> List[Dict[str, Any]]:
         """Coleta dados de todas as fontes disponíveis."""
         logger.info("="*60)
         logger.info("COLETA DE DADOS PÚBLICOS - INÍCIO")
@@ -271,6 +410,14 @@ class PublicCompanyCollector:
             todos_dados.extend(dados_gov)
         except Exception as e:
             logger.error(f"❌ Erro ao coletar dados.gov.br: {e}")
+        
+        # 4. BigQuery (fonte principal para grandes volumes)
+        try:
+            dados_bigquery = self.coletar_bigquery_empresas_ncm(limite=limite_por_fonte)
+            todos_dados.extend(dados_bigquery)
+            logger.info(f"✅ BigQuery: {len(dados_bigquery)} registros coletados")
+        except Exception as e:
+            logger.error(f"❌ Erro ao coletar BigQuery: {e}")
         
         # Remover duplicatas
         dados_unicos = {}
