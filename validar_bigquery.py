@@ -29,6 +29,13 @@ def validar_bigquery():
         creds_env = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
         if not creds_env:
             logger.error("❌ GOOGLE_APPLICATION_CREDENTIALS_JSON não configurada")
+            logger.info("")
+            logger.info("💡 Para configurar:")
+            logger.info("   1. PowerShell: $env:GOOGLE_APPLICATION_CREDENTIALS_JSON = '{\"type\":\"service_account\",...}'")
+            logger.info("   2. Ou crie arquivo .env na raiz do projeto")
+            logger.info("   3. Veja CONFIGURAR_BIGQUERY.md para mais detalhes")
+            logger.info("")
+            logger.info("⚠️  Sem credenciais, você pode usar apenas --apenas-dou no coletor")
             return False
         
         # Carregar credenciais
