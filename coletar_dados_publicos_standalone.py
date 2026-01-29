@@ -12,14 +12,16 @@ import sys
 import os
 from pathlib import Path
 
-# Carregar .env
-_env = Path(__file__).parent / ".env"
-if _env.exists():
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(_env)
-    except ImportError:
-        pass
+# Carregar .env (raiz do projeto ou backend/)
+_root = Path(__file__).resolve().parent
+for _env in [_root / "backend" / ".env", _root / ".env"]:
+    if _env.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(_env)
+            break
+        except ImportError:
+            break
 
 # Adicionar backend ao path
 backend_dir = Path(__file__).parent / "backend"

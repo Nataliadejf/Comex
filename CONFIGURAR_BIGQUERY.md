@@ -9,6 +9,18 @@ Se você está vendo:
 
 Isso significa que a variável de ambiente não está configurada localmente.
 
+## 📦 Instalar dependências (PowerShell)
+
+**Não cole blocos de markdown (```) no terminal.** Use um comando por vez:
+
+```powershell
+cd C:\Users\User\Desktop\Cursor\Projetos\projeto_comex
+python -m pip install python-dotenv google-cloud-bigquery google-auth loguru --quiet
+python validar_bigquery.py
+```
+
+Se o script mostrar "OPÇÕES DE SAÍDA", escolha uma das alternativas (configurar .env, usar --apenas-dou, etc.).
+
 ## 🔧 Solução: Configurar Variável de Ambiente
 
 ### Opção 1: PowerShell (Temporário - apenas nesta sessão)
@@ -23,13 +35,13 @@ python validar_bigquery.py
 
 ### Opção 2: Arquivo .env (Recomendado)
 
-1. Crie um arquivo `.env` na raiz do projeto:
-```bash
-# .env
-GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"liquid-receiver-483923-n6",...}
-```
+1. Crie ou edite o arquivo `.env` **na pasta do projeto** ou **dentro de `backend/`** (o sistema procura nos dois lugares):
+   - `projeto_comex/.env` ou
+   - `projeto_comex/backend/.env`
 
-2. O script vai carregar automaticamente se você usar `python-dotenv`
+2. O JSON pode estar em **uma linha** ou em **várias linhas**; o script lê os dois formatos.
+
+3. **Nunca faça commit do `.env` no GitHub** — ele já está no `.gitignore`. As chaves do BigQuery não devem subir para o repositório.
 
 ### Opção 3: Configurar no Render (Para produção)
 

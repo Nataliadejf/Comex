@@ -34,9 +34,10 @@ env/
 *.swo
 *~
 
-# Environment variables
+# Environment variables (NUNCA commitar credenciais; .env pode estar na raiz ou em backend/)
 .env
 .env.local
+backend/.env
 
 # Database
 *.db

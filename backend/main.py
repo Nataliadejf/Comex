@@ -2,14 +2,17 @@
 Aplicação principal FastAPI.
 """
 # Carregar .env o mais cedo possível (BigQuery, DATABASE_URL, etc.)
+# Procura em backend/.env primeiro, depois na raiz do projeto
 from pathlib import Path as _Path
-_env_file = _Path(__file__).resolve().parent.parent / ".env"
-if _env_file.exists():
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(_env_file)
-    except ImportError:
-        pass
+_backend_dir = _Path(__file__).resolve().parent
+for _env_file in [_backend_dir / ".env", _backend_dir.parent / ".env"]:
+    if _env_file.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(_env_file)
+            break
+        except ImportError:
+            break
 
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
