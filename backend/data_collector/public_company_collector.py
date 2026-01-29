@@ -23,7 +23,7 @@ import json
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-from database.models import OperacaoComex
+from database.models import OperacaoComex, TipoOperacao, ViaTransporte
 
 
 class PublicCompanyCollector:
@@ -549,10 +549,21 @@ class PublicCompanyCollector:
                 if not ncm or not tipo_operacao or not empresa_nome:
                     continue
                 
+                # Normalizar tipo para enum
+                tipo_enum = TipoOperacao.IMPORTACAO if str(tipo_operacao).lower().startswith("import") else TipoOperacao.EXPORTACAO
+                
+                # Normalizar UF para 2 caracteres (sigla)
+                uf_raw = (registro.get("estado") or "").strip().upper()
+                uf = uf_raw[:2] if len(uf_raw) >= 2 else uf_raw
+                if len(uf) != 2 and uf_raw:
+                    # Mapeamento nome completo -> sigla (principais)
+                    siglas = {"SAO PAULO": "SP", "RIO DE JANEIRO": "RJ", "MINAS GERAIS": "MG", "BAHIA": "BA", "PARANA": "PR", "RIO GRANDE DO SUL": "RS", "PERNAMBUCO": "PE", "CEARA": "CE", "SANTA CATARINA": "SC", "GOIAS": "GO", "DISTRITO FEDERAL": "DF"}
+                    uf = siglas.get(uf_raw.replace("Ã", "A").replace("Á", "A")[:20], uf_raw[:2] or "  ")
+                
                 if isinstance(data_operacao, str):
                     try:
-                        data_operacao = datetime.fromisoformat(data_operacao).date()
-                    except:
+                        data_operacao = datetime.fromisoformat(data_operacao.replace("Z", "")).date()
+                    except Exception:
                         data_operacao = date.today()
                 elif not isinstance(data_operacao, date):
                     data_operacao = date.today()
@@ -560,19 +571,19 @@ class PublicCompanyCollector:
                 operacao = OperacaoComex(
                     ncm=ncm,
                     descricao_produto=registro.get("descricao_ncm", ""),
-                    tipo_operacao=tipo_operacao,
-                    razao_social_importador=empresa_nome if tipo_operacao == "Importação" else None,
-                    razao_social_exportador=empresa_nome if tipo_operacao == "Exportação" else None,
-                    cnpj_importador=registro.get("cnpj") if tipo_operacao == "Importação" else None,
-                    cnpj_exportador=registro.get("cnpj") if tipo_operacao == "Exportação" else None,
-                    uf=registro.get("estado", ""),
+                    tipo_operacao=tipo_enum,
+                    razao_social_importador=empresa_nome if tipo_enum == TipoOperacao.IMPORTACAO else None,
+                    razao_social_exportador=empresa_nome if tipo_enum == TipoOperacao.EXPORTACAO else None,
+                    cnpj_importador=registro.get("cnpj") if tipo_enum == TipoOperacao.IMPORTACAO else None,
+                    cnpj_exportador=registro.get("cnpj") if tipo_enum == TipoOperacao.EXPORTACAO else None,
+                    uf=uf or "  ",
                     pais_origem_destino=registro.get("pais_origem_destino", ""),
                     valor_fob=registro.get("valor_fob", 0.0),
                     quantidade_estatistica=registro.get("quantidade"),
                     data_operacao=data_operacao,
                     mes_referencia=data_operacao.strftime("%Y-%m"),
                     arquivo_origem=registro.get("fonte", "public_collector"),
-                    via_transporte="Outras",
+                    via_transporte=ViaTransporte.OUTRAS,
                 )
                 
                 db.add(operacao)

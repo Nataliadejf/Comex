@@ -1,7 +1,7 @@
 """
 Endpoint para coletar dados públicos de empresas importadoras/exportadoras.
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from loguru import logger
 from typing import Dict, Any, Optional, List
@@ -30,6 +30,7 @@ class ColetaRequest(BaseModel):
     salvar_csv: bool = False
     salvar_json: bool = False
     integrar_banco: bool = True
+    executar_cruzamento: bool = True  # Após integrar, executa cruzamento NCM+UF (importadores x exportadores)
 
 
 @router.post("/coletar-dados-publicos")
@@ -67,6 +68,15 @@ async def coletar_dados_publicos(
                 if request.integrar_banco:
                     stats = collector.integrar_banco_dados(db_bg)
                     logger.info(f"✅ Coleta concluída: {stats['registros_inseridos']} registros inseridos")
+                    
+                    # Executar cruzamento NCM + UF (importadores x exportadores x município)
+                    if request.executar_cruzamento and stats.get("registros_inseridos", 0) > 0:
+                        try:
+                            from services.cruzamento_ncm_uf import executar_cruzamento_ncm_uf
+                            cruzamento_stats = executar_cruzamento_ncm_uf(db_bg, limite_grupos=5000)
+                            logger.info(f"✅ Cruzamento concluído: {cruzamento_stats.get('grupos_ncm_uf', 0)} grupos NCM/UF")
+                        except Exception as cx:
+                            logger.error(f"❌ Erro no cruzamento: {cx}")
                 
                 logger.success("✅ Coleta de dados públicos concluída")
             except Exception as e:
@@ -110,3 +120,28 @@ async def status_coleta_publica() -> Dict[str, Any]:
         "status": "ok" if COLLECTOR_AVAILABLE else "unavailable",
         "error_info": error_info
     }
+
+
+@router.post("/cruzamento-ncm-uf")
+async def executar_cruzamento_ncm_uf_endpoint(
+    db: Session = Depends(get_db),
+    limite_grupos: int = Query(5000, description="Limite de grupos NCM/UF a processar"),
+) -> Dict[str, Any]:
+    """
+    Executa o cruzamento entre empresas importadoras, exportadoras, NCM e UF.
+    Agrupa por NCM e UF e atualiza a tabela empresas_recomendadas.
+    """
+    try:
+        from services.cruzamento_ncm_uf import executar_cruzamento_ncm_uf
+        stats = executar_cruzamento_ncm_uf(db, limite_grupos=limite_grupos)
+        return {
+            "message": "Cruzamento NCM/UF concluído",
+            "status": "ok",
+            "estatisticas": stats,
+        }
+    except ImportError as e:
+        logger.error(f"❌ Módulo cruzamento não disponível: {e}")
+        raise HTTPException(status_code=503, detail="Módulo de cruzamento não disponível")
+    except Exception as e:
+        logger.error(f"❌ Erro no cruzamento: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -103,9 +103,25 @@ Configure a variável de ambiente ou use apenas `--apenas-dou`
 ### Erro: "PublicCompanyCollector não está disponível"
 Verifique os logs do servidor Render ou execute o script standalone localmente
 
+## 🔗 Cruzamento NCM + UF (após coleta)
+
+Após os dados estarem no banco, o sistema pode executar o **cruzamento** entre:
+- Empresas **importadoras** e **exportadoras**
+- Por **NCM** e **UF** (município/estado)
+- Resultados salvos na tabela `empresas_recomendadas`
+
+### Via API
+- **POST /api/coletar-dados-publicos** com `"executar_cruzamento": true` (padrão) — coleta e depois cruza.
+- **POST /api/cruzamento-ncm-uf** — executa apenas o cruzamento (dados já no banco).
+
+### Via script
+```bash
+python coletar_dados_publicos_standalone.py --limite 5000 --integrar-banco --executar-cruzamento
+```
+
 ## 🎯 Próximos Passos
 
 1. **Validar BigQuery**: Execute `python validar_bigquery.py`
 2. **Testar coleta local**: Execute `python coletar_dados_publicos_standalone.py --limite 1000 --salvar-csv`
 3. **Aguardar deploy**: Após deploy no Render, testar endpoint
-4. **Coleta completa**: Executar com `--limite 50000` para coleta completa
+4. **Coleta completa**: Executar com `--limite 50000` e `--executar-cruzamento` para coleta + cruzamento

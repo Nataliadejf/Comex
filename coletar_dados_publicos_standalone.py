@@ -12,6 +12,15 @@ import sys
 import os
 from pathlib import Path
 
+# Carregar .env
+_env = Path(__file__).parent / ".env"
+if _env.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env)
+    except ImportError:
+        pass
+
 # Adicionar backend ao path
 backend_dir = Path(__file__).parent / "backend"
 sys.path.insert(0, str(backend_dir))
@@ -41,6 +50,7 @@ def main():
     parser.add_argument("--integrar-banco", action="store_true", default=True, help="Integrar com banco PostgreSQL")
     parser.add_argument("--apenas-dou", action="store_true", help="Coletar apenas do DOU")
     parser.add_argument("--apenas-bigquery", action="store_true", help="Coletar apenas do BigQuery")
+    parser.add_argument("--executar-cruzamento", action="store_true", help="Após integrar, executar cruzamento NCM+UF")
     
     args = parser.parse_args()
     
@@ -93,6 +103,14 @@ def main():
                     logger.info(f"   - Total: {stats['total_registros']:,}")
                     logger.info(f"   - Inseridos: {stats['registros_inseridos']:,}")
                     logger.info(f"   - Erros: {stats['erros']:,}")
+                    # Cruzamento NCM + UF (importadores x exportadores)
+                    if args.executar_cruzamento and stats.get("registros_inseridos", 0) > 0:
+                        try:
+                            from services.cruzamento_ncm_uf import executar_cruzamento_ncm_uf
+                            cruzamento_stats = executar_cruzamento_ncm_uf(db, limite_grupos=5000)
+                            logger.info(f"✅ Cruzamento: {cruzamento_stats.get('grupos_ncm_uf', 0)} grupos NCM/UF")
+                        except Exception as cx:
+                            logger.error(f"❌ Erro no cruzamento: {cx}")
                 finally:
                     db.close()
             except Exception as e:

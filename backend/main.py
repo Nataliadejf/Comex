@@ -1,6 +1,16 @@
 """
 Aplicação principal FastAPI.
 """
+# Carregar .env o mais cedo possível (BigQuery, DATABASE_URL, etc.)
+from pathlib import Path as _Path
+_env_file = _Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+    except ImportError:
+        pass
+
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
