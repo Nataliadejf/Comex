@@ -167,6 +167,16 @@ Os relacionamentos estão configurados para sugerir **importações e exportaç�
 
 ---
 
+## Dashboard e busca: apenas BigQuery/cruzamento (sem Excel)
+
+- **Dashboard** (cards, gráficos, totais) e **busca por empresas** são alimentados **somente** por:
+  - **operacoes_comex** (dados do BigQuery: NCM importação/exportação, município importação/exportação, EmpresasImEx + dados do webscraping DOU)
+  - **empresas_recomendadas** (cruzamento NCM+UF que preenche a base de recomendação)
+- **Não há fallback para Excel.** Se não houver dados na coleta/cruzamento, o dashboard pode retornar vazio até a execução da coleta e do cruzamento.
+- A **busca por empresas** retorna resultados quando existem registros em **operacoes_comex** ou **empresas_recomendadas**, garantindo base para extração no DOU (empresas com autorização por NCM) e recomendação de importação/exportação mais assertiva.
+
+---
+
 ## Passo 8: Testar na API (Render)
 
 Depois do deploy:

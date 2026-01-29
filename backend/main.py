@@ -17,7 +17,7 @@ for _env_file in [_backend_dir / ".env", _backend_dir.parent / ".env"]:
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import text, and_
+from sqlalchemy import text, and_, func
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional, List
 from datetime import date, datetime
@@ -3703,14 +3703,17 @@ async def get_dashboard_stats(
             logger.debug(f"Erro ao buscar empresas_recomendadas para países: {e}")
         if not principais_paises_list:
             try:
-                empresas_imp = _buscar_empresas_importadoras_recomendadas(5)
-                empresas_exp = _buscar_empresas_exportadoras_recomendadas(5)
-                principais_paises_list.extend(empresas_imp or [])
-                principais_paises_list.extend(empresas_exp or [])
-                principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
-                principais_paises_list = principais_paises_list[:10]
+                empresas_imp = _empresas_from_operacoes_comex(db, "importacao", 5, None)
+                empresas_exp = _empresas_from_operacoes_comex(db, "exportacao", 5, None)
+                for e in empresas_imp:
+                    principais_paises_list.append({"pais": e.get("nome", "")[:50], "valor_total": e.get("valor_total", 0), "total_operacoes": e.get("total_operacoes", 0), "tipo": "IMPORTADORA"})
+                for e in empresas_exp:
+                    principais_paises_list.append({"pais": e.get("nome", "")[:50], "valor_total": e.get("valor_total", 0), "total_operacoes": e.get("total_operacoes", 0), "tipo": "EXPORTADORA"})
+                if principais_paises_list:
+                    principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
+                    principais_paises_list = principais_paises_list[:10]
             except Exception as e:
-                logger.debug(f"Erro ao buscar empresas recomendadas (Excel): {e}")
+                logger.debug(f"Erro ao buscar empresas de operacoes_comex: {e}")
     
     # Registros por mês com valores FOB e peso
     registros_por_mes_query = db.query(
@@ -3785,44 +3788,10 @@ async def get_dashboard_stats(
         except Exception as e:
             logger.debug(f"Erro ao buscar EmpresasRecomendadas: {e}")
     
-    # 2) Se ainda vazio: tentar dados do Excel (último recurso)
-    if valor_total == 0 and not principais_ncms_list:
-        try:
-            import json
-            from pathlib import Path
-            arquivo_resumo = Path(__file__).parent.parent / "data" / "resumo_dados_comexstat.json"
-            if arquivo_resumo.exists():
-                with open(arquivo_resumo, 'r', encoding='utf-8') as f:
-                    resumo_excel = json.load(f)
-                if resumo_excel.get('importacoes'):
-                    valor_total_imp = resumo_excel['importacoes'].get('valor_total_usd', 0)
-                    volume_imp = resumo_excel['importacoes'].get('total_registros', 0) * 1000
-                if resumo_excel.get('exportacoes'):
-                    valor_total_exp = resumo_excel['exportacoes'].get('valor_total_usd', 0)
-                    volume_exp = resumo_excel['exportacoes'].get('total_registros', 0) * 1000
-                valor_total = valor_total_imp + valor_total_exp
-                meses_2025 = [f"2025-{str(i).zfill(2)}" for i in range(1, 13)]
-                for mes in meses_2025:
-                    registros_dict[mes] = int((resumo_excel.get('importacoes', {}).get('total_registros', 0) + resumo_excel.get('exportacoes', {}).get('total_registros', 0)) / 12)
-                    valores_por_mes_dict[mes] = float(valor_total / 12)
-                    pesos_por_mes_dict[mes] = float((volume_imp + volume_exp) / 12)
-                arquivo_ncm = Path(__file__).parent.parent / "data" / "dados_ncm_comexstat.json"
-                if arquivo_ncm.exists():
-                    with open(arquivo_ncm, 'r', encoding='utf-8') as f:
-                        dados_ncm = json.load(f)
-                    ncms_agrupados = {}
-                    for item in dados_ncm:
-                        ncm = item.get('ncm', '')
-                        if ncm:
-                            if ncm not in ncms_agrupados:
-                                ncms_agrupados[ncm] = {'ncm': ncm, 'descricao': item.get('descricao', ''), 'valor_total': 0, 'total_operacoes': 0}
-                            ncms_agrupados[ncm]['valor_total'] += item.get('valor_importacao_usd', 0) + item.get('valor_exportacao_usd', 0)
-                            ncms_agrupados[ncm]['total_operacoes'] += 1
-                    principais_ncms_list = sorted(ncms_agrupados.values(), key=lambda x: x['valor_total'], reverse=True)[:10]
-        except Exception as e:
-            logger.debug(f"Erro ao carregar dados do Excel: {e}")
+    # Dashboard alimentado apenas por operacoes_comex (BigQuery/DOU) e empresas_recomendadas (cruzamento NCM/UF/município).
+    # Sem fallback para Excel.
     
-    # 3) Se ainda não houver dados, tentar ComercioExterior (tabelas antigas)
+    # Se ainda não houver dados, tentar ComercioExterior (legado; opcional)
     if valor_total == 0 and not principais_ncms_list:
         try:
             logger.info("Tentando buscar dados das novas tabelas (ComercioExterior e Empresa)")
@@ -4109,68 +4078,105 @@ def _read_json_file(relative_path: str) -> Optional[dict]:
         return None
 
 
-def _load_empresas_recomendadas_fallback(
+def _empresas_from_operacoes_comex(
+    db: Session,
+    tipo: str,
     limite: int,
-    tipo: Optional[str],
-    uf: Optional[str],
-    ncm: Optional[str],
+    uf: Optional[str] = None,
 ) -> List[dict]:
+    """
+    Retorna empresas agregadas a partir de operacoes_comex (dados BigQuery/cruzamento).
+    tipo: 'importacao' ou 'exportacao'.
+    Garante resultados para busca e base de recomendação (DOU, NCM).
+    """
     try:
-        arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.xlsx"
-        if not arquivo_empresas.exists():
-            arquivo_empresas = Path(__file__).parent.parent / "data" / "empresas_recomendadas.csv"
-            if not arquivo_empresas.exists():
-                return []
-
-        import pandas as pd
-
-        if arquivo_empresas.suffix == ".xlsx":
-            df = pd.read_excel(arquivo_empresas)
-        else:
-            df = pd.read_csv(arquivo_empresas, encoding="utf-8-sig")
-
-        if uf:
-            df = df[df["Estado"].astype(str).str.upper() == uf.upper()]
-
-        if tipo:
-            tipo_lower = tipo.lower()
-            if "import" in tipo_lower:
-                df = df[df["Importado (R$)"].fillna(0) > 0]
-            elif "export" in tipo_lower:
-                df = df[df["Exportado (R$)"].fillna(0) > 0]
-
-        if ncm:
-            df = df[df["NCM Relacionado"].astype(str) == str(ncm)]
-
-        df = df.head(limite)
-
-        data = []
-        for _, row in df.iterrows():
-            valor_importacao = float(row.get("Importado (R$)", 0) or 0)
-            valor_exportacao = float(row.get("Exportado (R$)", 0) or 0)
-            data.append(
-                {
-                    "nome": row.get("Razão Social") or row.get("Nome Fantasia") or "N/A",
-                    "cnpj": row.get("CNPJ"),
-                    "uf": row.get("Estado"),
-                    "tipo": row.get("Sugestão"),
-                    "peso_participacao": float(row.get("Peso Participação (0-100)", 0) or 0),
-                    "valor_total": (valor_importacao + valor_exportacao) / 5.0,
-                    "valor_importacao_usd": valor_importacao / 5.0,
-                    "valor_exportacao_usd": valor_exportacao / 5.0,
-                }
+        if tipo == "importacao":
+            filtros = [
+                OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO,
+                OperacaoComex.razao_social_importador.isnot(None),
+                OperacaoComex.razao_social_importador != "",
+            ]
+            if uf:
+                filtros.append(OperacaoComex.uf == uf.upper())
+            q = (
+                db.query(
+                    OperacaoComex.razao_social_importador.label("nome"),
+                    OperacaoComex.cnpj_importador.label("cnpj"),
+                    OperacaoComex.uf,
+                    func.sum(OperacaoComex.valor_fob).label("valor_total"),
+                    func.count(OperacaoComex.id).label("total_operacoes"),
+                )
+                .filter(and_(*filtros))
+                .group_by(
+                    OperacaoComex.razao_social_importador,
+                    OperacaoComex.cnpj_importador,
+                    OperacaoComex.uf,
+                )
+                .order_by(func.sum(OperacaoComex.valor_fob).desc())
+                .limit(limite)
             )
-        return data
-    except Exception:
+        else:
+            filtros = [
+                OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO,
+                OperacaoComex.razao_social_exportador.isnot(None),
+                OperacaoComex.razao_social_exportador != "",
+            ]
+            if uf:
+                filtros.append(OperacaoComex.uf == uf.upper())
+            q = (
+                db.query(
+                    OperacaoComex.razao_social_exportador.label("nome"),
+                    OperacaoComex.cnpj_exportador.label("cnpj"),
+                    OperacaoComex.uf,
+                    func.sum(OperacaoComex.valor_fob).label("valor_total"),
+                    func.count(OperacaoComex.id).label("total_operacoes"),
+                )
+                .filter(and_(*filtros))
+                .group_by(
+                    OperacaoComex.razao_social_exportador,
+                    OperacaoComex.cnpj_exportador,
+                    OperacaoComex.uf,
+                )
+                .order_by(func.sum(OperacaoComex.valor_fob).desc())
+                .limit(limite)
+            )
+        rows = q.all()
+        return [
+            {
+                "nome": (r.nome or "").strip()[:255],
+                "cnpj": (r.cnpj or "").strip() or None,
+                "uf": (r.uf or "").strip() or None,
+                "valor_total": float(r.valor_total or 0),
+                "total_operacoes": int(r.total_operacoes or 0),
+                "peso_participacao": 0.0,
+                "pais": (r.nome or "").strip()[:50],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.debug(f"Erro ao agregar empresas de operacoes_comex: {e}")
         return []
 
 
 @app.get("/dashboard/dados-comexstat")
-async def dashboard_dados_comexstat():
-    dados = _read_json_file("data/resumo_dados_comexstat.json")
-    if not dados:
-        return {"success": False, "data": None, "message": "Arquivo não encontrado"}
-    return {"success": True, "data": dados}
+async def dashboard_dados_comexstat(db: Session = Depends(get_db)):
+    """Resumo a partir de operacoes_comex e empresas_recomendadas (BigQuery/cruzamento). Sem Excel."""
+    try:
+        total_imp = db.query(func.count(OperacaoComex.id)).filter(OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO).scalar() or 0
+        total_exp = db.query(func.count(OperacaoComex.id)).filter(OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO).scalar() or 0
+        valor_imp = db.query(func.sum(OperacaoComex.valor_fob)).filter(OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO).scalar() or 0
+        valor_exp = db.query(func.sum(OperacaoComex.valor_fob)).filter(OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO).scalar() or 0
+        total_emp = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
+        dados = {
+            "importacoes": {"total_registros": total_imp, "valor_total_usd": float(valor_imp)},
+            "exportacoes": {"total_registros": total_exp, "valor_total_usd": float(valor_exp)},
+            "empresas_recomendadas": total_emp,
+            "fonte": "operacoes_comex_empresas_recomendadas",
+        }
+        return {"success": True, "data": dados}
+    except Exception as e:
+        logger.debug(f"Erro ao montar resumo dashboard: {e}")
+        return {"success": False, "data": None, "message": "Dados do cruzamento ainda não disponíveis. Execute a coleta e o cruzamento NCM+UF."}
 
 
 @app.get("/dashboard/dados-ncm-comexstat")
@@ -4178,22 +4184,34 @@ async def dashboard_dados_ncm_comexstat(
     limite: int = Query(default=100, ge=1, le=1000),
     uf: Optional[str] = Query(default=None),
     tipo: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
 ):
-    dados = _read_json_file("data/dados_ncm_comexstat.json")
-    if not dados:
-        return {"success": False, "data": [], "message": "Arquivo não encontrado"}
-
-    resultados = dados
-    if uf:
-        resultados = [item for item in resultados if str(item.get("uf", "")).upper() == uf.upper()]
-    if tipo:
-        tipo_lower = tipo.lower()
-        if "import" in tipo_lower:
-            resultados = [item for item in resultados if item.get("valor_importacao_usd", 0) > 0]
-        elif "export" in tipo_lower:
-            resultados = [item for item in resultados if item.get("valor_exportacao_usd", 0) > 0]
-
-    return {"success": True, "data": resultados[:limite]}
+    """NCMs agregados a partir de operacoes_comex (BigQuery/cruzamento). Sem Excel."""
+    try:
+        from sqlalchemy import case
+        q = db.query(
+            OperacaoComex.ncm,
+            func.max(OperacaoComex.descricao_produto).label("descricao_produto"),
+            func.sum(OperacaoComex.valor_fob).label("valor_total"),
+            func.sum(case((OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO, OperacaoComex.valor_fob), else_=0)).label("valor_imp"),
+            func.sum(case((OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO, OperacaoComex.valor_fob), else_=0)).label("valor_exp"),
+            func.count(OperacaoComex.id).label("total_operacoes"),
+        ).group_by(OperacaoComex.ncm)
+        if uf:
+            q = q.filter(OperacaoComex.uf == uf.upper())
+        if tipo and "import" in (tipo or "").lower():
+            q = q.filter(OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO)
+        elif tipo and "export" in (tipo or "").lower():
+            q = q.filter(OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO)
+        rows = q.order_by(func.sum(OperacaoComex.valor_fob).desc()).limit(limite).all()
+        resultados = [
+            {"ncm": r.ncm, "descricao": (r.descricao_produto or "")[:200], "valor_total": float(r.valor_total or 0), "valor_importacao_usd": float(r.valor_imp or 0), "valor_exportacao_usd": float(r.valor_exp or 0), "total_operacoes": r.total_operacoes}
+            for r in rows
+        ]
+        return {"success": True, "data": resultados}
+    except Exception as e:
+        logger.debug(f"Erro ao listar NCMs: {e}")
+        return {"success": False, "data": [], "message": "Dados do cruzamento ainda não disponíveis. Execute a coleta e o cruzamento NCM+UF."}
 
 
 @app.get("/dashboard/empresas-recomendadas")
@@ -4241,11 +4259,26 @@ async def dashboard_empresas_recomendadas(
         ]
         if data:
             return {"success": True, "data": data}
-        fallback = _load_empresas_recomendadas_fallback(limite, tipo, uf, ncm)
-        return {"success": True, "data": fallback}
+        data = []
+        imp = _empresas_from_operacoes_comex(db, "importacao", limite, uf)
+        exp = _empresas_from_operacoes_comex(db, "exportacao", limite, uf)
+        for e in imp:
+            data.append({"nome": e.get("nome"), "cnpj": e.get("cnpj"), "uf": e.get("uf"), "tipo": "importadora", "peso_participacao": 0, "valor_total": e.get("valor_total", 0), "valor_importacao_usd": e.get("valor_total", 0), "valor_exportacao_usd": 0})
+        for e in exp:
+            data.append({"nome": e.get("nome"), "cnpj": e.get("cnpj"), "uf": e.get("uf"), "tipo": "exportadora", "peso_participacao": 0, "valor_total": e.get("valor_total", 0), "valor_importacao_usd": 0, "valor_exportacao_usd": e.get("valor_total", 0)})
+        return {"success": True, "data": data[:limite]}
     except Exception:
-        fallback = _load_empresas_recomendadas_fallback(limite, tipo, uf, ncm)
-        return {"success": True, "data": fallback}
+        data = []
+        try:
+            imp = _empresas_from_operacoes_comex(db, "importacao", limite, uf)
+            exp = _empresas_from_operacoes_comex(db, "exportacao", limite, uf)
+            for e in imp:
+                data.append({"nome": e.get("nome"), "cnpj": e.get("cnpj"), "uf": e.get("uf"), "tipo": "importadora", "peso_participacao": 0, "valor_total": e.get("valor_total", 0), "valor_importacao_usd": e.get("valor_total", 0), "valor_exportacao_usd": 0})
+            for e in exp:
+                data.append({"nome": e.get("nome"), "cnpj": e.get("cnpj"), "uf": e.get("uf"), "tipo": "exportadora", "peso_participacao": 0, "valor_total": e.get("valor_total", 0), "valor_importacao_usd": 0, "valor_exportacao_usd": e.get("valor_total", 0)})
+        except Exception:
+            pass
+        return {"success": True, "data": data[:limite]}
 
 
 @app.get("/dashboard/sinergias-estado")
@@ -4333,6 +4366,18 @@ async def dashboard_sugestoes_empresas(
     except Exception:
         pass
 
+    tipo_sug = tipo and tipo.lower() or None
+    imp = _empresas_from_operacoes_comex(db, "importacao", limite, uf) if tipo_sug in (None, "importacao", "import") else []
+    exp = _empresas_from_operacoes_comex(db, "exportacao", limite, uf) if tipo_sug in (None, "exportacao", "export") else []
+    sugestoes = [
+        {"nome": e.get("nome"), "cnpj": e.get("cnpj"), "uf": e.get("uf"), "peso_participacao": 0, "valor_total": e.get("valor_total", 0), "tipo": "importadora", "fonte": "operacoes_comex"}
+        for e in imp
+    ] + [
+        {"nome": e.get("nome"), "cnpj": e.get("cnpj"), "uf": e.get("uf"), "peso_participacao": 0, "valor_total": e.get("valor_total", 0), "tipo": "exportadora", "fonte": "operacoes_comex"}
+        for e in exp
+    ]
+    if sugestoes:
+        return {"success": True, "sugestoes": sugestoes[:limite]}
     sugestoes = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo=tipo, limit=limite)
     return {"success": True, "sugestoes": sugestoes}
 
@@ -6076,7 +6121,7 @@ async def get_empresas_importadoras_recomendadas(
             return {"success": True, "data": data}
     except Exception:
         pass
-    empresas = _buscar_empresas_importadoras_recomendadas(limite)
+    empresas = _empresas_from_operacoes_comex(db, "importacao", limite, uf)
     return {"success": True, "data": empresas}
 
 
@@ -6102,40 +6147,30 @@ async def get_empresas_exportadoras_recomendadas(
             return {"success": True, "data": data}
     except Exception:
         pass
-    empresas = _buscar_empresas_exportadoras_recomendadas(limite)
+    empresas = _empresas_from_operacoes_comex(db, "exportacao", limite, uf)
     return {"success": True, "data": empresas}
 
 
-@app.get("/dashboard/dados-comexstat")
-async def get_dados_comexstat():
+@app.get("/api/dados-comexstat")
+async def get_dados_comexstat_api(db: Session = Depends(get_db)):
     """
-    Retorna resumo dos dados do arquivo Excel ComexStat.
+    Retorna resumo a partir de operacoes_comex e empresas_recomendadas (BigQuery/cruzamento). Sem Excel.
     """
     try:
-        import json
-        from pathlib import Path
-        
-        arquivo_resumo = Path(__file__).parent.parent / "data" / "resumo_dados_comexstat.json"
-        
-        if not arquivo_resumo.exists():
-            return {
-                "success": False,
-                "message": "Arquivo de resumo não encontrado. Execute o script de processamento primeiro.",
-                "data": None
-            }
-        
-        with open(arquivo_resumo, 'r', encoding='utf-8') as f:
-            resumo = json.load(f)
-        
-        return {
-            "success": True,
-            "data": resumo
+        total_op = db.query(func.count(OperacaoComex.id)).scalar() or 0
+        valor_imp = db.query(func.sum(OperacaoComex.valor_fob)).filter(OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO).scalar() or 0
+        valor_exp = db.query(func.sum(OperacaoComex.valor_fob)).filter(OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO).scalar() or 0
+        total_emp = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
+        resumo = {
+            "importacoes": {"total_registros": total_op, "valor_total_usd": float(valor_imp)},
+            "exportacoes": {"total_registros": total_op, "valor_total_usd": float(valor_exp)},
+            "empresas_recomendadas": total_emp,
+            "fonte": "operacoes_comex_empresas_recomendadas",
         }
+        return {"success": True, "data": resumo}
     except Exception as e:
-        logger.error(f"Erro ao buscar dados ComexStat: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar dados: {str(e)}")
+        logger.error(f"Erro ao buscar resumo: {e}")
+        return {"success": False, "message": "Dados do cruzamento ainda não disponíveis.", "data": None}
 
 
 @app.get("/api/validar-dados-banco")
