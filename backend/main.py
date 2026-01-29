@@ -3664,21 +3664,53 @@ async def get_dashboard_stats(
         for pais, total_valor, total_operacoes in principais_paises
     ]
     
-    # Se não houver países no banco, tentar usar empresas recomendadas
+    # Se não houver países no banco, tentar empresas_recomendadas (BigQuery/cruzamento) primeiro, depois Excel
     if not principais_paises_list:
         try:
-            # Buscar empresas importadoras e exportadoras recomendadas
-            empresas_imp = _buscar_empresas_importadoras_recomendadas(5)
-            empresas_exp = _buscar_empresas_exportadoras_recomendadas(5)
-            
-            principais_paises_list.extend(empresas_imp)
-            principais_paises_list.extend(empresas_exp)
-            
-            # Ordenar por valor total e limitar
-            principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
-            principais_paises_list = principais_paises_list[:10]
+            # Prioridade 1: tabela empresas_recomendadas (dados do cruzamento NCM+UF)
+            empresas_imp_db = db.query(
+                EmpresasRecomendadas.nome,
+                EmpresasRecomendadas.valor_total_importacao_usd,
+                EmpresasRecomendadas.total_operacoes_importacao,
+            ).filter(EmpresasRecomendadas.provavel_importador == 1).order_by(
+                EmpresasRecomendadas.valor_total_importacao_usd.desc()
+            ).limit(5).all()
+            empresas_exp_db = db.query(
+                EmpresasRecomendadas.nome,
+                EmpresasRecomendadas.valor_total_exportacao_usd,
+                EmpresasRecomendadas.total_operacoes_exportacao,
+            ).filter(EmpresasRecomendadas.provavel_exportador == 1).order_by(
+                EmpresasRecomendadas.valor_total_exportacao_usd.desc()
+            ).limit(5).all()
+            for emp in empresas_imp_db:
+                principais_paises_list.append({
+                    "pais": (emp.nome or "")[:50],
+                    "valor_total": float(emp.valor_total_importacao_usd or 0),
+                    "total_operacoes": int(emp.total_operacoes_importacao or 0),
+                    "tipo": "IMPORTADORA",
+                })
+            for emp in empresas_exp_db:
+                principais_paises_list.append({
+                    "pais": (emp.nome or "")[:50],
+                    "valor_total": float(emp.valor_total_exportacao_usd or 0),
+                    "total_operacoes": int(emp.total_operacoes_exportacao or 0),
+                    "tipo": "EXPORTADORA",
+                })
+            if principais_paises_list:
+                principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
+                principais_paises_list = principais_paises_list[:10]
         except Exception as e:
-            logger.debug(f"Erro ao buscar empresas recomendadas para países: {e}")
+            logger.debug(f"Erro ao buscar empresas_recomendadas para países: {e}")
+        if not principais_paises_list:
+            try:
+                empresas_imp = _buscar_empresas_importadoras_recomendadas(5)
+                empresas_exp = _buscar_empresas_exportadoras_recomendadas(5)
+                principais_paises_list.extend(empresas_imp or [])
+                principais_paises_list.extend(empresas_exp or [])
+                principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
+                principais_paises_list = principais_paises_list[:10]
+            except Exception as e:
+                logger.debug(f"Erro ao buscar empresas recomendadas (Excel): {e}")
     
     # Registros por mês com valores FOB e peso
     registros_por_mes_query = db.query(
@@ -3708,136 +3740,89 @@ async def get_dashboard_stats(
         for mes, _, _, peso_total in registros_por_mes_query
     }
     
-    # Se não houver dados no banco, tentar usar dados do Excel
+    # Quando operacoes_comex está vazio: prioridade 1 = empresas_recomendadas (BigQuery/cruzamento), 2 = ComercioExterior, 3 = Excel
+    if valor_total == 0 and not principais_ncms_list:
+        # 1) Tentar tabela empresas_recomendadas (dados do cruzamento NCM+UF / BigQuery)
+        try:
+            total_emp_rec = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
+            if total_emp_rec > 0:
+                logger.info(f"Usando tabela EmpresasRecomendadas para dashboard ({total_emp_rec} empresas)")
+                empresas_imp_rec = db.query(
+                    EmpresasRecomendadas.nome,
+                    EmpresasRecomendadas.valor_total_importacao_usd,
+                    EmpresasRecomendadas.volume_total_importacao_kg,
+                    EmpresasRecomendadas.total_operacoes_importacao,
+                    EmpresasRecomendadas.peso_participacao
+                ).filter(EmpresasRecomendadas.provavel_importador == 1).order_by(
+                    EmpresasRecomendadas.valor_total_importacao_usd.desc()
+                ).limit(50).all()
+                empresas_exp_rec = db.query(
+                    EmpresasRecomendadas.nome,
+                    EmpresasRecomendadas.valor_total_exportacao_usd,
+                    EmpresasRecomendadas.volume_total_exportacao_kg,
+                    EmpresasRecomendadas.total_operacoes_exportacao,
+                    EmpresasRecomendadas.peso_participacao
+                ).filter(EmpresasRecomendadas.provavel_exportador == 1).order_by(
+                    EmpresasRecomendadas.valor_total_exportacao_usd.desc()
+                ).limit(50).all()
+                valor_total_imp = sum(float(emp.valor_total_importacao_usd or 0) for emp in empresas_imp_rec)
+                valor_total_exp = sum(float(emp.valor_total_exportacao_usd or 0) for emp in empresas_exp_rec)
+                volume_imp = sum(float(emp.volume_total_importacao_kg or 0) for emp in empresas_imp_rec)
+                volume_exp = sum(float(emp.volume_total_exportacao_kg or 0) for emp in empresas_exp_rec)
+                if valor_total_imp > 0 or valor_total_exp > 0:
+                    valor_total = valor_total_imp + valor_total_exp
+                    if not principais_paises_list:
+                        principais_paises_list = [
+                            {"pais": (emp.nome or "")[:50], "valor_total": float(emp.valor_total_importacao_usd or 0), "total_operacoes": int(emp.total_operacoes_importacao or 0), "tipo": "IMPORTADORA"}
+                            for emp in empresas_imp_rec[:5]
+                        ] + [
+                            {"pais": (emp.nome or "")[:50], "valor_total": float(emp.valor_total_exportacao_usd or 0), "total_operacoes": int(emp.total_operacoes_exportacao or 0), "tipo": "EXPORTADORA"}
+                            for emp in empresas_exp_rec[:5]
+                        ]
+                        principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
+                        principais_paises_list = principais_paises_list[:10]
+                    logger.info(f"✅ Dashboard: EmpresasRecomendadas - importação ${valor_total_imp:,.0f} USD, exportação ${valor_total_exp:,.0f} USD")
+        except Exception as e:
+            logger.debug(f"Erro ao buscar EmpresasRecomendadas: {e}")
+    
+    # 2) Se ainda vazio: tentar dados do Excel (último recurso)
     if valor_total == 0 and not principais_ncms_list:
         try:
             import json
             from pathlib import Path
-            
             arquivo_resumo = Path(__file__).parent.parent / "data" / "resumo_dados_comexstat.json"
             if arquivo_resumo.exists():
                 with open(arquivo_resumo, 'r', encoding='utf-8') as f:
                     resumo_excel = json.load(f)
-                
-                # Usar dados do Excel para popular o dashboard
                 if resumo_excel.get('importacoes'):
                     valor_total_imp = resumo_excel['importacoes'].get('valor_total_usd', 0)
-                    volume_imp = resumo_excel['importacoes'].get('total_registros', 0) * 1000  # Estimativa
-                
+                    volume_imp = resumo_excel['importacoes'].get('total_registros', 0) * 1000
                 if resumo_excel.get('exportacoes'):
                     valor_total_exp = resumo_excel['exportacoes'].get('valor_total_usd', 0)
-                    volume_exp = resumo_excel['exportacoes'].get('total_registros', 0) * 1000  # Estimativa
-                
+                    volume_exp = resumo_excel['exportacoes'].get('total_registros', 0) * 1000
                 valor_total = valor_total_imp + valor_total_exp
-                
-                # Criar registros por mês baseado no Excel (distribuir ao longo de 12 meses)
-                registros_dict = {}
-                valores_por_mes_dict = {}
-                pesos_por_mes_dict = {}
-                
                 meses_2025 = [f"2025-{str(i).zfill(2)}" for i in range(1, 13)]
-                total_registros_imp = resumo_excel.get('importacoes', {}).get('total_registros', 0)
-                total_registros_exp = resumo_excel.get('exportacoes', {}).get('total_registros', 0)
-                
                 for mes in meses_2025:
-                    registros_dict[mes] = int((total_registros_imp + total_registros_exp) / 12)
-                    valores_por_mes_dict[mes] = float((valor_total_imp + valor_total_exp) / 12)
+                    registros_dict[mes] = int((resumo_excel.get('importacoes', {}).get('total_registros', 0) + resumo_excel.get('exportacoes', {}).get('total_registros', 0)) / 12)
+                    valores_por_mes_dict[mes] = float(valor_total / 12)
                     pesos_por_mes_dict[mes] = float((volume_imp + volume_exp) / 12)
-                
-                # Top NCMs do Excel
                 arquivo_ncm = Path(__file__).parent.parent / "data" / "dados_ncm_comexstat.json"
                 if arquivo_ncm.exists():
                     with open(arquivo_ncm, 'r', encoding='utf-8') as f:
                         dados_ncm = json.load(f)
-                    
-                    # Agrupar por NCM e ordenar
                     ncms_agrupados = {}
                     for item in dados_ncm:
                         ncm = item.get('ncm', '')
                         if ncm:
                             if ncm not in ncms_agrupados:
-                                ncms_agrupados[ncm] = {
-                                    'ncm': ncm,
-                                    'descricao': item.get('descricao', ''),
-                                    'valor_total': 0,
-                                    'total_operacoes': 0
-                                }
+                                ncms_agrupados[ncm] = {'ncm': ncm, 'descricao': item.get('descricao', ''), 'valor_total': 0, 'total_operacoes': 0}
                             ncms_agrupados[ncm]['valor_total'] += item.get('valor_importacao_usd', 0) + item.get('valor_exportacao_usd', 0)
                             ncms_agrupados[ncm]['total_operacoes'] += 1
-                    
-                    principais_ncms_list = sorted(
-                        ncms_agrupados.values(),
-                        key=lambda x: x['valor_total'],
-                        reverse=True
-                    )[:10]
+                    principais_ncms_list = sorted(ncms_agrupados.values(), key=lambda x: x['valor_total'], reverse=True)[:10]
         except Exception as e:
             logger.debug(f"Erro ao carregar dados do Excel: {e}")
     
-    # PRIMEIRO: Tentar usar tabela consolidada EmpresasRecomendadas (mais eficiente)
-    try:
-        total_emp_rec = db.query(func.count(EmpresasRecomendadas.id)).scalar() or 0
-        if total_emp_rec > 0 and valor_total == 0 and not principais_ncms_list:
-            logger.info(f"Usando tabela consolidada EmpresasRecomendadas ({total_emp_rec} empresas)")
-            
-            # Buscar empresas prováveis importadoras e exportadoras
-            empresas_imp_rec = db.query(
-                EmpresasRecomendadas.nome,
-                EmpresasRecomendadas.valor_total_importacao_usd,
-                EmpresasRecomendadas.volume_total_importacao_kg,
-                EmpresasRecomendadas.peso_participacao
-            ).filter(
-                EmpresasRecomendadas.provavel_importador == 1
-            ).order_by(
-                EmpresasRecomendadas.peso_participacao.desc()
-            ).limit(10).all()
-            
-            empresas_exp_rec = db.query(
-                EmpresasRecomendadas.nome,
-                EmpresasRecomendadas.valor_total_exportacao_usd,
-                EmpresasRecomendadas.volume_total_exportacao_kg,
-                EmpresasRecomendadas.peso_participacao
-            ).filter(
-                EmpresasRecomendadas.provavel_exportador == 1
-            ).order_by(
-                EmpresasRecomendadas.peso_participacao.desc()
-            ).limit(10).all()
-            
-            # Calcular totais
-            valor_total_imp = sum(float(emp.valor_total_importacao_usd or 0) for emp in empresas_imp_rec)
-            valor_total_exp = sum(float(emp.valor_total_exportacao_usd or 0) for emp in empresas_exp_rec)
-            volume_imp = sum(float(emp.volume_total_importacao_kg or 0) for emp in empresas_imp_rec)
-            volume_exp = sum(float(emp.volume_total_exportacao_kg or 0) for emp in empresas_exp_rec)
-            
-            if valor_total_imp > 0 or valor_total_exp > 0:
-                valor_total = valor_total_imp + valor_total_exp
-                
-                # Usar empresas recomendadas como principais países (temporário)
-                principais_paises_list = [
-                    {
-                        "pais": emp.nome[:50],
-                        "valor_total": float(emp.valor_total_importacao_usd or 0),
-                        "total_operacoes": 0,
-                        "tipo": "IMPORTADORA"
-                    }
-                    for emp in empresas_imp_rec[:5]
-                ] + [
-                    {
-                        "pais": emp.nome[:50],
-                        "valor_total": float(emp.valor_total_exportacao_usd or 0),
-                        "total_operacoes": 0,
-                        "tipo": "EXPORTADORA"
-                    }
-                    for emp in empresas_exp_rec[:5]
-                ]
-                
-                principais_paises_list.sort(key=lambda x: x.get("valor_total", 0), reverse=True)
-                principais_paises_list = principais_paises_list[:10]
-                
-                logger.info(f"✅ Dados carregados da tabela consolidada: {len(empresas_imp_rec)} importadoras, {len(empresas_exp_rec)} exportadoras")
-    except Exception as e:
-        logger.debug(f"Erro ao buscar EmpresasRecomendadas: {e}")
-    
-    # Se ainda não houver dados, tentar usar as novas tabelas (ComercioExterior e Empresa)
+    # 3) Se ainda não houver dados, tentar ComercioExterior (tabelas antigas)
     if valor_total == 0 and not principais_ncms_list:
         try:
             logger.info("Tentando buscar dados das novas tabelas (ComercioExterior e Empresa)")
@@ -4261,74 +4246,6 @@ async def dashboard_empresas_recomendadas(
     except Exception:
         fallback = _load_empresas_recomendadas_fallback(limite, tipo, uf, ncm)
         return {"success": True, "data": fallback}
-
-
-@app.get("/dashboard/empresas-importadoras")
-async def dashboard_empresas_importadoras(
-    limite: int = Query(default=10, ge=1, le=100),
-    uf: Optional[str] = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    try:
-        query = db.query(EmpresasRecomendadas).filter(
-            EmpresasRecomendadas.provavel_importador == 1
-        )
-        if uf:
-            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
-        resultados = query.order_by(EmpresasRecomendadas.peso_participacao.desc()).limit(limite).all()
-        data = [
-            {
-                "nome": emp.nome,
-                "cnpj": emp.cnpj,
-                "uf": emp.estado,
-                "valor_total": float(emp.valor_total_importacao_usd or 0),
-                "peso_participacao": float(emp.peso_participacao or 0),
-            }
-            for emp in resultados
-        ]
-        if data:
-            return {"success": True, "data": data}
-    except Exception:
-        pass
-    fallback = _buscar_empresas_importadoras_recomendadas(limite)
-    if fallback:
-        return {"success": True, "data": fallback}
-    fallback = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo="importacao", limit=limite)
-    return {"success": True, "data": fallback}
-
-
-@app.get("/dashboard/empresas-exportadoras")
-async def dashboard_empresas_exportadoras(
-    limite: int = Query(default=10, ge=1, le=100),
-    uf: Optional[str] = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    try:
-        query = db.query(EmpresasRecomendadas).filter(
-            EmpresasRecomendadas.provavel_exportador == 1
-        )
-        if uf:
-            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
-        resultados = query.order_by(EmpresasRecomendadas.peso_participacao.desc()).limit(limite).all()
-        data = [
-            {
-                "nome": emp.nome,
-                "cnpj": emp.cnpj,
-                "uf": emp.estado,
-                "valor_total": float(emp.valor_total_exportacao_usd or 0),
-                "peso_participacao": float(emp.peso_participacao or 0),
-            }
-            for emp in resultados
-        ]
-        if data:
-            return {"success": True, "data": data}
-    except Exception:
-        pass
-    fallback = _buscar_empresas_exportadoras_recomendadas(limite)
-    if fallback:
-        return {"success": True, "data": fallback}
-    fallback = _buscar_empresas_bigquery_sugestoes(uf=uf, tipo="exportacao", limit=limite)
-    return {"success": True, "data": fallback}
 
 
 @app.get("/dashboard/sinergias-estado")
@@ -6139,30 +6056,54 @@ def _buscar_empresas_exportadoras_recomendadas(limite: int = 10):
 
 @app.get("/dashboard/empresas-importadoras")
 async def get_empresas_importadoras_recomendadas(
-    limite: int = Query(default=10, ge=1, le=100)
+    limite: int = Query(default=10, ge=1, le=100),
+    uf: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
 ):
     """
-    Retorna empresas recomendadas que são importadoras (para seção "Prováveis Importadores").
+    Retorna empresas recomendadas importadoras (prioridade: empresas_recomendadas/BigQuery, depois Excel).
     """
+    try:
+        query = db.query(EmpresasRecomendadas).filter(EmpresasRecomendadas.provavel_importador == 1)
+        if uf:
+            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
+        resultados = query.order_by(EmpresasRecomendadas.valor_total_importacao_usd.desc()).limit(limite).all()
+        data = [
+            {"nome": emp.nome, "cnpj": emp.cnpj, "uf": emp.estado, "valor_total": float(emp.valor_total_importacao_usd or 0), "peso_participacao": float(emp.peso_participacao or 0), "pais": (emp.nome or "")[:50]}
+            for emp in resultados
+        ]
+        if data:
+            return {"success": True, "data": data}
+    except Exception:
+        pass
     empresas = _buscar_empresas_importadoras_recomendadas(limite)
-    return {
-        "success": True,
-        "data": empresas
-    }
+    return {"success": True, "data": empresas}
 
 
 @app.get("/dashboard/empresas-exportadoras")
 async def get_empresas_exportadoras_recomendadas(
-    limite: int = Query(default=10, ge=1, le=100)
+    limite: int = Query(default=10, ge=1, le=100),
+    uf: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
 ):
     """
-    Retorna empresas recomendadas que são exportadoras (para seção "Prováveis Exportadores").
+    Retorna empresas recomendadas exportadoras (prioridade: empresas_recomendadas/BigQuery, depois Excel).
     """
+    try:
+        query = db.query(EmpresasRecomendadas).filter(EmpresasRecomendadas.provavel_exportador == 1)
+        if uf:
+            query = query.filter(EmpresasRecomendadas.estado == uf.upper())
+        resultados = query.order_by(EmpresasRecomendadas.valor_total_exportacao_usd.desc()).limit(limite).all()
+        data = [
+            {"nome": emp.nome, "cnpj": emp.cnpj, "uf": emp.estado, "valor_total": float(emp.valor_total_exportacao_usd or 0), "peso_participacao": float(emp.peso_participacao or 0), "pais": (emp.nome or "")[:50]}
+            for emp in resultados
+        ]
+        if data:
+            return {"success": True, "data": data}
+    except Exception:
+        pass
     empresas = _buscar_empresas_exportadoras_recomendadas(limite)
-    return {
-        "success": True,
-        "data": empresas
-    }
+    return {"success": True, "data": empresas}
 
 
 @app.get("/dashboard/dados-comexstat")
