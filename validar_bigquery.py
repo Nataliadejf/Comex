@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 
 # Carregar .env de vários locais (incl. backend/.env)
+# Suprimir avisos do dotenv ao interpretar JSON multilinha (credenciais BigQuery)
+import logging
+logging.getLogger("dotenv").setLevel(logging.ERROR)
 _raiz = Path(__file__).resolve().parent
 _backend_env = _raiz / "backend" / ".env"
 for _env_path in [_backend_env, _raiz / ".env", Path(os.getcwd()) / ".env", _raiz.parent / ".env"]:

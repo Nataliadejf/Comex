@@ -34,9 +34,11 @@ GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"liqu
 
 ---
 
-## Passo 3: Nomes das colunas no BigQuery (schema real)
+## Passo 3: BigQuery – usar as CONSULTAS (não as tabelas do dataset)
 
-O coletor usa estas tabelas e colunas. O relacionamento é: **EmpresasImEx** (lista de empresas) × **NCMExportacao** / **NCMImportacao** (dados por NCM e UF), ligando por `sigla_uf = sigla_uf_ncm`.
+O **dataset Projeto_Comex não contém as tabelas**; os dados estão nas **consultas salvas** no BigQuery (EmpresasImEx, NCMExportacao, NCMImportacao, etc.). O script **não lê tabelas**; ele **executa o SQL dessas consultas**. Você deve colar o SQL de cada consulta salva em `backend/data_collector/bigquery_queries.json` (ver CONFIGURAR_BIGQUERY.md, seção "Usar as CONSULTAS"). Alternativa: salvar as consultas como views/tabelas no dataset.
+
+Referência de colunas (para montar/validar o SQL das consultas). O relacionamento é: **EmpresasImEx** (lista de empresas) × **NCMExportacao** / **NCMImportacao** (dados por NCM e UF), ligando por `sigla_uf = sigla_uf_ncm`.
 
 **Tabela `EmpresasImEx`** (lista de empresas importadoras e exportadoras):
 
@@ -227,3 +229,31 @@ Ou, para coleta com limite 5000 e cruzamento:
 ```powershell
 .\Executar_Coleta_E_Cruzamento.ps1 -Limite 5000 -ExecutarCruzamento
 ```
+
+---
+
+## Próximos passos após coleta e cruzamento
+
+Depois que a coleta e o cruzamento rodaram com sucesso (ex.: "COLETA CONCLUÍDA COM SUCESSO", "Cruzamento concluído: X grupos NCM/UF, Y registros em empresas_recomendadas"):
+
+1. **Relacionamento**  
+   Já está feito: o cruzamento preenche a tabela **empresas_recomendadas** a partir de **operacoes_comex**. O dashboard e as APIs de sugestão usam essa tabela.
+
+2. **Commit e deploy**  
+   Na pasta do projeto (`projeto_comex`):
+
+   ```powershell
+   cd C:\Users\User\Desktop\Cursor\Projetos\projeto_comex
+   git add -A
+   git status
+   git commit -m "feat: coleta BigQuery, integração e cruzamento NCM/UF para empresas recomendadas"
+   git push origin main
+   ```
+
+   No Render: o deploy é automático ao dar push em `main`. Confira no painel se o backend (e o frontend, se aplicável) redeployou.
+
+3. **Testar no dashboard**  
+   Após o deploy, acesse o dashboard e confira:
+   - Cards/resumo (totais de operações, empresas recomendadas).
+   - Lista de empresas recomendadas (filtros por UF, tipo, NCM).
+   - Endpoint direto: `GET /dashboard/empresas-recomendadas?limite=50`.

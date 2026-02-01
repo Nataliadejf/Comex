@@ -33,9 +33,7 @@ code {
   line-height: 1.15;
   white-space: normal;
   word-break: break-word;
-}
-
-@media (max-width: 768px) {
+}@media (max-width: 768px) {
   .dashboard-metric-card .ant-card-body {
     padding: 16px !important;
   }

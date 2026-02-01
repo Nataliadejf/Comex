@@ -13,6 +13,9 @@ import os
 from pathlib import Path
 
 # Carregar .env (raiz do projeto ou backend/)
+# Suprimir avisos do dotenv ao interpretar JSON multilinha (credenciais BigQuery)
+import logging
+logging.getLogger("dotenv").setLevel(logging.ERROR)
 _root = Path(__file__).resolve().parent
 for _env in [_root / "backend" / ".env", _root / ".env"]:
     if _env.exists():
@@ -46,7 +49,7 @@ logger.add(
 
 def main():
     parser = argparse.ArgumentParser(description="Coletor de dados públicos de empresas")
-    parser.add_argument("--limite", type=int, default=50000, help="Limite de registros por fonte (padrão: 50000)")
+    parser.add_argument("--limite", type=int, default=500000, help="Limite de registros por fonte (padrão: 500.000)")
     parser.add_argument("--salvar-csv", action="store_true", help="Salvar dados em CSV")
     parser.add_argument("--salvar-json", action="store_true", help="Salvar dados em JSON")
     parser.add_argument("--integrar-banco", action="store_true", default=True, help="Integrar com banco PostgreSQL")
@@ -55,11 +58,12 @@ def main():
     parser.add_argument("--executar-cruzamento", action="store_true", help="Após integrar, executar cruzamento NCM+UF")
     
     args = parser.parse_args()
+    limite = args.limite
     
     logger.info("="*70)
     logger.info("COLETOR DE DADOS PÚBLICOS - EXECUÇÃO STANDALONE")
     logger.info("="*70)
-    logger.info(f"Limite por fonte: {args.limite:,}")
+    logger.info(f"Limite por fonte: {limite:,}")
     logger.info(f"Salvar CSV: {args.salvar_csv}")
     logger.info(f"Salvar JSON: {args.salvar_json}")
     logger.info(f"Integrar banco: {args.integrar_banco}")
@@ -73,15 +77,15 @@ def main():
         # Coletar dados
         if args.apenas_dou:
             logger.info("🔍 Coletando apenas do DOU...")
-            dados = collector.coletar_dou(limite=args.limite)
+            dados = collector.coletar_dou(limite=limite)
             collector.dados_coletados = dados
         elif args.apenas_bigquery:
             logger.info("🔍 Coletando apenas do BigQuery...")
-            dados = collector.coletar_bigquery_empresas_ncm(limite=args.limite)
+            dados = collector.coletar_bigquery_empresas_ncm(limite=limite)
             collector.dados_coletados = dados
         else:
             logger.info("🔍 Coletando de todas as fontes...")
-            dados = collector.coletar_todos(limite_por_fonte=args.limite)
+            dados = collector.coletar_todos(limite_por_fonte=limite)
         
         logger.info(f"✅ Total coletado: {len(dados):,} registros")
         
@@ -109,7 +113,7 @@ def main():
                     if args.executar_cruzamento and stats.get("registros_inseridos", 0) > 0:
                         try:
                             from services.cruzamento_ncm_uf import executar_cruzamento_ncm_uf
-                            cruzamento_stats = executar_cruzamento_ncm_uf(db, limite_grupos=5000)
+                            cruzamento_stats = executar_cruzamento_ncm_uf(db, limite_grupos=50000)
                             logger.info(f"✅ Cruzamento: {cruzamento_stats.get('grupos_ncm_uf', 0)} grupos NCM/UF")
                         except Exception as cx:
                             logger.error(f"❌ Erro no cruzamento: {cx}")

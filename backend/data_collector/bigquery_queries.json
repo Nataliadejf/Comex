@@ -1,0 +1,205 @@
+---QUERY---
+WITH 
+dicionario_id_exportacao_importacao AS (
+    SELECT
+        chave AS chave_id_exportacao_importacao,
+        valor AS descricao_id_exportacao_importacao
+    FROM `basedosdados.br_me_exportadoras_importadoras.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_exportacao_importacao'
+        AND id_tabela = 'estabelecimentos'
+)
+SELECT
+    dados.ano as ano,
+    dados.cnpj as cnpj,
+    dados.razao_social as razao_social,
+    descricao_id_exportacao_importacao AS id_exportacao_importacao,
+    dados.id_natureza_juridica AS id_natureza_juridica,
+    diretorio_id_natureza_juridica.descricao AS id_natureza_juridica_descricao,
+    dados.cnae_2_primaria AS cnae_2_primaria,
+    diretorio_cnae_2_primaria.descricao_subclasse AS cnae_2_primaria_descricao_subclasse,
+    diretorio_cnae_2_primaria.descricao_classe AS cnae_2_primaria_descricao_classe,
+    diretorio_cnae_2_primaria.descricao_grupo AS cnae_2_primaria_descricao_grupo,
+    diretorio_cnae_2_primaria.descricao_divisao AS cnae_2_primaria_descricao_divisao,
+    diretorio_cnae_2_primaria.descricao_secao AS cnae_2_primaria_descricao_secao,
+    dados.id_municipio AS id_municipio,
+    diretorio_id_municipio.nome AS id_municipio_nome,
+    dados.sigla_uf AS sigla_uf,
+    diretorio_sigla_uf.nome AS sigla_uf_nome,
+    dados.cep as cep,
+    dados.bairro as bairro,
+    dados.endereco as endereco,
+    dados.numero as numero
+FROM `basedosdados.br_me_exportadoras_importadoras.estabelecimentos` AS dados
+LEFT JOIN `dicionario_id_exportacao_importacao`
+    ON dados.id_exportacao_importacao = chave_id_exportacao_importacao
+LEFT JOIN (SELECT DISTINCT id_natureza_juridica,descricao  FROM `basedosdados.br_bd_diretorios_brasil.natureza_juridica`) AS diretorio_id_natureza_juridica
+    ON dados.id_natureza_juridica = diretorio_id_natureza_juridica.id_natureza_juridica
+LEFT JOIN (SELECT DISTINCT subclasse,descricao_subclasse,descricao_classe,descricao_grupo,descricao_divisao,descricao_secao  FROM `basedosdados.br_bd_diretorios_brasil.cnae_2`) AS diretorio_cnae_2_primaria
+    ON dados.cnae_2_primaria = diretorio_cnae_2_primaria.subclasse
+LEFT JOIN (SELECT DISTINCT id_municipio,nome  FROM `basedosdados.br_bd_diretorios_brasil.municipio`) AS diretorio_id_municipio
+    ON dados.id_municipio = diretorio_id_municipio.id_municipio
+LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf
+    ON dados.sigla_uf = diretorio_sigla_uf.sigla
+---QUERY---
+WITH 
+dicionario_id_pais AS (
+    SELECT
+        chave AS chave_id_pais,
+        valor AS descricao_id_pais
+    FROM `basedosdados.br_me_comex_stat.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_pais'
+        AND id_tabela = 'municipio_importacao'
+)
+SELECT
+    dados.ano as ano,
+    dados.mes as mes,
+    dados.id_sh4 as id_sh4,
+    descricao_id_pais AS id_pais,
+    dados.sigla_pais_iso3 AS sigla_pais_iso3,
+    diretorio_sigla_pais_iso3.nome AS sigla_pais_iso3_nome,
+    dados.sigla_uf AS sigla_uf,
+    diretorio_sigla_uf.nome AS sigla_uf_nome,
+    dados.id_municipio AS id_municipio,
+    diretorio_id_municipio.nome AS id_municipio_nome,
+    dados.peso_liquido_kg as peso_liquido_kg,
+    dados.valor_fob_dolar as valor_fob_dolar
+FROM `basedosdados.br_me_comex_stat.municipio_importacao` AS dados
+LEFT JOIN `dicionario_id_pais`
+    ON dados.id_pais = chave_id_pais
+LEFT JOIN (SELECT DISTINCT sigla_pais_iso3,nome  FROM `basedosdados.br_bd_diretorios_mundo.pais`) AS diretorio_sigla_pais_iso3
+    ON dados.sigla_pais_iso3 = diretorio_sigla_pais_iso3.sigla_pais_iso3
+LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf
+    ON dados.sigla_uf = diretorio_sigla_uf.sigla
+LEFT JOIN (SELECT DISTINCT id_municipio,nome  FROM `basedosdados.br_bd_diretorios_brasil.municipio`) AS diretorio_id_municipio
+    ON dados.id_municipio = diretorio_id_municipio.id_municipio
+---QUERY---
+WITH 
+dicionario_id_pais AS (
+    SELECT
+        chave AS chave_id_pais,
+        valor AS descricao_id_pais
+    FROM `basedosdados.br_me_comex_stat.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_pais'
+        AND id_tabela = 'municipio_exportacao'
+)
+SELECT
+    dados.ano as ano,
+    dados.mes as mes,
+    dados.id_sh4 as id_sh4,
+    descricao_id_pais AS id_pais,
+    dados.sigla_pais_iso3 AS sigla_pais_iso3,
+    diretorio_sigla_pais_iso3.nome AS sigla_pais_iso3_nome,
+    dados.sigla_uf AS sigla_uf,
+    diretorio_sigla_uf.nome AS sigla_uf_nome,
+    dados.id_municipio AS id_municipio,
+    diretorio_id_municipio.nome AS id_municipio_nome,
+    dados.peso_liquido_kg as peso_liquido_kg,
+    dados.valor_fob_dolar as valor_fob_dolar
+FROM `basedosdados.br_me_comex_stat.municipio_exportacao` AS dados
+LEFT JOIN `dicionario_id_pais`
+    ON dados.id_pais = chave_id_pais
+LEFT JOIN (SELECT DISTINCT sigla_pais_iso3,nome  FROM `basedosdados.br_bd_diretorios_mundo.pais`) AS diretorio_sigla_pais_iso3
+    ON dados.sigla_pais_iso3 = diretorio_sigla_pais_iso3.sigla_pais_iso3
+LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf
+    ON dados.sigla_uf = diretorio_sigla_uf.sigla
+LEFT JOIN (SELECT DISTINCT id_municipio,nome  FROM `basedosdados.br_bd_diretorios_brasil.municipio`) AS diretorio_id_municipio
+    ON dados.id_municipio = diretorio_id_municipio.id_municipio
+---QUERY---
+WITH 
+dicionario_id_unidade AS (
+    SELECT
+        chave AS chave_id_unidade,
+        valor AS descricao_id_unidade
+    FROM `basedosdados.br_me_comex_stat.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_unidade'
+        AND id_tabela = 'ncm_importacao'
+),
+dicionario_id_pais AS (
+    SELECT
+        chave AS chave_id_pais,
+        valor AS descricao_id_pais
+    FROM `basedosdados.br_me_comex_stat.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_pais'
+        AND id_tabela = 'ncm_importacao'
+),
+dicionario_id_via AS (
+    SELECT
+        chave AS chave_id_via,
+        valor AS descricao_id_via
+    FROM `basedosdados.br_me_comex_stat.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_via'
+        AND id_tabela = 'ncm_importacao'
+),
+dicionario_id_urf AS (
+    SELECT
+        chave AS chave_id_urf,
+        valor AS descricao_id_urf
+    FROM `basedosdados.br_me_comex_stat.dicionario`
+    WHERE
+        TRUE
+        AND nome_coluna = 'id_urf'
+        AND id_tabela = 'ncm_importacao'
+)
+SELECT
+    dados.ano as ano,
+    dados.mes as mes,
+    dados.id_ncm as id_ncm,
+    descricao_id_unidade AS id_unidade,
+    descricao_id_pais AS id_pais,
+    dados.sigla_pais_iso3 AS sigla_pais_iso3,
+    diretorio_sigla_pais_iso3.nome AS sigla_pais_iso3_nome,
+    dados.sigla_uf_ncm AS sigla_uf_ncm,
+    diretorio_sigla_uf_ncm.nome AS sigla_uf_ncm_nome,
+    descricao_id_via AS id_via,
+    descricao_id_urf AS id_urf,
+    dados.quantidade_estatistica as quantidade_estatistica,
+    dados.peso_liquido_kg as peso_liquido_kg,
+    dados.valor_fob_dolar as valor_fob_dolar,
+    dados.valor_frete as valor_frete,
+    dados.valor_seguro as valor_seguro
+FROM `basedosdados.br_me_comex_stat.ncm_importacao` AS dados
+LEFT JOIN `dicionario_id_unidade`
+    ON dados.id_unidade = chave_id_unidade
+LEFT JOIN `dicionario_id_pais`
+    ON dados.id_pais = chave_id_pais
+LEFT JOIN (SELECT DISTINCT sigla_pais_iso3,nome  FROM `basedosdados.br_bd_diretorios_mundo.pais`) AS diretorio_sigla_pais_iso3
+    ON dados.sigla_pais_iso3 = diretorio_sigla_pais_iso3.sigla_pais_iso3
+LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf_ncm
+    ON dados.sigla_uf_ncm = diretorio_sigla_uf_ncm.sigla
+LEFT JOIN `dicionario_id_via`
+    ON dados.id_via = chave_id_via
+LEFT JOIN `dicionario_id_urf`
+    ON dados.id_urf = chave_id_urf
+---QUERY---
+SELECT
+    dados.ano as ano,
+    dados.mes as mes,
+    dados.id_ncm as id_ncm,
+    dados.id_unidade as id_unidade,
+    dados.id_pais as id_pais,
+    dados.sigla_uf_ncm AS sigla_uf_ncm,
+    diretorio_sigla_uf_ncm.nome AS sigla_uf_ncm_nome,
+    dados.sigla_pais_iso3 AS sigla_pais_iso3,
+    diretorio_sigla_pais_iso3.nome AS sigla_pais_iso3_nome,
+    dados.id_via as id_via,
+    dados.id_urf as id_urf,
+    dados.quantidade_estatistica as quantidade_estatistica,
+    dados.peso_liquido_kg as peso_liquido_kg,
+    dados.valor_fob_dolar as valor_fob_dolar
+FROM `basedosdados.br_me_comex_stat.ncm_exportacao` AS dados
+LEFT JOIN (SELECT DISTINCT sigla,nome  FROM `basedosdados.br_bd_diretorios_brasil.uf`) AS diretorio_sigla_uf_ncm
+    ON dados.sigla_uf_ncm = diretorio_sigla_uf_ncm.sigla
+LEFT JOIN (SELECT DISTINCT sigla_pais_iso3,nome  FROM `basedosdados.br_bd_diretorios_mundo.pais`) AS diretorio_sigla_pais_iso3
+    ON dados.sigla_pais_iso3 = diretorio_sigla_pais_iso3.sigla_pais_iso3

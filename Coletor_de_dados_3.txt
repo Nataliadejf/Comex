@@ -1,0 +1,124 @@
+    def salvar_csv(self, caminho: str = None) -> str:
+        """
+        Salva dados coletados em CSV.
+        
+        Args:
+            caminho: Caminho do arquivo CSV (opcional)
+            
+        Returns:
+            Caminho do arquivo salvo
+        """
+        if not self.dados_coletados:
+            logger.warning("⚠️ Nenhum dado coletado para salvar")
+            return None
+        
+        if caminho is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            caminho = f"empresas_publicas_{timestamp}.csv"
+        
+        df = pd.DataFrame(self.dados_coletados)
+        df.to_csv(caminho, index=False, encoding='utf-8-sig')
+        
+        logger.info(f"✅ Dados salvos em: {caminho}")
+        return caminho
+    
+    def salvar_json(self, caminho: str = None) -> str:
+        """
+        Salva dados coletados em JSON.
+        
+        Args:
+            caminho: Caminho do arquivo JSON (opcional)
+            
+        Returns:
+            Caminho do arquivo salvo
+        """
+        if not self.dados_coletados:
+            logger.warning("⚠️ Nenhum dado coletado para salvar")
+            return None
+        
+        if caminho is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            caminho = f"empresas_publicas_{timestamp}.json"
+        
+        with open(caminho, 'w', encoding='utf-8') as f:
+            json.dump(self.dados_coletados, f, ensure_ascii=False, indent=2, default=str)
+        
+        logger.info(f"✅ Dados salvos em: {caminho}")
+        return caminho
+    
+    def integrar_banco_dados(self, db) -> Dict[str, int]:
+        """
+        Integra dados coletados com o banco de dados PostgreSQL.
+        
+        Args:
+            db: Sessão do banco de dados (Session)
+            
+        Returns:
+            Estatísticas da integração
+        """
+        stats = {
+            "total_registros": len(self.dados_coletados),
+            "registros_inseridos": 0,
+            "registros_atualizados": 0,
+            "erros": 0,
+        }
+        
+        logger.info(f"🔄 Integrando {stats['total_registros']} registros no banco de dados...")
+        
+        for registro in self.dados_coletados:
+            try:
+                # Verificar se já existe
+                ncm = registro.get("ncm")
+                tipo_operacao = registro.get("tipo_operacao")
+                empresa_nome = registro.get("empresa_nome")
+                data_operacao = registro.get("data_operacao")
+                
+                if not ncm or not tipo_operacao or not empresa_nome:
+                    continue
+                
+                # Converter data
+                if isinstance(data_operacao, str):
+                    try:
+                        data_operacao = datetime.fromisoformat(data_operacao).date()
+                    except:
+                        data_operacao = date.today()
+                elif not isinstance(data_operacao, date):
+                    data_operacao = date.today()
+                
+                # Buscar ou criar operação
+                operacao = OperacaoComex(
+                    ncm=ncm,
+                    descricao_produto=registro.get("descricao_ncm", ""),
+                    tipo_operacao=tipo_operacao,
+                    razao_social_importador=empresa_nome if tipo_operacao == "Importação" else None,
+                    razao_social_exportador=empresa_nome if tipo_operacao == "Exportação" else None,
+                    cnpj_importador=registro.get("cnpj") if tipo_operacao == "Importação" else None,
+                    cnpj_exportador=registro.get("cnpj") if tipo_operacao == "Exportação" else None,
+                    uf=registro.get("estado", ""),
+                    pais_origem_destino=registro.get("pais_origem_destino", ""),
+                    valor_fob=registro.get("valor_fob", 0.0),
+                    quantidade_estatistica=registro.get("quantidade"),
+                    data_operacao=data_operacao,
+                    mes_referencia=data_operacao.strftime("%Y-%m"),
+                    arquivo_origem=registro.get("fonte", "public_collector"),
+                    via_transporte="Outras",  # Default
+                )
+                
+                db.add(operacao)
+                stats["registros_inseridos"] += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Erro ao integrar registro: {e}")
+                stats["erros"] += 1
+                continue
+        
+        try:
+            db.commit()
+            logger.info(f"✅ Integração concluída: {stats['registros_inseridos']} inseridos")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"❌ Erro ao commitar: {e}")
+            stats["erros"] += stats["registros_inseridos"]
+            stats["registros_inseridos"] = 0
+        
+        return stats

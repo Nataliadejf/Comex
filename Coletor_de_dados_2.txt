@@ -1,0 +1,215 @@
+    def coletar_dou(self, termos_busca: List[str] = None, limite: int = 100) -> List[Dict[str, Any]]:
+        """
+        Coleta dados do Diário Oficial da União (DOU).
+        
+        Args:
+            termos_busca: Lista de termos para buscar
+            limite: Número máximo de registros a coletar
+            
+        Returns:
+            Lista de dados coletados
+        """
+        if termos_busca is None:
+            termos_busca = [
+                "licença de importação deferida",
+                "licença de exportação deferida",
+                "empresa habilitada radar",
+                "exportação autorizada",
+                "importação autorizada",
+            ]
+        
+        dados = []
+        logger.info(f"🔍 Iniciando coleta no DOU com {len(termos_busca)} termos de busca...")
+        
+        base_url = "https://www.in.gov.br/en/web/dou"
+        
+        for termo in termos_busca:
+            try:
+                logger.info(f"Buscando: {termo}")
+                
+                # URL de busca do DOU
+                url = f"{base_url}/-/extrato-de-licenca-de-importacao"
+                
+                response = self.session.get(url, timeout=self.timeout)
+                response.raise_for_status()
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Buscar textos que contenham o termo
+                textos = soup.find_all("div", class_="texto-dou")
+                if not textos:
+                    textos = soup.find_all("p")
+                
+                for texto_elem in textos[:limite]:
+                    texto = texto_elem.get_text()
+                    
+                    # Verificar se contém termos relevantes
+                    if any(t.lower() in texto.lower() for t in ["importação", "exportação", "ncm"]):
+                        # Extrair dados
+                        empresa_nome = self.extrair_nome_empresa(texto)
+                        cnpj = self.extrair_cnpj(texto)
+                        ncm = self.extrair_ncm(texto)
+                        data_operacao = self.extrair_data(texto)
+                        valor_fob = self.extrair_valor_fob(texto)
+                        quantidade = self.extrair_quantidade(texto)
+                        municipio, estado = self.extrair_municipio_estado(texto)
+                        
+                        # Determinar tipo de operação
+                        tipo_operacao = None
+                        if "importação" in texto.lower() or "importacao" in texto.lower():
+                            tipo_operacao = "Importação"
+                        elif "exportação" in texto.lower() or "exportacao" in texto.lower():
+                            tipo_operacao = "Exportação"
+                        
+                        # Só adicionar se tiver dados mínimos
+                        if empresa_nome and (ncm or tipo_operacao):
+                            registro = {
+                                "empresa_nome": empresa_nome,
+                                "cnpj": cnpj,
+                                "tipo_operacao": tipo_operacao,
+                                "ncm": ncm,
+                                "valor_fob": valor_fob,
+                                "quantidade": quantidade,
+                                "data_operacao": data_operacao.isoformat() if data_operacao else None,
+                                "municipio": municipio,
+                                "estado": estado,
+                                "fonte": "DOU",
+                                "texto_origem": texto[:500],  # Primeiros 500 caracteres
+                            }
+                            dados.append(registro)
+                            logger.debug(f"✅ Coletado: {empresa_nome} - {ncm}")
+                
+                time.sleep(self.delay_between_requests)
+                
+            except Exception as e:
+                logger.error(f"❌ Erro ao coletar DOU para termo '{termo}': {e}")
+                continue
+        
+        logger.info(f"✅ Coletados {len(dados)} registros do DOU")
+        return dados
+    
+    def coletar_portal_transparencia(self, limite: int = 100) -> List[Dict[str, Any]]:
+        """
+        Coleta dados do Portal da Transparência.
+        
+        Args:
+            limite: Número máximo de registros a coletar
+            
+        Returns:
+            Lista de dados coletados
+        """
+        dados = []
+        logger.info("🔍 Iniciando coleta no Portal da Transparência...")
+        
+        try:
+            # API do Portal da Transparência
+            base_url = "https://api.portaldatransparencia.gov.br"
+            
+            # Buscar licenças de importação/exportação
+            # Nota: A API real pode ter endpoints diferentes
+            url = f"{base_url}/api-de-dados/licencas-importacao"
+            
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            
+            # Processar resposta (ajustar conforme estrutura real da API)
+            if response.status_code == 200:
+                logger.info("✅ Dados do Portal da Transparência coletados")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Portal da Transparência não disponível: {e}")
+        
+        return dados
+    
+    def coletar_dados_gov_br(self, limite: int = 100) -> List[Dict[str, Any]]:
+        """
+        Coleta dados do dados.gov.br.
+        
+        Args:
+            limite: Número máximo de registros a coletar
+            
+        Returns:
+            Lista de dados coletados
+        """
+        dados = []
+        logger.info("🔍 Iniciando coleta no dados.gov.br...")
+        
+        try:
+            # API do dados.gov.br
+            base_url = "https://dados.gov.br/api/3/action"
+            
+            # Buscar datasets relacionados a comércio exterior
+            url = f"{base_url}/package_search"
+            params = {
+                "q": "comércio exterior importação exportação",
+                "rows": limite
+            }
+            
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+            
+            if response.status_code == 200:
+                results = response.json()
+                logger.info(f"✅ Encontrados {len(results.get('result', {}).get('results', []))} datasets")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ dados.gov.br não disponível: {e}")
+        
+        return dados
+    
+    def coletar_todos(self, limite_por_fonte: int = 100) -> List[Dict[str, Any]]:
+        """
+        Coleta dados de todas as fontes disponíveis.
+        
+        Args:
+            limite_por_fonte: Limite de registros por fonte
+            
+        Returns:
+            Lista consolidada de dados coletados
+        """
+        logger.info("="*60)
+        logger.info("COLETA DE DADOS PÚBLICOS - INÍCIO")
+        logger.info("="*60)
+        
+        todos_dados = []
+        
+        # 1. DOU
+        try:
+            dados_dou = self.coletar_dou(limite=limite_por_fonte)
+            todos_dados.extend(dados_dou)
+        except Exception as e:
+            logger.error(f"❌ Erro ao coletar DOU: {e}")
+        
+        # 2. Portal da Transparência
+        try:
+            dados_transparencia = self.coletar_portal_transparencia(limite=limite_por_fonte)
+            todos_dados.extend(dados_transparencia)
+        except Exception as e:
+            logger.error(f"❌ Erro ao coletar Portal da Transparência: {e}")
+        
+        # 3. dados.gov.br
+        try:
+            dados_gov = self.coletar_dados_gov_br(limite=limite_por_fonte)
+            todos_dados.extend(dados_gov)
+        except Exception as e:
+            logger.error(f"❌ Erro ao coletar dados.gov.br: {e}")
+        
+        # Remover duplicatas (por empresa + NCM + data)
+        dados_unicos = {}
+        for registro in todos_dados:
+            chave = (
+                registro.get("empresa_nome"),
+                registro.get("ncm"),
+                registro.get("data_operacao")
+            )
+            if chave not in dados_unicos:
+                dados_unicos[chave] = registro
+        
+        dados_finais = list(dados_unicos.values())
+        
+        logger.info("="*60)
+        logger.info(f"✅ COLETA CONCLUÍDA: {len(dados_finais)} registros únicos")
+        logger.info("="*60)
+        
+        self.dados_coletados = dados_finais
+        return dados_finais

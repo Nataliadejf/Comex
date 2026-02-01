@@ -1,0 +1,161 @@
+"""
+Coletor de dados públicos de empresas importadoras/exportadoras.
+Relaciona empresas com NCM e município.
+"""
+import sys
+from pathlib import Path
+import re
+import requests
+import pandas as pd
+from typing import Dict, List, Optional, Any, Tuple
+from loguru import logger
+import time
+from datetime import datetime, date
+from bs4 import BeautifulSoup
+import json
+
+# Adicionar backend ao path
+backend_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(backend_dir))
+
+from database.models import OperacaoComex
+
+
+class PublicCompanyCollector:
+    """Coletor de dados públicos de empresas importadoras/exportadoras."""
+    
+    def __init__(self):
+        self.dados_coletados: List[Dict[str, Any]] = []
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        self.timeout = 30
+        self.delay_between_requests = 1
+    
+    def validar_cnpj(self, cnpj: str) -> bool:
+        """Valida formato de CNPJ."""
+        cnpj_limpo = re.sub(r'[^\d]', '', str(cnpj))
+        return len(cnpj_limpo) == 14
+    
+    def limpar_cnpj(self, cnpj: str) -> str:
+        """Remove formatação do CNPJ."""
+        return re.sub(r'[^\d]', '', str(cnpj))
+    
+    def extrair_ncm(self, texto: str) -> Optional[str]:
+        """Extrai código NCM de um texto."""
+        padroes = [
+            r'NCM[:\s]*(\d{4}\.?\d{2}\.?\d{2})',
+            r'(\d{4}\.\d{2}\.\d{2})',
+            r'(\d{8})',
+            r'Código[:\s]*(\d{4}\.?\d{2}\.?\d{2})',
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto, re.IGNORECASE)
+            if match:
+                ncm = match.group(1).replace('.', '')
+                if len(ncm) == 8:
+                    return ncm
+        return None
+    
+    def extrair_cnpj(self, texto: str) -> Optional[str]:
+        """Extrai CNPJ de um texto."""
+        padroes = [
+            r'CNPJ[:\s]*(\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2})',
+            r'(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})',
+            r'(\d{14})',
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto, re.IGNORECASE)
+            if match:
+                cnpj = self.limpar_cnpj(match.group(1))
+                if self.validar_cnpj(cnpj):
+                    return cnpj
+        return None
+    
+    def extrair_nome_empresa(self, texto: str) -> Optional[str]:
+        """Extrai nome da empresa de um texto."""
+        padroes = [
+            r'Razão Social[:\s]*([A-ZÁÉÍÓÚÇÃÊÔÀ][A-ZÁÉÍÓÚÇÃÊÔÀ\s&.,-]+(?:LTDA|S\.A\.|EIRELI|ME|EPP))',
+            r'Empresa[:\s]*([A-ZÁÉÍÓÚÇÃÊÔÀ][A-ZÁÉÍÓÚÇÃÊÔÀ\s&.,-]+(?:LTDA|S\.A\.|EIRELI|ME|EPP))',
+            r'Importador[:\s]*([A-ZÁÉÍÓÚÇÃÊÔÀ][A-ZÁÉÍÓÚÇÃÊÔÀ\s&.,-]+(?:LTDA|S\.A\.|EIRELI|ME|EPP))',
+            r'Exportador[:\s]*([A-ZÁÉÍÓÚÇÃÊÔÀ][A-ZÁÉÍÓÚÇÃÊÔÀ\s&.,-]+(?:LTDA|S\.A\.|EIRELI|ME|EPP))',
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto, re.IGNORECASE)
+            if match:
+                nome = match.group(1).strip()
+                # Filtrar MEI, microempresa, EPP
+                if not any(x in nome.upper() for x in ['MEI', 'MICROEMPRESA', 'EPP']):
+                    return nome
+        return None
+    
+    def extrair_data(self, texto: str) -> Optional[date]:
+        """Extrai data de um texto."""
+        padroes = [
+            r'(\d{2})/(\d{2})/(\d{4})',
+            r'(\d{4})-(\d{2})-(\d{2})',
+            r'(\d{2})\.(\d{2})\.(\d{4})',
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto)
+            if match:
+                try:
+                    if '/' in match.group(0):
+                        dia, mes, ano = match.groups()
+                    elif '-' in match.group(0):
+                        ano, mes, dia = match.groups()
+                    else:
+                        dia, mes, ano = match.groups()
+                    return date(int(ano), int(mes), int(dia))
+                except:
+                    continue
+        return None
+    
+    def extrair_valor_fob(self, texto: str) -> Optional[float]:
+        """Extrai valor FOB de um texto."""
+        padroes = [
+            r'Valor FOB[:\s]*USD[:\s]*([\d.,]+)',
+            r'FOB[:\s]*([\d.,]+)',
+            r'USD[:\s]*([\d.,]+)',
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto, re.IGNORECASE)
+            if match:
+                try:
+                    valor_str = match.group(1).replace('.', '').replace(',', '.')
+                    return float(valor_str)
+                except:
+                    continue
+        return None
+    
+    def extrair_quantidade(self, texto: str) -> Optional[float]:
+        """Extrai quantidade de um texto."""
+        match = re.search(r'Quantidade[:\s]*([\d.,]+)', texto, re.IGNORECASE)
+        if match:
+            try:
+                qtd_str = match.group(1).replace('.', '').replace(',', '.')
+                return float(qtd_str)
+            except:
+                pass
+        return None
+    
+    def extrair_municipio_estado(self, texto: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extrai município e estado de um texto."""
+        padroes = [
+            r'Município[:\s]*([A-ZÁÉÍÓÚÇÃÊÔÀ][a-záéíóúçãêôà\s]+)[/\-]?([A-Z]{2})',
+            r'([A-ZÁÉÍÓÚÇÃÊÔÀ][a-záéíóúçãêôà\s]+)[/\-]\s*([A-Z]{2})',
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto)
+            if match:
+                municipio = match.group(1).strip()
+                estado = match.group(2).strip()
+                return municipio, estado
+        return None, None
