@@ -254,6 +254,26 @@ Depois que a coleta e o cruzamento rodaram com sucesso (ex.: "COLETA CONCLUÍDA 
 
 3. **Testar no dashboard**  
    Após o deploy, acesse o dashboard e confira:
-   - Cards/resumo (totais de operações, empresas recomendadas).
-   - Lista de empresas recomendadas (filtros por UF, tipo, NCM).
+   - Cards/resumo (totais de operações, **Valor provável (por empresas)** quando houver dados em empresas_recomendadas).
+   - Lista de empresas recomendadas e empresas sugeridas (com **Valor provável por empresas** na tabela).
    - Endpoint direto: `GET /dashboard/empresas-recomendadas?limite=50`.
+
+4. **Por que o dashboard no Render continua vazio após o deploy?**  
+   O dashboard lê os dados do **PostgreSQL do Render**. Se você rodou a coleta só **no seu PC**, os dados ficaram no banco **local**; o banco do Render não é preenchido automaticamente. Para o dashboard na nuvem mostrar dados:
+
+   - **Opção A – Disparar coleta pela API no Render**  
+     No Render, configure as variáveis de ambiente do backend: `DATABASE_URL` (PostgreSQL do Render) e `GOOGLE_APPLICATION_CREDENTIALS_JSON` (chave do BigQuery). Depois dispare a coleta:
+     ```http
+     POST https://comex-backend-gecp.onrender.com/api/coletar-dados-publicos
+     Content-Type: application/json
+
+     {"limite_por_fonte": 5000, "integrar_banco": true, "executar_cruzamento": true}
+     ```
+     Assim a coleta roda no servidor e grava em **operacoes_comex** e **empresas_recomendadas** no PostgreSQL do Render.
+
+   - **Opção B – Rodar o script local apontando para o banco do Render**  
+     No `.env` local, use temporariamente o `DATABASE_URL` do PostgreSQL do Render (copie do painel do Render). Rode:
+     ```powershell
+     python coletar_dados_publicos_standalone.py --apenas-bigquery --integrar-banco --executar-cruzamento
+     ```
+     Os dados serão gravados no banco do Render. Depois volte o `DATABASE_URL` local se quiser.

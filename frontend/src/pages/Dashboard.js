@@ -656,6 +656,7 @@ const Dashboard = () => {
     quantidade_estatistica_importacoes: 0,
     quantidade_estatistica_exportacoes: 0,
     quantidade_estatistica_total: 0,
+    valor_provavel_empresas: null,
     principais_ncms: [],
     principais_paises: [],
     registros_por_mes: {},
@@ -1125,6 +1126,49 @@ const Dashboard = () => {
             </div>
           </Card>
         </Col>
+        {(statsFinal.valor_provavel_empresas != null && statsFinal.valor_provavel_empresas > 0) && (
+        <Col xs={24} sm={12} lg={6}>
+          <Card 
+            className="dashboard-metric-card"
+            style={{ 
+              borderRadius: '8px',
+              background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+              border: 'none',
+              height: '100%',
+            }}
+            bodyStyle={{ padding: 'clamp(12px, 3vw, 24px)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ flex: '1', minWidth: 0 }}>
+                <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
+                  Valor provável (por empresas)
+                </div>
+                <div className="metric-value" style={{ 
+                  color: '#fff', 
+                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)', 
+                  fontWeight: 'bold', 
+                  lineHeight: '1.2', 
+                  wordBreak: 'break-word',
+                  whiteSpace: 'normal',
+                  overflow: 'visible',
+                }}>
+                  {formatCurrency(statsFinal.valor_provavel_empresas)}
+                </div>
+                <div style={{ 
+                  color: 'rgba(255,255,255,0.7)', 
+                  fontSize: isMobile ? '11px' : '10px', 
+                  marginTop: '4px', 
+                  lineHeight: '1.3',
+                  display: isMobile ? 'none' : 'block',
+                }}>
+                  Soma por empresas recomendadas (BigQuery/cruzamento)
+                </div>
+              </div>
+              <DollarOutlined style={{ fontSize: 'clamp(24px, 6vw, 40px)', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
+            </div>
+          </Card>
+        </Col>
+        )}
         <Col xs={24} sm={12} lg={6}>
           <Card 
             className="dashboard-metric-card"
@@ -1776,20 +1820,20 @@ const Dashboard = () => {
                 <Table
                   size="small"
                   dataSource={sugestoesEmpresas}
-                  rowKey="cnpj"
+                  rowKey={(r, i) => r.cnpj || r.razao_social || `${i}`}
                   pagination={{ pageSize: 5 }}
                   columns={[
                     {
                       title: 'Empresa',
-                      dataIndex: 'razao_social',
+                      dataIndex: 'nome',
                       key: 'empresa',
                       ellipsis: true,
                       render: (text, record) => (
                         <div>
-                          <div style={{ fontWeight: 600 }}>{text || record.nome_fantasia}</div>
-                          {record.uf && (
+                          <div style={{ fontWeight: 600 }}>{text || record.razao_social || record.nome_fantasia}</div>
+                          {(record.uf || record.estado) && (
                             <Tag size="small">
-                              {obterNomeEstado(record.uf) || record.uf}
+                              {obterNomeEstado(record.uf || record.estado) || record.uf || record.estado}
                             </Tag>
                           )}
                           {record.cnae && <Tag size="small" color="blue">CNAE: {record.cnae}</Tag>}
@@ -1797,38 +1841,44 @@ const Dashboard = () => {
                       ),
                     },
                     {
+                      title: 'Valor provável (por empresas)',
+                      dataIndex: 'valor_total',
+                      key: 'valor_total',
+                      width: 140,
+                      align: 'right',
+                      render: (v) => v != null ? `US$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '-',
+                      sorter: (a, b) => (a.valor_total || 0) - (b.valor_total || 0),
+                    },
+                    {
                       title: 'Potencial',
-                      dataIndex: 'potencial_sinergia',
+                      dataIndex: 'peso_participacao',
                       key: 'potencial',
                       width: 100,
-                      render: (valor) => {
-                        const percent = (valor * 100).toFixed(0);
-                        const color = valor > 0.7 ? 'green' : valor > 0.3 ? 'orange' : 'red';
+                      render: (valor, record) => {
+                        const v = valor ?? record.potencial_sinergia;
+                        if (v == null) return '-';
+                        const percent = typeof v === 'number' && v <= 1 ? (v * 100).toFixed(0) : Number(v).toFixed(1);
+                        const color = v > 0.7 || v > 70 ? 'green' : v > 0.3 || v > 30 ? 'orange' : 'default';
                         return <Tag color={color}>{percent}%</Tag>;
                       },
-                      sorter: (a, b) => a.potencial_sinergia - b.potencial_sinergia,
+                      sorter: (a, b) => (a.peso_participacao ?? a.potencial_sinergia ?? 0) - (b.peso_participacao ?? b.potencial_sinergia ?? 0),
                     },
                     {
-                      title: 'Importações',
-                      dataIndex: ['importacoes', 'total_operacoes'],
-                      key: 'imp',
+                      title: 'Tipo',
+                      dataIndex: 'tipo',
+                      key: 'tipo',
                       width: 100,
-                      align: 'center',
+                      render: (v) => v ? (v === 'importadora' ? 'Importadora' : v === 'exportadora' ? 'Exportadora' : v) : '-',
                     },
                     {
-                      title: 'Exportações',
-                      dataIndex: ['exportacoes', 'total_operacoes'],
-                      key: 'exp',
-                      width: 100,
-                      align: 'center',
-                    },
-                    {
-                      title: 'Sugestão',
-                      dataIndex: 'sugestao',
+                      title: 'Sugestão / Fonte',
+                      dataIndex: 'fonte',
                       key: 'sugestao',
-                      ellipsis: true,
-                      render: (text) => (
-                        <div style={{ fontSize: '12px', color: '#666' }}>{text}</div>
+                      width: 120,
+                      render: (text, record) => (
+                        <div style={{ fontSize: '12px', color: '#666' }}>
+                          {text || record.sugestao || (record.fonte === 'empresas_recomendadas' ? 'BigQuery/cruzamento' : '')}
+                        </div>
                       ),
                     },
                   ]}
@@ -1870,70 +1920,78 @@ const Dashboard = () => {
                 <Table
                   size="small"
                   dataSource={empresasRecomendadas}
-                  rowKey={(record, index) => `${record.CNPJ}-${record['NCM Relacionado']}-${index}`}
+                  rowKey={(record, index) => `${record.cnpj || record.CNPJ || ''}-${index}`}
                   pagination={{ pageSize: 10 }}
-                  scroll={{ x: 1200 }}
+                  scroll={{ x: 1000 }}
                   columns={[
                     {
                       title: 'CNPJ',
-                      dataIndex: 'CNPJ',
+                      dataIndex: 'cnpj',
                       key: 'cnpj',
-                      width: 150,
+                      width: 140,
+                      render: (v, r) => v || r.CNPJ,
                     },
                     {
                       title: 'Razão Social',
-                      dataIndex: 'Razão Social',
-                      key: 'razao_social',
+                      dataIndex: 'nome',
+                      key: 'nome',
                       ellipsis: true,
+                      render: (v, r) => v || r['Razão Social'],
                     },
                     {
                       title: 'Estado',
-                      dataIndex: 'Estado',
-                      key: 'estado',
+                      dataIndex: 'uf',
+                      key: 'uf',
+                      width: 90,
+                      render: (v, r) => obterNomeEstado(v || r.estado) || v || r.Estado,
+                    },
+                    {
+                      title: 'Tipo',
+                      dataIndex: 'tipo',
+                      key: 'tipo',
                       width: 100,
+                      render: (v) => v ? (v === 'importadora' ? 'Importadora' : v === 'exportadora' ? 'Exportadora' : v) : '-',
                     },
                     {
-                      title: 'NCM',
-                      dataIndex: 'NCM Relacionado',
-                      key: 'ncm',
-                      width: 120,
+                      title: 'Valor provável (USD)',
+                      dataIndex: 'valor_total',
+                      key: 'valor_total',
+                      width: 130,
+                      render: (v, r) => {
+                        const val = v ?? r.valor_importacao_usd + r.valor_exportacao_usd ?? 0;
+                        return val ? `US$ ${Number(val).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '-';
+                      },
+                      align: 'right',
+                      sorter: (a, b) => (a.valor_total || 0) - (b.valor_total || 0),
                     },
                     {
-                      title: 'Importado (R$)',
-                      dataIndex: 'Importado (R$)',
-                      key: 'importado',
-                      width: 150,
-                      render: (valor) => valor ? `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-',
+                      title: 'Imp. (USD)',
+                      dataIndex: 'valor_importacao_usd',
+                      key: 'valor_importacao_usd',
+                      width: 100,
+                      render: (v) => v ? `US$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}` : '-',
                       align: 'right',
                     },
                     {
-                      title: 'Exportado (R$)',
-                      dataIndex: 'Exportado (R$)',
-                      key: 'exportado',
-                      width: 150,
-                      render: (valor) => valor ? `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-',
+                      title: 'Exp. (USD)',
+                      dataIndex: 'valor_exportacao_usd',
+                      key: 'valor_exportacao_usd',
+                      width: 100,
+                      render: (v) => v ? `US$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0 })}` : '-',
                       align: 'right',
                     },
                     {
                       title: 'Peso',
-                      dataIndex: 'Peso Participação (0-100)',
+                      dataIndex: 'peso_participacao',
                       key: 'peso',
-                      width: 100,
-                      render: (valor) => {
-                        const color = valor > 50 ? 'green' : valor > 20 ? 'orange' : 'default';
-                        return <Tag color={color}>{valor.toFixed(1)}</Tag>;
+                      width: 90,
+                      render: (valor, r) => {
+                        const v = valor ?? r['Peso Participação (0-100)'];
+                        if (v == null) return '-';
+                        const color = v > 50 ? 'green' : v > 20 ? 'orange' : 'default';
+                        return <Tag color={color}>{Number(v).toFixed(1)}</Tag>;
                       },
-                      sorter: (a, b) => a['Peso Participação (0-100)'] - b['Peso Participação (0-100)'],
-                    },
-                    {
-                      title: 'Sugestão',
-                      dataIndex: 'Sugestão',
-                      key: 'sugestao',
-                      width: 150,
-                      render: (text) => {
-                        const color = text === 'CLIENTE_POTENCIAL' ? 'blue' : 'green';
-                        return <Tag color={color}>{text}</Tag>;
-                      },
+                      sorter: (a, b) => (a.peso_participacao || 0) - (b.peso_participacao || 0),
                     },
                   ]}
                 />

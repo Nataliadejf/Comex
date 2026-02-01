@@ -354,6 +354,7 @@ class DashboardStats(BaseModel):
     quantidade_estatistica_importacoes: Optional[float] = None
     quantidade_estatistica_exportacoes: Optional[float] = None
     quantidade_estatistica_total: Optional[float] = None
+    valor_provavel_empresas: Optional[float] = None  # Soma de valores por empresas recomendadas (BigQuery/cruzamento)
     principais_ncms: List[dict]
     principais_paises: List[dict]
     registros_por_mes: dict
@@ -3812,15 +3813,27 @@ async def get_dashboard_stats(
     logger.info(f"📊 Total de Países/Estados: {len(principais_paises_list)}")
     logger.info("="*80)
     
+    # Valor provável por empresas (soma de empresas_recomendadas - BigQuery/cruzamento)
+    valor_provavel_empresas = None
+    try:
+        soma_imp = db.query(func.sum(EmpresasRecomendadas.valor_total_importacao_usd)).scalar() or 0
+        soma_exp = db.query(func.sum(EmpresasRecomendadas.valor_total_exportacao_usd)).scalar() or 0
+        valor_provavel_empresas = float(soma_imp or 0) + float(soma_exp or 0)
+        if valor_provavel_empresas > 0:
+            logger.info(f"💰 Valor provável (por empresas recomendadas): ${valor_provavel_empresas:,.0f} USD")
+    except Exception as e:
+        logger.debug(f"Erro ao calcular valor_provavel_empresas: {e}")
+
     # Se não houver dados, retornar resposta vazia rapidamente (não travar)
     if valor_total == 0 and not principais_ncms_list and not principais_paises_list:
         logger.warning("⚠️ Nenhum dado encontrado, retornando resposta vazia")
         return DashboardStats(
             volume_importacoes=0.0,
             volume_exportacoes=0.0,
-            valor_total_usd=0.0,
+            valor_total_usd=float(valor_provavel_empresas) if valor_provavel_empresas else 0.0,
             valor_total_importacoes=0.0,
             valor_total_exportacoes=0.0,
+            valor_provavel_empresas=valor_provavel_empresas if valor_provavel_empresas else None,
             principais_ncms=[],
             principais_paises=[],
             registros_por_mes={},
@@ -3837,6 +3850,7 @@ async def get_dashboard_stats(
         quantidade_estatistica_importacoes=float(quantidade_imp) if quantidade_imp > 0 else 0.0,
         quantidade_estatistica_exportacoes=float(quantidade_exp) if quantidade_exp > 0 else 0.0,
         quantidade_estatistica_total=float(quantidade_total) if quantidade_total > 0 else 0.0,
+        valor_provavel_empresas=valor_provavel_empresas if valor_provavel_empresas else None,
         principais_ncms=principais_ncms_list if principais_ncms_list else [],
         principais_paises=principais_paises_list if principais_paises_list else [],
         registros_por_mes=registros_dict if registros_dict else {},
