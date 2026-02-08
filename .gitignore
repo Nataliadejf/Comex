@@ -34,10 +34,11 @@ env/
 *.swo
 *~
 
-# Environment variables (NUNCA commitar credenciais; .env pode estar na raiz ou em backend/)
+# Environment variables
 .env
 .env.local
-backend/.env
+.env.development
+frontend/.env.development
 
 # Database
 *.db
@@ -49,7 +50,7 @@ backend/.env
 logs/
 
 # Data directory
-D:/comex_data/
+D:\comex_data\
 comex_data/
 
 # Node

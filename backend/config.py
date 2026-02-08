@@ -49,6 +49,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False  # Permite ler ENVIRONMENT mesmo com campo environment
+        extra = "ignore"  # Ignora variáveis de ambiente não declaradas (ex.: GOOGLE_APPLICATION_CREDENTIALS_JSON)
         # Mapear campos para variáveis de ambiente em maiúsculas
         fields = {
             'environment': {'env': 'ENVIRONMENT'},

@@ -37,9 +37,5 @@ python-multipart==0.0.6
 # Database migrations
 alembic==1.13.1
 
-# BigQuery (para coleta de dados públicos)
-google-cloud-bigquery>=3.11.0
-google-auth>=2.23.0
-
 # PDF Export (opcional)
 reportlab==4.0.7

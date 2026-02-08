@@ -142,11 +142,36 @@ export const dashboardAPI = {
     const params = paramsObj || {};
 
     const urlParams = new URLSearchParams();
-    urlParams.append('meses', params.meses || 24);
-    if (params.tipoOperacao) urlParams.append('tipo_operacao', params.tipoOperacao);
-    if (params.ncm) urlParams.append('ncm', params.ncm);
+    // Backend aceita até 120 meses (10 anos); cap para evitar 422
+    const mesesVal = Math.min(120, Math.max(1, parseInt(params.meses, 10) || 24));
+    urlParams.append('meses', String(mesesVal));
+    if (params.tipoOperacao && String(params.tipoOperacao).trim()) {
+      urlParams.append('tipo_operacao', String(params.tipoOperacao).trim());
+    }
+    if (params.ncm && String(params.ncm).trim()) urlParams.append('ncm', String(params.ncm).trim());
     if (params.ncms && Array.isArray(params.ncms)) {
-      params.ncms.forEach(ncm => urlParams.append('ncms', ncm));
+      params.ncms.forEach(ncm => {
+        if (ncm != null && String(ncm).trim()) urlParams.append('ncms', String(ncm).trim());
+      });
+    }
+    if (params.data_inicio && /^\d{4}-\d{2}-\d{2}$/.test(String(params.data_inicio))) {
+      urlParams.append('data_inicio', params.data_inicio);
+    }
+    if (params.data_fim && /^\d{4}-\d{2}-\d{2}$/.test(String(params.data_fim))) {
+      urlParams.append('data_fim', params.data_fim);
+    }
+    const empImp = params.empresa_importadora != null ? String(params.empresa_importadora).trim() : '';
+    const empExp = params.empresa_exportadora != null ? String(params.empresa_exportadora).trim() : '';
+    if (empImp) {
+      urlParams.append('empresa_importadora', empImp);
+    }
+    if (empExp) {
+      urlParams.append('empresa_exportadora', empExp);
+    }
+    if (empImp || empExp) {
+      urlParams.append('_', String(Date.now()));
+      console.log('🔗 URL da API (verifique se é o backend local):', API_BASE_URL);
+      console.log('🔗 Filtro na URL:', empImp ? `empresa_importadora=${encodeURIComponent(empImp)}` : '', empExp ? `empresa_exportadora=${encodeURIComponent(empExp)}` : '');
     }
     
     const url = `/dashboard/stats?${urlParams.toString()}`;
@@ -175,7 +200,9 @@ export const dashboardAPI = {
         if (typeof response.data === 'string' && response.data.trim().startsWith('<!')) {
           throw new Error(`Erro ${response.status}: Servidor retornou HTML. Verifique os logs do backend.`);
         }
-        throw new Error(`Erro ${response.status}: ${response.data?.detail || response.data || response.statusText}`);
+        const detail = response.data?.detail;
+        const detailStr = typeof detail === 'string' ? detail : (Array.isArray(detail) ? detail.map(d => d?.msg || JSON.stringify(d)).join(', ') : (detail && typeof detail === 'object' ? JSON.stringify(detail) : response.data?.detail || response.data || response.statusText));
+        throw new Error(`Erro ${response.status}: ${detailStr}`);
       }
       
       // Validar resposta

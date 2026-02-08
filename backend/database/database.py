@@ -53,7 +53,8 @@ if database_url and not is_valid_database_url(database_url):
 # Se não tiver DATABASE_URL válida, usar SQLite local
 if not database_url or database_url == "":
     db_path = settings.data_dir / "database" / "comex.db"
-    database_url = f"sqlite:///{db_path.absolute()}"
+    path_str = str(db_path.absolute()).replace("\\", "/")
+    database_url = f"sqlite:///{path_str}"
 
 # Criar engine do SQLAlchemy com tratamento de erro
 try:
@@ -76,7 +77,8 @@ except (ValueError, Exception) as e:
         # Fallback para SQLite
         db_path = settings.data_dir / "database" / "comex.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        database_url = f"sqlite:///{db_path.absolute()}"
+        path_str = str(db_path.absolute()).replace("\\", "/")
+        database_url = f"sqlite:///{path_str}"
         engine = create_engine(
             database_url,
             connect_args={"check_same_thread": False},

@@ -77,21 +77,34 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState(null);
   const [error, setError] = useState(null);
-  const [periodo, setPeriodo] = useState([dayjs().subtract(2, 'year'), dayjs()]);
+  // Período padrão: 01/01/2024 até a data atual (gráficos de 2024 até hoje)
+  const [periodo, setPeriodo] = useState([
+    dayjs('2024-01-01'),
+    dayjs().endOf('day'),
+  ]);
   const [tipoOperacao, setTipoOperacao] = useState(null);
   const [ncmFiltro, setNcmFiltro] = useState(null);
   const [ncmsFiltro, setNcmsFiltro] = useState([]);
-  const [meses, setMeses] = useState(24); // Padrão: 2 anos
+  const [meses, setMeses] = useState(() => {
+    const start = dayjs('2024-01-01');
+    const end = dayjs();
+    return Math.min(120, Math.max(1, end.diff(start, 'month') + 1));
+  }); // Padrão: de jan/2024 até hoje (máx. 120 meses = 10 anos, conforme backend)
   const [tabelaDados, setTabelaDados] = useState([]);
   const [loadingTabela, setLoadingTabela] = useState(false);
   const [paginacaoTabela, setPaginacaoTabela] = useState({ current: 1, pageSize: 10, total: 0 });
   const [empresaImportadora, setEmpresaImportadora] = useState(null);
   const [empresaExportadora, setEmpresaExportadora] = useState(null);
+  const [empresaImportadoraInput, setEmpresaImportadoraInput] = useState('');
+  const [empresaExportadoraInput, setEmpresaExportadoraInput] = useState('');
   const [importadorasOptions, setImportadorasOptions] = useState([]);
   const [exportadorasOptions, setExportadorasOptions] = useState([]);
   const [loadingImportadoras, setLoadingImportadoras] = useState(false);
   const [loadingExportadoras, setLoadingExportadoras] = useState(false);
   const isLoadingRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const importadorInputRef = useRef('');
+  const exportadorInputRef = useRef('');
   
   // Estados para sinergias e sugestões
   const [sinergiasEstado, setSinergiasEstado] = useState(null);
@@ -207,11 +220,11 @@ const Dashboard = () => {
     []
   );
 
-  // Atualizar meses quando período mudar
+  // Atualizar meses quando período mudar (2024 até hoje; máx. 120 meses = 10 anos, conforme backend)
   useEffect(() => {
     if (periodo && periodo[0] && periodo[1]) {
       const mesesCalculados = Math.ceil(periodo[1].diff(periodo[0], 'month', true)) + 1;
-      const mesesAjustados = Math.max(1, Math.min(24, Math.round(mesesCalculados)));
+      const mesesAjustados = Math.max(1, Math.min(120, Math.round(mesesCalculados)));
       setMeses((prevMeses) => {
         if (prevMeses !== mesesAjustados) {
           return mesesAjustados;
@@ -221,9 +234,16 @@ const Dashboard = () => {
     }
   }, [periodo]);
 
-  const loadDashboardData = useCallback(async () => {
-    // Evitar múltiplas chamadas simultâneas
-    if (isLoadingRef.current) {
+  const loadDashboardData = useCallback(async (overrides = {}) => {
+    // Não usar cache quando há filtros explícitos (Buscar com texto digitado)
+    const filtroImportador = overrides.empresa_importadora ?? (empresaImportadora && String(empresaImportadora).trim());
+    const filtroExportador = overrides.empresa_exportadora ?? (empresaExportadora && String(empresaExportadora).trim());
+    const temFiltroEmpresa = !!(filtroImportador || filtroExportador);
+
+    const currentRequestId = ++requestIdRef.current;
+    // Se o usuário clicou em Buscar (tem overrides), sempre enviar a requisição; respostas antigas serão ignoradas pelo requestId
+    const ehBuscaComFiltro = !!(overrides.empresa_importadora || overrides.empresa_exportadora);
+    if (isLoadingRef.current && !ehBuscaComFiltro) {
       console.log('⚠️ Requisição já em andamento, ignorando...');
       return;
     }
@@ -232,12 +252,10 @@ const Dashboard = () => {
     setLoading(true);
     setError(null);
     
-    // Tentar carregar dados do cache primeiro (se disponível)
-    const cachedData = localStorage.getItem('dashboard_stats_cache');
+    const cachedData = (temFiltroEmpresa || ehBuscaComFiltro) ? null : localStorage.getItem('dashboard_stats_cache');
     const cacheTimestamp = localStorage.getItem('dashboard_stats_cache_timestamp');
-    if (cachedData && cacheTimestamp) {
+    if (cachedData && cacheTimestamp && !ehBuscaComFiltro) {
       const cacheAge = Date.now() - parseInt(cacheTimestamp);
-      // Usar cache se tiver menos de 5 minutos
       if (cacheAge < 5 * 60 * 1000) {
         try {
           const parsedCache = JSON.parse(cachedData);
@@ -245,7 +263,7 @@ const Dashboard = () => {
           setStats(parsedCache);
           setLoading(false);
           isLoadingRef.current = false;
-          // Continuar tentando buscar dados atualizados em background
+          return;
         } catch (e) {
           console.warn('⚠️ Erro ao ler cache, continuando com requisição...');
         }
@@ -266,11 +284,16 @@ const Dashboard = () => {
         apiUrl 
       });
 
-      // Usar múltiplos NCMs se disponível
+      // Usar múltiplos NCMs se disponível; período 2024 até data atual
       const params = {
-        meses,
-        tipoOperacao,
+        meses: Number(meses) || 24,
+        tipoOperacao: tipoOperacao || undefined,
       };
+      // Enviar data_inicio e data_fim só se período válido (YYYY-MM-DD para evitar 422)
+      if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
+        params.data_inicio = periodo[0].format('YYYY-MM-DD');
+        params.data_fim = periodo[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : periodo[1].format('YYYY-MM-DD');
+      }
       
       if (ncmsFiltro && ncmsFiltro.length > 0) {
         params.ncms = ncmsFiltro;
@@ -278,19 +301,29 @@ const Dashboard = () => {
         params.ncm = ncmFiltro;
       }
       
-      // Adicionar filtros de empresa
-      if (empresaImportadora) {
-        params.empresa_importadora = empresaImportadora;
+      // Adicionar filtros de empresa (valor digitado ou selecionado; overrides vêm do clique em Buscar)
+      if (filtroImportador) {
+        params.empresa_importadora = String(filtroImportador).trim();
       }
-      
-      if (empresaExportadora) {
-        params.empresa_exportadora = empresaExportadora;
+      if (filtroExportador) {
+        params.empresa_exportadora = String(filtroExportador).trim();
+      }
+      if (params.empresa_importadora || params.empresa_exportadora) {
+        console.log('🔍 Enviando requisição COM filtro de empresa:', { empresa_importadora: params.empresa_importadora || null, empresa_exportadora: params.empresa_exportadora || null });
+        console.log('🔍 Confira no console a URL da requisição (deve conter empresa_importadora=... e apontar para o backend local se estiver testando)');
       }
       
       const response = await dashboardAPI.getStats(params);
       
+      // Ignorar resposta se outra requisição já foi disparada (evitar sobrescrever filtro com dados antigos)
+      if (currentRequestId !== requestIdRef.current) {
+        setLoading(false);
+        isLoadingRef.current = false;
+        return;
+      }
+      
       console.log('✅ Dados recebidos:', response.data);
-      console.log('📊 Estrutura dos dados:', JSON.stringify(response.data, null, 2));
+      console.log('📊 Filtros usados nesta resposta:', { empresa_importadora: params.empresa_importadora || null, empresa_exportadora: params.empresa_exportadora || null });
       
       // Validar se a resposta é válida
       if (!response || !response.data) {
@@ -333,13 +366,15 @@ const Dashboard = () => {
           // Não cachear dados vazios
         } else {
           setStats(response.data);
-          // Cachear dados válidos para uso offline
-          try {
-            localStorage.setItem('dashboard_stats_cache', JSON.stringify(response.data));
-            localStorage.setItem('dashboard_stats_cache_timestamp', Date.now().toString());
-            console.log('💾 Dados salvos no cache');
-          } catch (e) {
-            console.warn('⚠️ Erro ao salvar cache:', e);
+          // Só cachear quando não há filtro por empresa (evitar sobrescrever com dados de uma empresa)
+          if (!temFiltroEmpresa) {
+            try {
+              localStorage.setItem('dashboard_stats_cache', JSON.stringify(response.data));
+              localStorage.setItem('dashboard_stats_cache_timestamp', Date.now().toString());
+              console.log('💾 Dados salvos no cache');
+            } catch (e) {
+              console.warn('⚠️ Erro ao salvar cache:', e);
+            }
           }
         }
       } else {
@@ -358,6 +393,11 @@ const Dashboard = () => {
         });
       }
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) {
+        setLoading(false);
+        isLoadingRef.current = false;
+        return;
+      }
       let errorMessage = 'Erro ao carregar dados do dashboard';
       
       if (err.response) {
@@ -365,8 +405,9 @@ const Dashboard = () => {
         if (err.response.data) {
           if (typeof err.response.data === 'string' && err.response.data.includes('<!')) {
             errorMessage = 'Servidor retornou HTML ao invés de JSON. Verifique se o backend está rodando corretamente.';
-          } else if (err.response.data.detail) {
-            errorMessage = err.response.data.detail;
+          } else if (err.response.data.detail !== undefined) {
+            const d = err.response.data.detail;
+            errorMessage = typeof d === 'string' ? d : (Array.isArray(d) ? d.map(x => x?.msg || JSON.stringify(x)).join(', ') : JSON.stringify(d));
           } else if (typeof err.response.data === 'string') {
             errorMessage = err.response.data;
           }
@@ -456,7 +497,7 @@ const Dashboard = () => {
       setLoading(false);
       isLoadingRef.current = false;
     }
-  }, [meses, tipoOperacao, ncmFiltro, ncmsFiltro, empresaImportadora, empresaExportadora]);
+  }, [meses, tipoOperacao, ncmFiltro, ncmsFiltro, empresaImportadora, empresaExportadora, periodo]);
 
   useEffect(() => {
     loadDashboardData();
@@ -560,9 +601,28 @@ const Dashboard = () => {
     setTimeout(loadSinergias, 2000);
   }, [loadSugestoesEmpresas, loadEmpresasRecomendadas, loadDadosComexstat]);
 
-  const handleSearch = () => {
-    loadDashboardData();
-    loadTabelaDados();
+  const handleSearch = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    // Ler valor: ref -> state -> DOM (fallback para quando o usuário cola texto ou o state não atualizou)
+    let importadorVal = (importadorInputRef.current || empresaImportadoraInput || empresaImportadora || '').toString().trim();
+    let exportadorVal = (exportadorInputRef.current || empresaExportadoraInput || empresaExportadora || '').toString().trim();
+    if (!importadorVal || !exportadorVal) {
+      try {
+        const imp = document.querySelector('[data-filter="empresa-importadora"] input');
+        const exp = document.querySelector('[data-filter="empresa-exportadora"] input');
+        if (imp && imp.value) importadorVal = importadorVal || String(imp.value).trim();
+        if (exp && exp.value) exportadorVal = exportadorVal || String(exp.value).trim();
+      } catch (_) {}
+    }
+    setEmpresaImportadora(importadorVal || null);
+    setEmpresaExportadora(exportadorVal || null);
+    importadorInputRef.current = importadorVal;
+    exportadorInputRef.current = exportadorVal;
+    console.log('🔍 Buscar com filtros:', { empresa_importadora: importadorVal || null, empresa_exportadora: exportadorVal || null });
+    loadDashboardData({
+      empresa_importadora: importadorVal || undefined,
+      empresa_exportadora: exportadorVal || undefined,
+    });
   };
 
   const loadTabelaDados = useCallback(async (page = 1, pageSize = 10) => {
@@ -630,8 +690,13 @@ const Dashboard = () => {
     setNcmsFiltro([]);
     setEmpresaImportadora(null);
     setEmpresaExportadora(null);
-    setPeriodo([dayjs().subtract(2, 'year'), dayjs()]);
-    setMeses(24);
+    setEmpresaImportadoraInput('');
+    setEmpresaExportadoraInput('');
+    importadorInputRef.current = '';
+    exportadorInputRef.current = '';
+    setPeriodo([dayjs('2024-01-01'), dayjs()]);
+    setMeses(Math.min(120, dayjs().diff(dayjs('2024-01-01'), 'month') + 1));
+    loadDashboardData();
   };
 
   // Não mostrar loading infinito - sempre mostrar o dashboard mesmo se vazio
@@ -687,51 +752,74 @@ const Dashboard = () => {
     );
   }
 
-  // Preparar dados para gráficos
-  const evolucaoData = Object.entries(statsFinal.registros_por_mes || {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([mes, count]) => {
-      // Formato do backend é "YYYY-MM", converter para formato legível
-      const [ano, mesNum] = mes.split('-');
-      const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-      return {
-        mes: mesFormatado,
-        registros: count,
-      };
-    });
+  // Lista completa de meses do período para todos os gráficos (desde jan/2024 até fim do período)
+  const mesesDoPeriodoCompleto = (() => {
+    if (!periodo || !periodo[0] || !periodo[1]) return [];
+    const inicioMinimo = dayjs('2024-01-01').startOf('month');
+    const start = dayjs(periodo[0]).startOf('month').isBefore(inicioMinimo) ? inicioMinimo : dayjs(periodo[0]).startOf('month');
+    const end = dayjs(periodo[1]).startOf('month');
+    const meses = [];
+    let cur = start;
+    while (cur.isBefore(end) || cur.isSame(end, 'month')) {
+      meses.push(cur.format('YYYY-MM'));
+      cur = cur.add(1, 'month');
+    }
+    return meses;
+  })();
 
-  // Dados para gráfico combinado (FOB e Peso) - usar dados reais
-  const tendenciasData = Object.entries(statsFinal.valores_por_mes || {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([mes]) => {
-      // Usar dados reais de valores_por_mes e pesos_por_mes
-      const valorMensal = statsFinal.valores_por_mes?.[mes] || 0;
-      const pesoMensal = statsFinal.pesos_por_mes?.[mes] || 0;
-      // Formato do backend é "YYYY-MM", converter para formato legível
-      const [ano, mesNum] = mes.split('-');
-      const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-      return {
-        mes: mesFormatado,
-        fob: valorMensal,
-        peso: pesoMensal,
-      };
-    });
+  // Preparar dados para gráficos (todos os meses do período, com 0 quando não houver dado)
+  const evolucaoData = mesesDoPeriodoCompleto.length > 0
+    ? mesesDoPeriodoCompleto.map((mes) => {
+        const [ano, mesNum] = mes.split('-');
+        const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
+        const count = (statsFinal.registros_por_mes || {})[mes] ?? 0;
+        return { mes: mesFormatado, registros: count };
+      })
+    : [];
 
-  // Top Importadores (usando empresas recomendadas se disponível, senão países)
+  // Dados para gráfico combinado (FOB e Peso) - todos os meses do período
+  const tendenciasData = mesesDoPeriodoCompleto.length > 0
+    ? mesesDoPeriodoCompleto.map((mes) => {
+        const [ano, mesNum] = mes.split('-');
+        const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
+        const valorMensal = statsFinal.valores_por_mes?.[mes] || 0;
+        const pesoMensal = statsFinal.pesos_por_mes?.[mes] || 0;
+        return { mes: mesFormatado, fob: valorMensal, peso: pesoMensal };
+      })
+    : [];
+
+  // Top Importadores (quando há filtro por empresa, mostrar a empresa filtrada; senão lista geral)
   const topImportadores = (() => {
     if (!statsFinal) return [];
     
+    const temFiltroImp = (empresaImportadora && String(empresaImportadora).trim()) || (empresaImportadoraInput && String(empresaImportadoraInput).trim());
+    const nomeFiltroImp = (empresaImportadora || empresaImportadoraInput || '').toString().trim();
+    if (temFiltroImp && nomeFiltroImp) {
+      const valorImp = statsFinal.valor_total_importacoes ?? statsFinal.valor_total_usd ?? 0;
+      const pesoImp = statsFinal.volume_importacoes ?? 0;
+      return [{
+        cor: COLORS[0],
+        nome: nomeFiltroImp.length > 50 ? nomeFiltroImp.substring(0, 50) + '...' : nomeFiltroImp,
+        fob: Number(valorImp) || 0,
+        peso: Number(pesoImp) || 0,
+        percentual: 100,
+      }];
+    }
+    
     if (empresasImportadorasRecomendadas.length > 0) {
+      const volumeTotal = statsFinal.volume_importacoes || 0;
+      const valorTotalUsd = statsFinal.valor_total_usd || 1;
       return empresasImportadorasRecomendadas
         .slice(0, 5)
         .map((empresa, idx) => {
           const valorTotal = empresa.valor_total || empresa.importado_rs || 0;
-          const valorTotalUsd = statsFinal.valor_total_usd || 1;
+          const pesoKg = Number(empresa.peso_kg);
+          const pesoProporcional = valorTotalUsd > 0 ? (volumeTotal * (valorTotal / valorTotalUsd)) : 0;
           return {
             cor: COLORS[idx % COLORS.length],
-            nome: String(empresa.pais || empresa.razao_social || empresa.nome || 'N/A'),
+            nome: String(empresa.nome || empresa.pais || empresa.razao_social || 'N/A'),
             fob: Number(valorTotal) || 0,
-            peso: Number(empresa.peso_participacao || empresa.peso || 0) || 0,
+            peso: (pesoKg > 0 ? pesoKg : pesoProporcional) || 0,
             percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
           };
         });
@@ -756,21 +844,38 @@ const Dashboard = () => {
     return [];
   })();
 
-  // Top Exportadores (usando empresas recomendadas se disponível, senão países)
+  // Top Exportadores (quando há filtro por empresa, mostrar a empresa filtrada; senão lista geral)
   const topExportadores = (() => {
     if (!statsFinal) return [];
     
+    const temFiltroExp = (empresaExportadora && String(empresaExportadora).trim()) || (empresaExportadoraInput && String(empresaExportadoraInput).trim());
+    const nomeFiltroExp = (empresaExportadora || empresaExportadoraInput || '').toString().trim();
+    if (temFiltroExp && nomeFiltroExp) {
+      const valorExp = statsFinal.valor_total_exportacoes ?? statsFinal.valor_total_usd ?? 0;
+      const pesoExp = statsFinal.volume_exportacoes ?? 0;
+      return [{
+        cor: COLORS[0],
+        nome: nomeFiltroExp.length > 50 ? nomeFiltroExp.substring(0, 50) + '...' : nomeFiltroExp,
+        fob: Number(valorExp) || 0,
+        peso: Number(pesoExp) || 0,
+        percentual: 100,
+      }];
+    }
+    
     if (empresasExportadorasRecomendadas.length > 0) {
+      const volumeTotal = statsFinal.volume_exportacoes || 0;
+      const valorTotalUsd = statsFinal.valor_total_usd || 1;
       return empresasExportadorasRecomendadas
         .slice(0, 5)
         .map((empresa, idx) => {
           const valorTotal = empresa.valor_total || empresa.exportado_rs || 0;
-          const valorTotalUsd = statsFinal.valor_total_usd || 1;
+          const pesoKg = Number(empresa.peso_kg);
+          const pesoProporcional = valorTotalUsd > 0 ? (volumeTotal * (valorTotal / valorTotalUsd)) : 0;
           return {
             cor: COLORS[idx % COLORS.length],
-            nome: String(empresa.pais || empresa.razao_social || empresa.nome || 'N/A'),
+            nome: String(empresa.nome || empresa.pais || empresa.razao_social || 'N/A'),
             fob: Number(valorTotal) || 0,
-            peso: Number(empresa.peso_participacao || empresa.peso || 0) || 0,
+            peso: (pesoKg > 0 ? pesoKg : pesoProporcional) || 0,
             percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
           };
         });
@@ -796,39 +901,33 @@ const Dashboard = () => {
   })();
 
   // Dados para gráfico de linha de importadores/exportadores ao longo do tempo
-  // Usar dados reais de valores_por_mes distribuídos proporcionalmente
-  const importadoresTempoData = statsFinal && statsFinal.valores_por_mes
-    ? Object.entries(statsFinal.valores_por_mes)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([mes]) => {
-          const [ano, mesNum] = mes.split('-');
-          const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-          const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
-          const data = { mes: mesFormatado };
-          topImportadores.forEach((imp, idx) => {
-            // Distribuir proporcionalmente ao percentual de cada importador
-            const percentual = (imp.percentual || 0) / 100;
-            data[`imp_${idx}`] = valorTotalMes * percentual;
-          });
-          return data;
-        })
+  // Usar TODOS os meses do período (incluindo 2024) com valor 0 quando não houver dado
+  const importadoresTempoData = statsFinal && mesesDoPeriodoCompleto.length > 0
+    ? mesesDoPeriodoCompleto.map((mes) => {
+        const [ano, mesNum] = mes.split('-');
+        const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
+        const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
+        const data = { mes: mesFormatado };
+        topImportadores.forEach((imp, idx) => {
+          const percentual = (imp.percentual || 0) / 100;
+          data[`imp_${idx}`] = valorTotalMes * percentual;
+        });
+        return data;
+      })
     : [];
 
-  const exportadoresTempoData = statsFinal && statsFinal.valores_por_mes
-    ? Object.entries(statsFinal.valores_por_mes)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([mes]) => {
-          const [ano, mesNum] = mes.split('-');
-          const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-          const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
-          const data = { mes: mesFormatado };
-          topExportadores.forEach((exp, idx) => {
-            // Distribuir proporcionalmente ao percentual de cada exportador
-            const percentual = (exp.percentual || 0) / 100;
-            data[`exp_${idx}`] = valorTotalMes * percentual;
-          });
-          return data;
-        })
+  const exportadoresTempoData = statsFinal && mesesDoPeriodoCompleto.length > 0
+    ? mesesDoPeriodoCompleto.map((mes) => {
+        const [ano, mesNum] = mes.split('-');
+        const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
+        const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
+        const data = { mes: mesFormatado };
+        topExportadores.forEach((exp, idx) => {
+          const percentual = (exp.percentual || 0) / 100;
+          data[`exp_${idx}`] = valorTotalMes * percentual;
+        });
+        return data;
+      })
     : [];
 
   // Formatar valores
@@ -855,13 +954,13 @@ const Dashboard = () => {
     }).format(value);
   };
 
-  const quantidadeImportacoes = statsFinal.quantidade_estatistica_importacoes || 0;
-  const quantidadeExportacoes = statsFinal.quantidade_estatistica_exportacoes || 0;
+  const quantidadeImportacoes = Number(statsFinal.quantidade_estatistica_importacoes) || 0;
+  const quantidadeExportacoes = Number(statsFinal.quantidade_estatistica_exportacoes) || 0;
   const quantidadeTotal = tipoOperacao === 'Importação'
     ? quantidadeImportacoes
     : tipoOperacao === 'Exportação'
       ? quantidadeExportacoes
-      : (statsFinal.quantidade_estatistica_total || (quantidadeImportacoes + quantidadeExportacoes));
+      : (Number(statsFinal.quantidade_estatistica_total) || quantidadeImportacoes + quantidadeExportacoes);
 
   const pesoTotal = tipoOperacao === 'Importação'
     ? (statsFinal.volume_importacoes || 0)
@@ -882,14 +981,18 @@ const Dashboard = () => {
               style={{ width: '100%' }}
               value={periodo}
               onChange={(dates) => {
-                setPeriodo(dates);
                 if (dates && dates[0] && dates[1]) {
-                  const diff = Math.ceil(dates[1].diff(dates[0], 'month', true)) + 1;
-                  setMeses(Math.max(1, Math.min(24, Math.round(diff))));
+                  const fim = dates[1].isAfter(dayjs()) ? dayjs() : dates[1];
+                  setPeriodo([dates[0], fim]);
+                  const diff = Math.ceil(fim.diff(dates[0], 'month', true)) + 1;
+                  setMeses(Math.max(1, Math.min(84, Math.round(diff))));
+                } else {
+                  setPeriodo(dates);
                 }
               }}
               format="DD/MM/YYYY"
               placeholder={['Data Início', 'Data Fim']}
+              disabledDate={(current) => current && current.isAfter(dayjs(), 'day')}
             />
           </Col>
           <Col xs={24} sm={8} md={4}>
@@ -930,16 +1033,28 @@ const Dashboard = () => {
             <AutoComplete
               style={{ width: '100%' }}
               placeholder="Provável Importador"
-              value={empresaImportadora}
+              value={empresaImportadoraInput !== '' ? empresaImportadoraInput : (empresaImportadora ?? '')}
               onChange={(value) => {
-                setEmpresaImportadora(value);
-                if (value) {
-                  buscarImportadoras(value);
-                } else {
-                  setImportadorasOptions([]);
-                }
+                const v = value ?? '';
+                importadorInputRef.current = v;
+                setEmpresaImportadoraInput(v);
+                setEmpresaImportadora(v.trim() ? v : null);
+                if (v) buscarImportadoras(v);
+                else setImportadorasOptions([]);
               }}
-              onSearch={buscarImportadoras}
+              onSearch={(text) => {
+                const t = text ?? '';
+                importadorInputRef.current = t;
+                setEmpresaImportadoraInput(t);
+                if (t) buscarImportadoras(t);
+                else setImportadorasOptions([]);
+              }}
+              onSelect={(value) => {
+                const v = value ?? '';
+                importadorInputRef.current = v;
+                setEmpresaImportadoraInput(v);
+                setEmpresaImportadora(v.trim() ? v : null);
+              }}
               options={importadorasOptions}
               loading={loadingImportadoras}
               allowClear
@@ -950,16 +1065,29 @@ const Dashboard = () => {
             <AutoComplete
               style={{ width: '100%' }}
               placeholder="Provável Exportador"
-              value={empresaExportadora}
+              data-filter="empresa-exportadora"
+              value={empresaExportadoraInput !== '' ? empresaExportadoraInput : (empresaExportadora ?? '')}
               onChange={(value) => {
-                setEmpresaExportadora(value);
-                if (value) {
-                  buscarExportadoras(value);
-                } else {
-                  setExportadorasOptions([]);
-                }
+                const v = value ?? '';
+                exportadorInputRef.current = v;
+                setEmpresaExportadoraInput(v);
+                setEmpresaExportadora(v.trim() ? v : null);
+                if (v) buscarExportadoras(v);
+                else setExportadorasOptions([]);
               }}
-              onSearch={buscarExportadoras}
+              onSearch={(text) => {
+                const t = text ?? '';
+                exportadorInputRef.current = t;
+                setEmpresaExportadoraInput(t);
+                if (t) buscarExportadoras(t);
+                else setExportadorasOptions([]);
+              }}
+              onSelect={(value) => {
+                const v = value ?? '';
+                exportadorInputRef.current = v;
+                setEmpresaExportadoraInput(v);
+                setEmpresaExportadora(v.trim() ? v : null);
+              }}
               options={exportadorasOptions}
               loading={loadingExportadoras}
               allowClear
@@ -969,14 +1097,15 @@ const Dashboard = () => {
           <Col xs={24} sm={24} md={8}>
             <Space>
               <Button 
-                type="primary" 
+                type="button"
+                htmlType="button"
                 icon={<SearchOutlined />} 
                 onClick={handleSearch}
                 style={{ background: '#722ed1', borderColor: '#722ed1' }}
               >
                 Buscar
               </Button>
-              <Button icon={<ReloadOutlined />} onClick={handleClearFilters}>
+              <Button type="button" htmlType="button" icon={<ReloadOutlined />} onClick={handleClearFilters}>
                 Limpar Filtros
               </Button>
             </Space>
@@ -1281,8 +1410,8 @@ const Dashboard = () => {
               Total FOB estimado importado por mês
             </div>
             {importadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={isMobile ? Math.max(250, window.innerHeight * 0.3) : Math.max(200, window.innerHeight * 0.25)}>
-                <LineChart data={importadoresTempoData}>
+              <ResponsiveContainer width="100%" height={isMobile ? Math.max(320, window.innerHeight * 0.4) : Math.max(380, window.innerHeight * 0.42)}>
+                <LineChart data={importadoresTempoData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
@@ -1379,8 +1508,8 @@ const Dashboard = () => {
               Total FOB estimado exportado por mês
             </div>
             {exportadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={isMobile ? Math.max(250, window.innerHeight * 0.3) : Math.max(200, window.innerHeight * 0.25)}>
-                <LineChart data={exportadoresTempoData}>
+              <ResponsiveContainer width="100%" height={isMobile ? Math.max(320, window.innerHeight * 0.4) : Math.max(380, window.innerHeight * 0.42)}>
+                <LineChart data={exportadoresTempoData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
