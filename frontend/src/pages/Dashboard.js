@@ -452,20 +452,33 @@ const Dashboard = () => {
           pesos_por_mes: {}
         });
       } else {
-        // Erro real de conexão ou servidor
-        // Tentar usar cache antes de mostrar erro
-        const cachedData = localStorage.getItem('dashboard_stats_cache');
-        if (cachedData) {
-          try {
-            const parsedCache = JSON.parse(cachedData);
-            console.log('📦 Usando dados do cache devido a erro de conexão');
-            setStats(parsedCache);
-            setError('⚠️ Backend temporariamente indisponível. Exibindo dados em cache. Clique em "Tentar Novamente" para atualizar.');
-          } catch (e) {
-            setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+        // 503 = serviço/banco temporariamente indisponível: manter dados atuais ou cache, só mostrar aviso
+        if (err.response?.status === 503) {
+          const detail = err.response?.data?.detail;
+          setError(detail || 'Serviço temporariamente indisponível. Tente novamente em alguns segundos.');
+          if (!stats) {
+            const cachedData = localStorage.getItem('dashboard_stats_cache');
+            if (cachedData) {
+              try {
+                setStats(JSON.parse(cachedData));
+              } catch (e) { /* ignorar */ }
+            }
           }
         } else {
-          setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+          // Outros erros: tentar cache antes de mostrar erro
+          const cachedData = localStorage.getItem('dashboard_stats_cache');
+          if (cachedData) {
+            try {
+              const parsedCache = JSON.parse(cachedData);
+              console.log('📦 Usando dados do cache devido a erro de conexão');
+              setStats(parsedCache);
+              setError('⚠️ Backend temporariamente indisponível. Exibindo dados em cache. Clique em "Tentar Novamente" para atualizar.');
+            } catch (e) {
+              setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+            }
+          } else {
+            setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
+          }
         }
         
         console.error('❌ Erro completo:', err);

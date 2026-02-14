@@ -5,7 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Ba
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text, and_, or_, func
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, InterfaceError
 from typing import Optional, List
 from datetime import date, datetime
 from threading import Lock
@@ -3623,7 +3623,7 @@ async def get_dashboard_stats(
         cache_key = f"dashboard_{meses}_{tipo_operacao}_{ncm}_{_emp_imp!r}_{_emp_exp!r}"
 
     def _empty_stats():
-        """Resposta vazia para evitar 500 quando DB ou lógica falham."""
+        """Resposta vazia para evitar 500 quando DB ou lógica falham. Deve conter todos os campos de DashboardStats."""
         return {
             "volume_importacoes": 0.0,
             "volume_exportacoes": 0.0,
@@ -3635,6 +3635,8 @@ async def get_dashboard_stats(
             "quantidade_estatistica_total": 0.0,
             "principais_ncms": [],
             "principais_paises": [],
+            "principais_importadores": [],
+            "principais_exportadores": [],
             "registros_por_mes": {},
             "valores_por_mes": {},
             "pesos_por_mes": {},
@@ -4411,6 +4413,12 @@ async def get_dashboard_stats(
                 logger.warning(f"⚠️ Erro ao salvar cache: {e}")
 
         return payload
+    except (OperationalError, InterfaceError) as e:
+        logger.warning(f"Erro de conexão com o banco em /dashboard/stats: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Banco de dados temporariamente indisponível (ex.: modo sleep). Tente novamente em alguns segundos."
+        )
     except Exception as e:
         logger.exception(f"Erro em /dashboard/stats: {e}")
         return _empty_stats()
