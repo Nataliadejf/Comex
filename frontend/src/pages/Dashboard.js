@@ -612,22 +612,24 @@ const Dashboard = () => {
 
   const handleSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
-    // Ler valor: ref -> state -> DOM (fallback para quando o usuário cola texto ou o state não atualizou)
-    let importadorVal = (importadorInputRef.current || empresaImportadoraInput || empresaImportadora || '').toString().trim();
-    let exportadorVal = (exportadorInputRef.current || empresaExportadoraInput || empresaExportadora || '').toString().trim();
-    if (!importadorVal || !exportadorVal) {
-      try {
-        const imp = document.querySelector('[data-filter="empresa-importadora"] input');
-        const exp = document.querySelector('[data-filter="empresa-exportadora"] input');
-        if (imp && imp.value) importadorVal = importadorVal || String(imp.value).trim();
-        if (exp && exp.value) exportadorVal = exportadorVal || String(exp.value).trim();
-      } catch (_) {}
-    }
+    // Ler valor atual dos campos: DOM primeiro (o que está na tela), depois state/ref
+    let importadorVal = '';
+    let exportadorVal = '';
+    try {
+      const imp = document.querySelector('[data-filter="empresa-importadora"] input');
+      const exp = document.querySelector('[data-filter="empresa-exportadora"] input');
+      if (imp && imp.value != null) importadorVal = String(imp.value).trim();
+      if (exp && exp.value != null) exportadorVal = String(exp.value).trim();
+    } catch (_) {}
+    if (!importadorVal) importadorVal = (importadorInputRef.current || empresaImportadoraInput || empresaImportadora || '').toString().trim();
+    if (!exportadorVal) exportadorVal = (exportadorInputRef.current || empresaExportadoraInput || empresaExportadora || '').toString().trim();
     setEmpresaImportadora(importadorVal || null);
     setEmpresaExportadora(exportadorVal || null);
+    setEmpresaImportadoraInput(importadorVal);
+    setEmpresaExportadoraInput(exportadorVal);
     importadorInputRef.current = importadorVal;
     exportadorInputRef.current = exportadorVal;
-    console.log('🔍 Buscar com filtros:', { empresa_importadora: importadorVal || null, empresa_exportadora: exportadorVal || null });
+    console.log('🔍 Buscar com filtros:', { empresa_importadora: importadorVal || null, empresa_exportadora: exportadorVal || null, periodo, tipoOperacao, ncmsFiltro: ncmsFiltro?.length ? ncmsFiltro : ncmFiltro });
     loadDashboardData({
       empresa_importadora: importadorVal || undefined,
       empresa_exportadora: exportadorVal || undefined,
@@ -1062,10 +1064,7 @@ const Dashboard = () => {
               value={ncmsFiltro}
               onChange={(values) => {
                 setNcmsFiltro(values);
-                // Limpar campo antigo se usar múltiplos
-                if (values.length > 0) {
-                  setNcmFiltro(null);
-                }
+                if (values.length > 0) setNcmFiltro(null);
               }}
               tokenSeparators={[',', ' ']}
               filterOption={(input, option) =>
@@ -1076,10 +1075,12 @@ const Dashboard = () => {
           </Col>
         </Row>
         <Row gutter={[16, 16]} align="middle" style={{ marginTop: '16px' }}>
-          <Col xs={24} sm={12} md={8}>
+          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }}>
             <AutoComplete
-              style={{ width: '100%' }}
+              style={{ width: '100%', minWidth: 0 }}
+              data-filter="empresa-importadora"
               placeholder="Provável Importador"
+              dropdownStyle={{ maxWidth: 'min(100vw - 32px, 400px)' }}
               value={empresaImportadoraInput !== '' ? empresaImportadoraInput : (empresaImportadora ?? '')}
               onFocus={() => {
                 if (importadorasOptions.length === 0) buscarImportadoras(empresaImportadoraInput || '');
@@ -1110,11 +1111,12 @@ const Dashboard = () => {
               filterOption={false}
             />
           </Col>
-          <Col xs={24} sm={12} md={8}>
+          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }}>
             <AutoComplete
-              style={{ width: '100%' }}
+              style={{ width: '100%', minWidth: 0 }}
               placeholder="Provável Exportador"
               data-filter="empresa-exportadora"
+              dropdownStyle={{ maxWidth: 'min(100vw - 32px, 400px)' }}
               value={empresaExportadoraInput !== '' ? empresaExportadoraInput : (empresaExportadora ?? '')}
               onFocus={() => {
                 if (exportadorasOptions.length === 0) buscarExportadoras(empresaExportadoraInput || '');
@@ -1145,18 +1147,24 @@ const Dashboard = () => {
               filterOption={false}
             />
           </Col>
-          <Col xs={24} sm={24} md={8}>
-            <Space>
+          <Col xs={24} sm={24} md={24} lg={8} style={{ marginTop: isMobile ? '8px' : 0 }}>
+            <Space wrap size="small">
               <Button 
                 type="button"
                 htmlType="button"
                 icon={<SearchOutlined />} 
                 onClick={handleSearch}
-                style={{ background: '#722ed1', borderColor: '#722ed1' }}
+                style={{ background: '#722ed1', borderColor: '#722ed1', minWidth: isMobile ? '100%' : undefined }}
               >
                 Buscar
               </Button>
-              <Button type="button" htmlType="button" icon={<ReloadOutlined />} onClick={handleClearFilters}>
+              <Button 
+                type="button" 
+                htmlType="button" 
+                icon={<ReloadOutlined />} 
+                onClick={handleClearFilters}
+                style={{ minWidth: isMobile ? '100%' : undefined }}
+              >
                 Limpar Filtros
               </Button>
             </Space>
@@ -1174,6 +1182,17 @@ const Dashboard = () => {
           onClose={() => setError(null)}
         />
       )}
+
+      {stats && !error && (empresaImportadora || empresaExportadora || ncmFiltro || (ncmsFiltro && ncmsFiltro.length > 0)) &&
+        (stats.valor_total_importacoes ?? 0) === 0 && (stats.valor_total_exportacoes ?? 0) === 0 && (stats.valor_total_usd ?? 0) === 0 && (
+          <Alert
+            message="Nenhuma operação encontrada para os filtros aplicados."
+            description="Confira o período, o NCM (8 dígitos) e o nome da empresa. Se o banco ainda não tiver operações importadas, os totais ficarão zerados."
+            type="info"
+            showIcon
+            style={{ marginBottom: '24px' }}
+          />
+        )}
 
       {/* Cards de Métricas Principais */}
       <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }}>
