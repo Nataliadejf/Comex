@@ -12,6 +12,10 @@ pandas>=2.2.0  # Versão mais recente com suporte a Python 3.13
 numpy>=1.26.0
 openpyxl>=3.1.2
 
+# BigQuery (coleta Base dos Dados)
+google-cloud-bigquery>=3.11.0
+db-dtypes>=1.2.0  # Necessário para results.to_dataframe()
+
 # Web Scraping (se necessário)
 selenium==4.15.2
 playwright==1.40.0

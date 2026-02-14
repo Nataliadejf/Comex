@@ -148,34 +148,32 @@ const Dashboard = () => {
     };
   };
 
-  // Função de busca de importadoras com debounce
+  // Função de busca de importadoras com debounce (com fallback para /dashboard/debug/empresas)
   const buscarImportadoras = useCallback(
     debounce(async (query) => {
-      // Permitir busca mesmo com query vazia para mostrar sugestões
-      if (!query) {
-        query = "";  // Busca vazia retorna sugestões
-      }
-      
+      const termo = typeof query === 'string' ? query.trim() : '';
       setLoadingImportadoras(true);
       try {
-        console.log('🔍 Buscando importadoras com termo:', query);
-        const response = await empresasAPI.autocompleteImportadoras(query);
-        console.log('✅ Resposta autocomplete importadoras:', response.data);
-        
-        if (response && response.data && Array.isArray(response.data)) {
-          const options = response.data.map((empresa) => ({
-            value: empresa.nome,
-            label: `${empresa.nome} (${empresa.total_operacoes || 0} operações)`,
-          }));
-          console.log('📋 Opções geradas:', options);
-          setImportadorasOptions(options);
-        } else {
-          console.warn('⚠️ Resposta inválida:', response);
-          setImportadorasOptions([]);
+        let lista = [];
+        try {
+          const response = await empresasAPI.autocompleteImportadoras(termo, 25);
+          if (response && response.data && Array.isArray(response.data)) {
+            lista = response.data;
+          }
+        } catch (e) {
+          console.warn('⚠️ Autocomplete importadoras falhou, usando fallback debug:', e.message);
+          const res = await empresasAPI.debugEmpresas('importador', 25, termo);
+          if (res && res.data && Array.isArray(res.data.importadoras)) {
+            lista = res.data.importadoras;
+          }
         }
+        const options = lista.map((empresa) => ({
+          value: empresa.nome || empresa.empresa || '',
+          label: `${empresa.nome || empresa.empresa || 'N/A'} (${empresa.total_operacoes ?? 0} operações)`,
+        })).filter((o) => o.value);
+        setImportadorasOptions(options);
       } catch (error) {
-        console.error('❌ Erro ao buscar importadoras:', error);
-        console.error('Detalhes do erro:', error.response?.data || error.message);
+        console.error('❌ Erro ao buscar importadoras:', error?.message || error);
         setImportadorasOptions([]);
       } finally {
         setLoadingImportadoras(false);
@@ -184,34 +182,32 @@ const Dashboard = () => {
     []
   );
 
-  // Função de busca de exportadoras com debounce
+  // Função de busca de exportadoras com debounce (com fallback para /dashboard/debug/empresas)
   const buscarExportadoras = useCallback(
     debounce(async (query) => {
-      // Permitir busca mesmo com query vazia para mostrar sugestões
-      if (!query) {
-        query = "";  // Busca vazia retorna sugestões
-      }
-      
+      const termo = typeof query === 'string' ? query.trim() : '';
       setLoadingExportadoras(true);
       try {
-        console.log('🔍 Buscando exportadoras com termo:', query);
-        const response = await empresasAPI.autocompleteExportadoras(query);
-        console.log('✅ Resposta autocomplete exportadoras:', response.data);
-        
-        if (response && response.data && Array.isArray(response.data)) {
-          const options = response.data.map((empresa) => ({
-            value: empresa.nome,
-            label: `${empresa.nome} (${empresa.total_operacoes || 0} operações)`,
-          }));
-          console.log('📋 Opções geradas:', options);
-          setExportadorasOptions(options);
-        } else {
-          console.warn('⚠️ Resposta inválida:', response);
-          setExportadorasOptions([]);
+        let lista = [];
+        try {
+          const response = await empresasAPI.autocompleteExportadoras(termo, 25);
+          if (response && response.data && Array.isArray(response.data)) {
+            lista = response.data;
+          }
+        } catch (e) {
+          console.warn('⚠️ Autocomplete exportadoras falhou, usando fallback debug:', e.message);
+          const res = await empresasAPI.debugEmpresas('exportador', 25, termo);
+          if (res && res.data && Array.isArray(res.data.exportadoras)) {
+            lista = res.data.exportadoras;
+          }
         }
+        const options = lista.map((empresa) => ({
+          value: empresa.nome || empresa.empresa || '',
+          label: `${empresa.nome || empresa.empresa || 'N/A'} (${empresa.total_operacoes ?? 0} operações)`,
+        })).filter((o) => o.value);
+        setExportadorasOptions(options);
       } catch (error) {
-        console.error('❌ Erro ao buscar exportadoras:', error);
-        console.error('Detalhes do erro:', error.response?.data || error.message);
+        console.error('❌ Erro ao buscar exportadoras:', error?.message || error);
         setExportadorasOptions([]);
       } finally {
         setLoadingExportadoras(false);
@@ -724,11 +720,15 @@ const Dashboard = () => {
     valor_provavel_empresas: null,
     principais_ncms: [],
     principais_paises: [],
+    principais_importadores: [],
+    principais_exportadores: [],
     registros_por_mes: {},
     valores_por_mes: {},
     pesos_por_mes: {}
   };
   const principaisPaises = statsFinal.principais_paises || [];
+  const principaisImportadores = statsFinal.principais_importadores || [];
+  const principaisExportadores = statsFinal.principais_exportadores || [];
   const principaisNcms = statsFinal.principais_ncms || [];
 
   // Se houver erro mas não tiver stats, mostrar erro mas continuar renderizando
@@ -806,6 +806,23 @@ const Dashboard = () => {
       }];
     }
     
+    if (principaisImportadores && principaisImportadores.length > 0) {
+      const valorTotalUsd = statsFinal.valor_total_usd || 1;
+      return principaisImportadores
+        .slice(0, 10)
+        .map((emp, idx) => {
+          const valorTotal = emp.valor_total || 0;
+          const pesoTotal = emp.peso_total || 0;
+          return {
+            cor: COLORS[idx % COLORS.length],
+            nome: String(emp.nome || 'N/A'),
+            fob: Number(valorTotal) || 0,
+            peso: Number(pesoTotal) || 0,
+            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
+          };
+        });
+    }
+    
     if (empresasImportadorasRecomendadas.length > 0) {
       const volumeTotal = statsFinal.volume_importacoes || 0;
       const valorTotalUsd = statsFinal.valor_total_usd || 1;
@@ -860,6 +877,23 @@ const Dashboard = () => {
         peso: Number(pesoExp) || 0,
         percentual: 100,
       }];
+    }
+    
+    if (principaisExportadores && principaisExportadores.length > 0) {
+      const valorTotalUsd = statsFinal.valor_total_usd || 1;
+      return principaisExportadores
+        .slice(0, 10)
+        .map((emp, idx) => {
+          const valorTotal = emp.valor_total || 0;
+          const pesoTotal = emp.peso_total || 0;
+          return {
+            cor: COLORS[idx % COLORS.length],
+            nome: String(emp.nome || 'N/A'),
+            fob: Number(valorTotal) || 0,
+            peso: Number(pesoTotal) || 0,
+            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
+          };
+        });
     }
     
     if (empresasExportadorasRecomendadas.length > 0) {
@@ -1034,6 +1068,9 @@ const Dashboard = () => {
               style={{ width: '100%' }}
               placeholder="Provável Importador"
               value={empresaImportadoraInput !== '' ? empresaImportadoraInput : (empresaImportadora ?? '')}
+              onFocus={() => {
+                if (importadorasOptions.length === 0) buscarImportadoras(empresaImportadoraInput || '');
+              }}
               onChange={(value) => {
                 const v = value ?? '';
                 importadorInputRef.current = v;
@@ -1046,8 +1083,7 @@ const Dashboard = () => {
                 const t = text ?? '';
                 importadorInputRef.current = t;
                 setEmpresaImportadoraInput(t);
-                if (t) buscarImportadoras(t);
-                else setImportadorasOptions([]);
+                buscarImportadoras(t);
               }}
               onSelect={(value) => {
                 const v = value ?? '';
@@ -1067,6 +1103,9 @@ const Dashboard = () => {
               placeholder="Provável Exportador"
               data-filter="empresa-exportadora"
               value={empresaExportadoraInput !== '' ? empresaExportadoraInput : (empresaExportadora ?? '')}
+              onFocus={() => {
+                if (exportadorasOptions.length === 0) buscarExportadoras(empresaExportadoraInput || '');
+              }}
               onChange={(value) => {
                 const v = value ?? '';
                 exportadorInputRef.current = v;
@@ -1079,8 +1118,7 @@ const Dashboard = () => {
                 const t = text ?? '';
                 exportadorInputRef.current = t;
                 setEmpresaExportadoraInput(t);
-                if (t) buscarExportadoras(t);
-                else setExportadorasOptions([]);
+                buscarExportadoras(t);
               }}
               onSelect={(value) => {
                 const v = value ?? '';

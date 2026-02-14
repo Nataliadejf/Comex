@@ -310,6 +310,8 @@ class DashboardStats(BaseModel):
     quantidade_estatistica_total: Optional[float] = None
     principais_ncms: List[dict]
     principais_paises: List[dict]
+    principais_importadores: List[dict]  # Top empresas por razao_social_importador (nome, valor_total, peso_total)
+    principais_exportadores: List[dict]  # Top empresas por razao_social_exportador
     registros_por_mes: dict
     valores_por_mes: Optional[dict] = None  # Valores FOB por mês
     pesos_por_mes: Optional[dict] = None  # Pesos por mês
@@ -3847,6 +3849,56 @@ async def get_dashboard_stats(
             }
             for pais, total_valor, total_operacoes in principais_paises
         ]
+
+        # Principais importadores por empresa (razao_social_importador) - para lista "Prováveis Importadores"
+        principais_imp = db.query(
+            OperacaoComex.razao_social_importador.label('nome'),
+            func.sum(OperacaoComex.valor_fob).label('valor_total'),
+            func.count(OperacaoComex.id).label('total_operacoes'),
+            func.sum(OperacaoComex.peso_liquido_kg).label('peso_total')
+        ).filter(
+            and_(*filtros_valor),
+            OperacaoComex.razao_social_importador.isnot(None),
+            OperacaoComex.razao_social_importador != ''
+        ).group_by(
+            OperacaoComex.razao_social_importador
+        ).order_by(
+            func.sum(OperacaoComex.valor_fob).desc()
+        ).limit(10).all()
+        principais_importadores_list = [
+            {
+                "nome": nome or "N/A",
+                "valor_total": float(valor_total or 0),
+                "total_operacoes": total_operacoes or 0,
+                "peso_total": float(peso_total or 0)
+            }
+            for nome, valor_total, total_operacoes, peso_total in principais_imp
+        ]
+
+        # Principais exportadores por empresa (razao_social_exportador) - para lista "Prováveis Exportadores"
+        principais_exp = db.query(
+            OperacaoComex.razao_social_exportador.label('nome'),
+            func.sum(OperacaoComex.valor_fob).label('valor_total'),
+            func.count(OperacaoComex.id).label('total_operacoes'),
+            func.sum(OperacaoComex.peso_liquido_kg).label('peso_total')
+        ).filter(
+            and_(*filtros_valor),
+            OperacaoComex.razao_social_exportador.isnot(None),
+            OperacaoComex.razao_social_exportador != ''
+        ).group_by(
+            OperacaoComex.razao_social_exportador
+        ).order_by(
+            func.sum(OperacaoComex.valor_fob).desc()
+        ).limit(10).all()
+        principais_exportadores_list = [
+            {
+                "nome": nome or "N/A",
+                "valor_total": float(valor_total or 0),
+                "total_operacoes": total_operacoes or 0,
+                "peso_total": float(peso_total or 0)
+            }
+            for nome, valor_total, total_operacoes, peso_total in principais_exp
+        ]
     
         # Se não houver países no banco, tentar usar empresas recomendadas
         if not principais_paises_list:
@@ -4318,6 +4370,8 @@ async def get_dashboard_stats(
                 valor_total_exportacoes=0.0,
                 principais_ncms=[],
                 principais_paises=[],
+                principais_importadores=[],
+                principais_exportadores=[],
                 registros_por_mes=empty_reg,
                 valores_por_mes=empty_val,
                 pesos_por_mes=dict(empty_val)
@@ -4334,6 +4388,8 @@ async def get_dashboard_stats(
             quantidade_estatistica_total=float(quantidade_total),
             principais_ncms=principais_ncms_list if principais_ncms_list else [],
             principais_paises=principais_paises_list if principais_paises_list else [],
+            principais_importadores=principais_importadores_list if principais_importadores_list else [],
+            principais_exportadores=principais_exportadores_list if principais_exportadores_list else [],
             registros_por_mes=registros_dict if registros_dict else {},
             valores_por_mes=valores_por_mes_dict if valores_por_mes_dict else {},
             pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {}

@@ -2,12 +2,16 @@
 Script para coletar dados de empresas exportadoras/importadoras da Base dos Dados (BigQuery)
 e salvar em arquivo Excel e/ou importar para PostgreSQL.
 
+CREDENCIAIS (obrigatório para acessar o BigQuery):
+    OPÇÃO 1 - No PC (PowerShell): aponte para o arquivo JSON da Service Account
+        $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\caminho\\para\\sua-conta-servico.json"
+    OPÇÃO 2 - No Render: crie a variável GOOGLE_APPLICATION_CREDENTIALS_JSON com o
+        conteúdo completo do JSON da Service Account.
+    OPÇÃO 3 - Login local: gcloud auth application-default login
+
 USO:
-    # Configurar credenciais do Google Cloud
-    export GOOGLE_APPLICATION_CREDENTIALS="caminho/para/credenciais.json"
-    
-    # Executar script
-    python backend/scripts/coletar_empresas_base_dos_dados.py
+    cd backend
+    python scripts/coletar_empresas_base_dos_dados.py
 """
 import sys
 from pathlib import Path
@@ -20,6 +24,32 @@ import pandas as pd
 backend_dir = Path(__file__).parent.parent
 os.chdir(backend_dir)
 sys.path.insert(0, str(backend_dir))
+
+# Carregar .env do backend para ter GOOGLE_APPLICATION_CREDENTIALS_JSON (e outras variáveis)
+_env_file = backend_dir / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+        # Se o JSON no .env for multilinha, load_dotenv pode não carregar tudo; tentar ler manualmente
+        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip() == "{":
+            raw = _env_file.read_text(encoding="utf-8", errors="replace")
+            if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in raw:
+                start = raw.find("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+                start = raw.find("{", start)
+                if start != -1:
+                    depth = 0
+                    end = start
+                    for i, c in enumerate(raw[start:], start):
+                        if c == "{": depth += 1
+                        elif c == "}": depth -= 1
+                        if depth == 0:
+                            end = i
+                            break
+                    if end > start:
+                        os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = raw[start:end + 1]
+    except Exception:
+        pass
 
 logger.info("="*80)
 logger.info("COLETA DE EMPRESAS DA BASE DOS DADOS - ANO 2021")
@@ -74,15 +104,66 @@ WHERE dados.ano = 2021
 """
 
 
+def _get_bigquery_client():
+    """Cria cliente BigQuery usando credenciais de GOOGLE_APPLICATION_CREDENTIALS ou GOOGLE_APPLICATION_CREDENTIALS_JSON."""
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+    import json
+
+    # 1) Credenciais via JSON em variável de ambiente (útil para Render/CI)
+    json_str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if json_str and json_str.strip():
+        try:
+            info = json.loads(json_str)
+            creds = service_account.Credentials.from_service_account_info(info)
+            return bigquery.Client(credentials=creds, project=info.get("project_id"))
+        except Exception as e:
+            logger.warning(f"GOOGLE_APPLICATION_CREDENTIALS_JSON inválido: {e}. Tentando outras opções.")
+
+    # 2) Caminho para arquivo JSON (padrão)
+    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds_path and os.path.isfile(creds_path):
+        return bigquery.Client.from_service_account_json(creds_path)
+
+    # 3) Sem credenciais configuradas
+    return None
+
+
 def coletar_dados_bigquery():
     """Coleta dados do BigQuery usando a query SQL."""
     try:
         from google.cloud import bigquery
-        
+        from google.auth.exceptions import DefaultCredentialsError
+
         logger.info("🔌 Conectando ao BigQuery...")
-        
-        # Inicializar cliente BigQuery
-        client = bigquery.Client()
+
+        # Tentar obter cliente com credenciais configuradas
+        client = _get_bigquery_client()
+        if client is None:
+            try:
+                client = bigquery.Client()
+            except DefaultCredentialsError:
+                logger.error("❌ Credenciais do Google Cloud não encontradas.")
+                logger.info("")
+                logger.info("Configure de uma das formas abaixo:")
+                logger.info("")
+                logger.info("  OPÇÃO 1 - Arquivo JSON (recomendado no PC):")
+                logger.info("    1. No Google Cloud Console, crie uma Service Account e baixe o JSON.")
+                logger.info("    2. No PowerShell:")
+                logger.info('       $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\caminho\\para\\sua-conta-servico.json"')
+                logger.info("    3. Rode o script de novo.")
+                logger.info("")
+                logger.info("  OPÇÃO 2 - Variável com JSON (útil no Render):")
+                logger.info('    No Render, crie a variável GOOGLE_APPLICATION_CREDENTIALS_JSON')
+                logger.info("    com o conteúdo do arquivo JSON da Service Account.")
+                logger.info("")
+                logger.info("  OPÇÃO 3 - Login local (gcloud):")
+                logger.info("    Execute: gcloud auth application-default login")
+                logger.info("")
+                raise DefaultCredentialsError(
+                    "Configure GOOGLE_APPLICATION_CREDENTIALS ou GOOGLE_APPLICATION_CREDENTIALS_JSON. "
+                    "Veja https://cloud.google.com/docs/authentication"
+                )
         
         logger.info("📊 Executando query no BigQuery...")
         logger.info("⚠️ Esta operação pode demorar alguns minutos...")
