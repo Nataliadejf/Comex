@@ -4895,6 +4895,25 @@ async def autocomplete_importadoras(
     
     try:
         resultado = []
+        query_clean = (q or "").strip()
+        
+        # 0. Buscar na tabela empresas (cadastro Base dos Dados) — sempre mostra sugestões por nome
+        if query_clean:
+            empresas_cadastro = db.query(Empresa.nome).filter(
+                Empresa.nome.isnot(None),
+                Empresa.nome != "",
+                Empresa.nome.ilike(f"%{query_clean}%"),
+                Empresa.tipo.in_(["importadora", "ambos"])
+            ).distinct().limit(limit).all()
+            for (nome,) in empresas_cadastro:
+                if nome and nome.strip():
+                    if not any(r.get("nome", "").strip().lower() == nome.strip().lower() for r in resultado):
+                        resultado.append({
+                            "nome": nome.strip(),
+                            "total_operacoes": 0,
+                            "valor_total": 0.0,
+                            "fonte": "empresas"
+                        })
         
         # 1. Buscar empresas importadoras que contêm o termo nas operações
         empresas = db.query(
@@ -4911,15 +4930,17 @@ async def autocomplete_importadoras(
             func.sum(OperacaoComex.valor_fob).desc()
         ).limit(limit).all()
         
-        resultado = [
-            {
-                "nome": empresa,
-                "total_operacoes": int(total_operacoes),
-                "valor_total": float(valor_total or 0),
-                "fonte": "operacoes"
-            }
-            for empresa, total_operacoes, valor_total in empresas
-        ]
+        for empresa, total_operacoes, valor_total in empresas:
+            nome_emp = (empresa or "").strip()
+            if not nome_emp:
+                continue
+            if not any(r.get("nome", "").strip().lower() == nome_emp.lower() for r in resultado):
+                resultado.append({
+                    "nome": nome_emp,
+                    "total_operacoes": int(total_operacoes),
+                    "valor_total": float(valor_total or 0),
+                    "fonte": "operacoes"
+                })
         
         # 2. Complementar com BigQuery (cadastro histórico)
         if len(resultado) < limit:
@@ -5048,7 +5069,26 @@ async def autocomplete_exportadoras(
         logger.info(f"🔍 Buscando exportadoras com termo: '{q}'")
         
         resultado = []
-        query_lower = q.lower() if q else ""
+        query_clean = (q or "").strip()
+        query_lower = query_clean.lower()
+        
+        # 0. Buscar na tabela empresas (cadastro Base dos Dados) — sempre mostra sugestões por nome
+        if query_clean:
+            empresas_cadastro = db.query(Empresa.nome).filter(
+                Empresa.nome.isnot(None),
+                Empresa.nome != "",
+                Empresa.nome.ilike(f"%{query_clean}%"),
+                Empresa.tipo.in_(["exportadora", "ambos"])
+            ).distinct().limit(limit).all()
+            for (nome,) in empresas_cadastro:
+                if nome and nome.strip():
+                    if not any(r.get("nome", "").strip().lower() == nome.strip().lower() for r in resultado):
+                        resultado.append({
+                            "nome": nome.strip(),
+                            "total_operacoes": 0,
+                            "valor_total": 0.0,
+                            "fonte": "empresas"
+                        })
         
         # 1. Buscar nas operações: com termo (ILIKE) ou sem termo (top exportadoras para sugestões)
         filter_export = [
@@ -5072,11 +5112,13 @@ async def autocomplete_exportadoras(
         
         empresas = empresas_query.all()
         
-        resultado = []
         for empresa, total_operacoes, valor_total in empresas:
-            if empresa:  # Garantir que empresa não é None
+            nome_emp = (empresa or "").strip()
+            if not nome_emp:
+                continue
+            if not any(r.get("nome", "").strip().lower() == nome_emp.lower() for r in resultado):
                 resultado.append({
-                    "nome": str(empresa),
+                    "nome": nome_emp,
                     "total_operacoes": int(total_operacoes) if total_operacoes else 0,
                     "valor_total": float(valor_total or 0),
                     "fonte": "operacoes"

@@ -157,8 +157,11 @@ const Dashboard = () => {
         let lista = [];
         try {
           const response = await empresasAPI.autocompleteImportadoras(termo, 25);
-          if (response && response.data && Array.isArray(response.data)) {
-            lista = response.data;
+          const data = response?.data;
+          if (data != null && Array.isArray(data)) {
+            lista = data;
+          } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
+            lista = data.data;
           }
         } catch (e) {
           console.warn('⚠️ Autocomplete importadoras falhou, usando fallback debug:', e.message);
@@ -191,8 +194,11 @@ const Dashboard = () => {
         let lista = [];
         try {
           const response = await empresasAPI.autocompleteExportadoras(termo, 25);
-          if (response && response.data && Array.isArray(response.data)) {
-            lista = response.data;
+          const data = response?.data;
+          if (data != null && Array.isArray(data)) {
+            lista = data;
+          } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
+            lista = data.data;
           }
         } catch (e) {
           console.warn('⚠️ Autocomplete exportadoras falhou, usando fallback debug:', e.message);
@@ -1100,10 +1106,14 @@ const Dashboard = () => {
                 buscarImportadoras(t);
               }}
               onSelect={(value) => {
-                const v = value ?? '';
+                const v = (value ?? '').toString().trim();
                 importadorInputRef.current = v;
                 setEmpresaImportadoraInput(v);
-                setEmpresaImportadora(v.trim() ? v : null);
+                setEmpresaImportadora(v || null);
+                if (v) loadDashboardData({ empresa_importadora: v, empresa_exportadora: empresaExportadora || undefined });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch(e);
               }}
               options={importadorasOptions}
               loading={loadingImportadoras}
@@ -1136,10 +1146,14 @@ const Dashboard = () => {
                 buscarExportadoras(t);
               }}
               onSelect={(value) => {
-                const v = value ?? '';
+                const v = (value ?? '').toString().trim();
                 exportadorInputRef.current = v;
                 setEmpresaExportadoraInput(v);
-                setEmpresaExportadora(v.trim() ? v : null);
+                setEmpresaExportadora(v || null);
+                if (v) loadDashboardData({ empresa_exportadora: v, empresa_importadora: empresaImportadora || undefined });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch(e);
               }}
               options={exportadorasOptions}
               loading={loadingExportadoras}
