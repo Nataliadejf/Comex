@@ -599,28 +599,14 @@ async def root():
     }
 
 
-def _health_db_check() -> tuple[bool, str]:
-    """Testa conexão com o banco. Retorna (ok, mensagem)."""
-    try:
-        db = SessionLocal()
-        try:
-            db.execute(text("SELECT 1"))
-            db.commit()
-            return True, "connected"
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"Health check DB: {e}")
-        return False, str(e)
-
-
 @app.get("/health")
 async def health_check():
-    """Verifica saúde da API. Sempre retorna 200; status 'healthy' só se o banco responder."""
-    ok, msg = _health_db_check()
-    if ok:
-        return {"status": "healthy", "database": "connected"}
-    return {"status": "degraded", "database": "disconnected", "error": msg}
+    """
+    Health check rápido para Render.
+    Sempre retorna 200 em < 1 segundo para evitar timeouts.
+    Não consulta o banco para evitar delays quando Neon está em modo sleep.
+    """
+    return {"status": "healthy", "service": "comex-backend"}
 
 
 @app.get("/validar-sistema")
