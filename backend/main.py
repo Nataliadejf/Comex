@@ -315,6 +315,7 @@ class DashboardStats(BaseModel):
     registros_por_mes: dict
     valores_por_mes: Optional[dict] = None  # Valores FOB por mês
     pesos_por_mes: Optional[dict] = None  # Pesos por mês
+    aviso_dados_sem_empresa: Optional[bool] = None  # True se filtro por empresa foi usado mas operações não têm nome/CNPJ preenchido
 
 
 # Cache simples em memória para aliviar o /dashboard/stats
@@ -3564,9 +3565,11 @@ async def get_dashboard_stats(
         empresa_exportadora = empresa_exportadora[0] if empresa_exportadora else None
 
     logger.info(
-        "Dashboard stats recebido: empresa_importadora=%r empresa_exportadora=%r",
+        "Dashboard stats recebido: empresa_importadora=%r empresa_exportadora=%r data_inicio=%r data_fim=%r",
         empresa_importadora,
         empresa_exportadora,
+        data_inicio,
+        data_fim,
     )
 
     # Normalizar filtros de empresa (strip, ignorar "undefined"/"null" e usar só se não vazio)
@@ -3589,8 +3592,10 @@ async def get_dashboard_stats(
         logger.info(f"Dashboard stats APLICANDO filtro empresa: importadora={_emp_imp!r} exportadora={_emp_exp!r}")
     else:
         logger.info("Dashboard stats SEM filtro de empresa (totais gerais)")
+    # Não usar cache quando há filtro de empresa ou período explícito (data_inicio/data_fim), para não devolver dados de outro período
+    tem_periodo_explicito = bool(data_inicio and data_fim)
     cache_key = None
-    if not tem_filtro_empresa:
+    if not tem_filtro_empresa and not tem_periodo_explicito:
         try:
             cache_key = _make_dashboard_cache_key(
                 meses,
@@ -3606,7 +3611,7 @@ async def get_dashboard_stats(
         except Exception as e:
             logger.warning(f"⚠️ Erro ao verificar cache: {e}")
     if cache_key is None:
-        cache_key = f"dashboard_{meses}_{tipo_operacao}_{ncm}_{_emp_imp!r}_{_emp_exp!r}"
+        cache_key = f"dashboard_{meses}_{tipo_operacao}_{ncm}_{data_inicio or ''}_{data_fim or ''}_{_emp_imp!r}_{_emp_exp!r}"
 
     def _empty_stats():
         """Resposta vazia para evitar 500 quando DB ou lógica falham. Deve conter todos os campos de DashboardStats."""
@@ -3626,6 +3631,7 @@ async def get_dashboard_stats(
             "registros_por_mes": {},
             "valores_por_mes": {},
             "pesos_por_mes": {},
+            "aviso_dados_sem_empresa": None,
         }
 
     try:
@@ -3667,26 +3673,102 @@ async def get_dashboard_stats(
             else:
                 base_filters.append(OperacaoComex.ncm.in_(ncms_filtro))
     
-        # Aplicar filtros de empresa: case-insensitive, por palavras (primeiro nome e demais)
-        # Cada palavra do termo deve aparecer no nome da empresa (ordem livre, sem diferenciar maiúsculas/minúsculas)
-        def _filtro_empresa_por_palavras(coluna, termo):
-            palavras = [p.strip() for p in termo.split() if p.strip()]
+        # IMPORTANTE: Filtros de empresa são específicos ao tipo (importador vs exportador)
+        # NÃO devem ser adicionados a base_filters, pois serão aplicados separadamente
+        # para importações e exportações
+        filtro_importador = None
+        filtro_exportador = None
+
+        # Aplicar filtros de empresa: case-insensitive, por palavras (ordem livre).
+        # Também busca por CNPJ na tabela Empresa (Vale S.A, Hidrau Torque etc.) quando operações têm cnpj_importador/exportador preenchido.
+        def _normalizar_palavra_empresa(p: str) -> str:
+            t = (p or "").strip()
+            if not t:
+                return ""
+            sem_pontos = t.replace(".", "").strip()
+            return sem_pontos if sem_pontos else t
+
+        def _cnpjs_empresa_por_nome(session, termo: str, tipo: str) -> List[str]:
+            """Busca CNPJs na tabela Empresa cujo nome contém o termo (para importadora ou exportadora)."""
+            if not (termo or "").strip():
+                return []
+            termo_clean = (termo or "").strip()
+            palavras = [p.strip() for p in termo_clean.split() if p.strip()]
             if not palavras:
                 return []
-            return [coluna.ilike(f"%{p}%") for p in palavras]
+            q = session.query(Empresa.cnpj).filter(
+                Empresa.cnpj.isnot(None),
+                Empresa.cnpj != "",
+            )
+            if tipo == "importadora":
+                q = q.filter(Empresa.tipo.in_(["importadora", "ambos"]))
+            else:
+                q = q.filter(Empresa.tipo.in_(["exportadora", "ambos"]))
+            for p in palavras:
+                norm = _normalizar_palavra_empresa(p)
+                if norm:
+                    q = q.filter(or_(Empresa.nome.ilike(f"%{norm}%"), Empresa.nome.ilike(f"%{p}%")))
+            cnpjs = [r[0] for r in q.distinct().limit(500).all() if r and r[0]]
+            return cnpjs
+
+        def _filtro_empresa_por_palavras(coluna, termo):
+            """
+            Cria um filtro ILIKE simples para encontrar empresa.
+            Busca por: termo original OU termo normalizado (sem pontos/acentos)
+            """
+            termo_clean = (termo or "").strip()
+            if not termo_clean:
+                return []
+            
+            # Normalizar: remover pontos, converter S.A para SA
+            termo_norm = termo_clean.replace(".", "").strip()
+            
+            # Se termo_norm é igual ao original, usar apenas um filtro
+            if termo_norm == termo_clean:
+                # Simples: match do termo
+                filtro = coluna.ilike(f"%{termo_clean}%")
+            else:
+                # OR: termo original E termo normalizado (ex.: "Vale S.A" encontra "VALE SA")
+                filtro = or_(coluna.ilike(f"%{termo_clean}%"), coluna.ilike(f"%{termo_norm}%"))
+            
+            logger.debug(f"🔍 Filtro simples gerado para '{termo_clean}': ILIKE ou (original, normalizado)")
+            return [filtro]
 
         if _emp_imp:
             filtros_imp_empresa = _filtro_empresa_por_palavras(
                 OperacaoComex.razao_social_importador, _emp_imp
             )
-            if filtros_imp_empresa:
-                base_filters.append(and_(*filtros_imp_empresa))
+            logger.info(f"🔍 Filtro empresa importadora '{_emp_imp}': filtros_imp_empresa retornou {len(filtros_imp_empresa)} elemento(s)")
+            if filtros_imp_empresa and len(filtros_imp_empresa) > 0:
+                cond_razao_imp = filtros_imp_empresa[0]
+                cnpjs_imp = _cnpjs_empresa_por_nome(db, _emp_imp, "importadora")
+                logger.info(f"🔍 CNPJs encontrados para '{_emp_imp}': {cnpjs_imp}")
+                if cnpjs_imp:
+                    filtro_importador = or_(cond_razao_imp, OperacaoComex.cnpj_importador.in_(cnpjs_imp))
+                    logger.info(f"✅ Filtro importador criado: razao_social OU cnpj IN {cnpjs_imp}")
+                else:
+                    filtro_importador = cond_razao_imp
+                    logger.info(f"✅ Filtro importador criado: apenas razao_social")
+            else:
+                logger.warning(f"⚠️ Nenhum filtro gerado para empresa importadora '{_emp_imp}'")
+        
         if _emp_exp:
             filtros_exp_empresa = _filtro_empresa_por_palavras(
                 OperacaoComex.razao_social_exportador, _emp_exp
             )
-            if filtros_exp_empresa:
-                base_filters.append(and_(*filtros_exp_empresa))
+            logger.info(f"🔍 Filtro empresa exportadora '{_emp_exp}': filtros_exp_empresa retornou {len(filtros_exp_empresa) if filtros_exp_empresa else 0} elemento(s)")
+            if filtros_exp_empresa and len(filtros_exp_empresa) > 0:
+                cond_razao_exp = filtros_exp_empresa[0]
+                cnpjs_exp = _cnpjs_empresa_por_nome(db, _emp_exp, "exportadora")
+                logger.info(f"🔍 CNPJs encontrados para '{_emp_exp}': {cnpjs_exp}")
+                if cnpjs_exp:
+                    filtro_exportador = or_(cond_razao_exp, OperacaoComex.cnpj_exportador.in_(cnpjs_exp))
+                    logger.info(f"✅ Filtro exportador criado: razao_social OU cnpj IN {cnpjs_exp}")
+                else:
+                    filtro_exportador = cond_razao_exp
+                    logger.info(f"✅ Filtro exportador criado: apenas razao_social")
+            else:
+                logger.warning(f"⚠️ Nenhum filtro gerado para empresa exportadora '{_emp_exp}'")
     
         # Aplicar filtro de tipo de operação se fornecido
         tipo_filtro = None
@@ -3697,7 +3779,11 @@ async def get_dashboard_stats(
                 tipo_filtro = TipoOperacao.EXPORTACAO
     
         # Volume de importações e exportações (sempre sobre linhas filtradas)
+        # IMPORTANTE: Usar filtro_importador/exportador apenas onde apropriado!
         filtros_imp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO]
+        if filtro_importador is not None:
+            filtros_imp.append(filtro_importador)
+        
         if tipo_filtro == TipoOperacao.IMPORTACAO or tipo_filtro is None:
             v_imp = db.query(func.sum(OperacaoComex.peso_liquido_kg)).filter(
                 and_(*filtros_imp)
@@ -3707,6 +3793,9 @@ async def get_dashboard_stats(
             volume_imp = 0.0
 
         filtros_exp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO]
+        if filtro_exportador is not None:
+            filtros_exp.append(filtro_exportador)
+        
         if tipo_filtro == TipoOperacao.EXPORTACAO or tipo_filtro is None:
             v_exp = db.query(func.sum(OperacaoComex.peso_liquido_kg)).filter(
                 and_(*filtros_exp)
@@ -3719,7 +3808,20 @@ async def get_dashboard_stats(
         if tipo_filtro:
             filtros_valor = base_filters + [OperacaoComex.tipo_operacao == tipo_filtro]
         else:
-            filtros_valor = base_filters
+            filtros_valor = base_filters.copy()  # IMPORTANTE: copiar para não modificar base_filters
+        
+        # Se há filtro de empresa, incluir na query geral (combinando importador OU exportador se ambos existem)
+        if filtro_importador is not None or filtro_exportador is not None:
+            if filtro_importador is not None and filtro_exportador is not None:
+                # Ambos: a empresa pode ter sido importadora OU exportadora
+                filtros_valor_empresa = or_(filtro_importador, filtro_exportador)
+                filtros_valor.append(filtros_valor_empresa)
+            elif filtro_importador is not None:
+                # Apenas importador
+                filtros_valor.append(filtro_importador)
+            elif filtro_exportador is not None:
+                # Apenas exportador
+                filtros_valor.append(filtro_exportador)
     
         valor_total_raw = db.query(func.sum(OperacaoComex.valor_fob)).filter(
             and_(*filtros_valor)
@@ -3746,10 +3848,33 @@ async def get_dashboard_stats(
         quantidade_exp = 0.0
         if tipo_filtro is None:
             filtros_valor_imp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO]
+            if filtro_importador is not None:
+                filtros_valor_imp.append(filtro_importador)
+            
+            if tem_filtro_empresa:
+                logger.info(f"🔍 Calculando valor_total_imp com {len(filtros_valor_imp)} filtros (incluindo empresa '{_emp_imp or _emp_exp}')")
+                logger.info(f"📋 Lista de filtros aplicados: {[str(f) for f in filtros_valor_imp]}")
+                # Verificar quantas operações correspondem ANTES de calcular soma
+                count_before_sum = db.query(func.count(OperacaoComex.id)).filter(
+                    and_(*filtros_valor_imp)
+                ).scalar() or 0
+                logger.info(f"📊 Total de operações de importação que correspondem ao filtro: {count_before_sum}")
             valor_total_imp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
                 and_(*filtros_valor_imp)
             ).scalar() or 0.0
             valor_total_imp = float(valor_total_imp)
+            if tem_filtro_empresa:
+                logger.info(f"💰 valor_total_imp calculado: {valor_total_imp:.2f} (empresa: '{_emp_imp or _emp_exp}')")
+                # Verificar se o valor faz sentido (não deve ser igual para empresas diferentes)
+                if valor_total_imp > 0:
+                    # Buscar uma amostra de operações para verificar se o filtro está correto
+                    amostra = db.query(
+                        OperacaoComex.razao_social_importador,
+                        func.sum(OperacaoComex.valor_fob).label('valor')
+                    ).filter(
+                        and_(*filtros_valor_imp)
+                    ).group_by(OperacaoComex.razao_social_importador).limit(3).all()
+                    logger.info(f"📋 Amostra de empresas nas operações filtradas: {[(nome[:50] if nome else 'N/A', float(val)) for nome, val in amostra]}")
 
             _q_imp = db.query(func.sum(OperacaoComex.quantidade_estatistica)).filter(
                 and_(*filtros_valor_imp)
@@ -3763,6 +3888,9 @@ async def get_dashboard_stats(
                 quantidade_imp = float(cnt_imp)
 
             filtros_valor_exp = base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO]
+            if filtro_exportador is not None:
+                filtros_valor_exp.append(filtro_exportador)
+            
             valor_total_exp = db.query(func.sum(OperacaoComex.valor_fob)).filter(
                 and_(*filtros_valor_exp)
             ).scalar() or 0.0
@@ -3787,9 +3915,14 @@ async def get_dashboard_stats(
 
         if tem_filtro_empresa:
             logger.info(
-                "Dashboard stats calculado com filtro: valor_imp=%.2f valor_exp=%.2f total=%.2f",
-                valor_total_imp, valor_total_exp, valor_total,
+                "Dashboard stats calculado com filtro empresa '%s': valor_imp=%.2f valor_exp=%.2f total=%.2f base_filters_count=%d",
+                _emp_imp or _emp_exp, valor_total_imp, valor_total_exp, valor_total, len(base_filters),
             )
+            # Verificar quantas operações foram encontradas
+            count_ops_imp = db.query(func.count(OperacaoComex.id)).filter(
+                and_(*base_filters + [OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO])
+            ).scalar() or 0
+            logger.info(f"📊 Operações de importação encontradas com filtro: {count_ops_imp}")
     
         # Principais NCMs
         principais_ncms = db.query(
@@ -4338,6 +4471,23 @@ async def get_dashboard_stats(
         logger.info(f"📊 Total de Países/Estados: {len(principais_paises_list)}")
         logger.info("="*80)
     
+        # Aviso quando filtro por empresa foi usado mas não há operações com empresa preenchida no banco
+        aviso_dados_sem_empresa = False
+        if tem_filtro_empresa and (valor_total_imp + valor_total_exp + valor_total) == 0:
+            tem_operacao_com_empresa = db.query(OperacaoComex.id).filter(
+                or_(
+                    OperacaoComex.razao_social_importador.isnot(None),
+                    OperacaoComex.razao_social_exportador.isnot(None),
+                    OperacaoComex.cnpj_importador.isnot(None),
+                    OperacaoComex.cnpj_exportador.isnot(None),
+                )
+            ).limit(1).first()
+            if not tem_operacao_com_empresa:
+                aviso_dados_sem_empresa = True
+                logger.info(
+                    "Aviso: filtro por empresa ativo mas nenhuma operação no banco tem importador/exportador ou CNPJ preenchido."
+                )
+
         # Se não houver dados, retornar resposta vazia com todos os meses do período (incl. 2024)
         if valor_total == 0 and not principais_ncms_list and not principais_paises_list:
             logger.warning("⚠️ Nenhum dado encontrado, retornando resposta vazia com período completo")
@@ -4362,7 +4512,8 @@ async def get_dashboard_stats(
                 principais_exportadores=[],
                 registros_por_mes=empty_reg,
                 valores_por_mes=empty_val,
-                pesos_por_mes=dict(empty_val)
+                pesos_por_mes=dict(empty_val),
+                aviso_dados_sem_empresa=aviso_dados_sem_empresa if tem_filtro_empresa else None,
             )
     
         stats_response = DashboardStats(
@@ -4380,7 +4531,8 @@ async def get_dashboard_stats(
             principais_exportadores=principais_exportadores_list if principais_exportadores_list else [],
             registros_por_mes=registros_dict if registros_dict else {},
             valores_por_mes=valores_por_mes_dict if valores_por_mes_dict else {},
-            pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {}
+            pesos_por_mes=pesos_por_mes_dict if pesos_por_mes_dict else {},
+            aviso_dados_sem_empresa=aviso_dados_sem_empresa if tem_filtro_empresa else None,
         )
     
         payload = stats_response.model_dump() if hasattr(stats_response, "model_dump") else stats_response.dict()
@@ -4801,19 +4953,27 @@ async def buscar_operacoes(
         via = ViaTransporte[filtros.via_transporte.upper()]
         conditions.append(OperacaoComex.via_transporte == via)
     
-    # Filtros de empresa: case-insensitive, por palavras (primeiro nome e demais)
+    # Filtros de empresa: case-insensitive, por palavras; normalizar S.A/SA para coincidir com o banco
+    def _normalizar_palavra_empresa_lista(p: str) -> str:
+        t = (p or "").strip().replace(".", "").strip()
+        return t or (p or "").strip()
+
     def _palavras_filtro(termo):
         return [p.strip() for p in (termo or "").split() if p.strip()]
 
     if filtros.empresa_importadora:
         palavras_imp = _palavras_filtro(filtros.empresa_importadora)
         for p in palavras_imp:
-            conditions.append(OperacaoComex.razao_social_importador.ilike(f"%{p}%"))
+            norm = _normalizar_palavra_empresa_lista(p)
+            if norm:
+                conditions.append(OperacaoComex.razao_social_importador.ilike(f"%{norm}%"))
 
     if filtros.empresa_exportadora:
         palavras_exp = _palavras_filtro(filtros.empresa_exportadora)
         for p in palavras_exp:
-            conditions.append(OperacaoComex.razao_social_exportador.ilike(f"%{p}%"))
+            norm = _normalizar_palavra_empresa_lista(p)
+            if norm:
+                conditions.append(OperacaoComex.razao_social_exportador.ilike(f"%{norm}%"))
     
     if filtros.valor_fob_min:
         conditions.append(OperacaoComex.valor_fob >= filtros.valor_fob_min)

@@ -35,6 +35,32 @@ const { Option } = Select;
 
 const COLORS = ['#0088FE', '#FF8042', '#FFBB28', '#00C49F', '#8884d8', '#82ca9d'];
 
+// Tooltip seguro para Recharts: evita getBoundingClientRect em elemento nulo ao mudar filtros (ex.: Hidrau Torque)
+const SafeTooltip = ({ active, payload, formatter, label, ...rest }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const format = typeof formatter === 'function' ? formatter : (v) => v;
+  return (
+    <div
+      style={{
+        background: 'rgba(255,255,255,0.96)',
+        border: '1px solid #ddd',
+        borderRadius: '6px',
+        padding: '8px 12px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        maxWidth: '320px',
+      }}
+      {...rest}
+    >
+      {label && <div style={{ marginBottom: '4px', fontWeight: 600, fontSize: '12px' }}>{label}</div>}
+      {payload.map((entry, i) => (
+        <div key={i} style={{ color: entry.color, fontSize: '12px' }}>
+          {entry.name}: {format(entry.value, entry.name, entry, i)}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // Mapeamento de UF para Nome Completo do Estado
 const UF_PARA_ESTADO = {
   'AC': 'Acre',
@@ -103,6 +129,7 @@ const Dashboard = () => {
   const [loadingExportadoras, setLoadingExportadoras] = useState(false);
   const isLoadingRef = useRef(false);
   const requestIdRef = useRef(0);
+  const searchInProgressRef = useRef(false); // true após Buscar até a requisição terminar (evita useEffect sobrescrever dados filtrados)
   const importadorInputRef = useRef('');
   const exportadorInputRef = useRef('');
   
@@ -237,14 +264,14 @@ const Dashboard = () => {
   }, [periodo]);
 
   const loadDashboardData = useCallback(async (overrides = {}) => {
-    // Não usar cache quando há filtros explícitos (Buscar com texto digitado)
-    const filtroImportador = overrides.empresa_importadora ?? (empresaImportadora && String(empresaImportadora).trim());
-    const filtroExportador = overrides.empresa_exportadora ?? (empresaExportadora && String(empresaExportadora).trim());
+    // Usar overrides quando vieram do clique em Buscar (garante que filtros da tela são aplicados)
+    const filtroImportador = overrides.empresa_importadora !== undefined ? (overrides.empresa_importadora && String(overrides.empresa_importadora).trim()) : (empresaImportadora && String(empresaImportadora).trim());
+    const filtroExportador = overrides.empresa_exportadora !== undefined ? (overrides.empresa_exportadora && String(overrides.empresa_exportadora).trim()) : (empresaExportadora && String(empresaExportadora).trim());
     const temFiltroEmpresa = !!(filtroImportador || filtroExportador);
 
     const currentRequestId = ++requestIdRef.current;
-    // Se o usuário clicou em Buscar (tem overrides), sempre enviar a requisição; respostas antigas serão ignoradas pelo requestId
-    const ehBuscaComFiltro = !!(overrides.empresa_importadora || overrides.empresa_exportadora);
+    // Se o usuário clicou em Buscar (qualquer override: empresa, período, NCM, tipo), não usar cache e não pular a requisição
+    const ehBuscaComFiltro = Object.keys(overrides).length > 0;
     if (isLoadingRef.current && !ehBuscaComFiltro) {
       console.log('⚠️ Requisição já em andamento, ignorando...');
       return;
@@ -254,7 +281,25 @@ const Dashboard = () => {
     setLoading(true);
     setError(null);
     
+    // NUNCA usar cache quando há filtro de empresa ou busca manual (garantir dados atualizados)
     const cachedData = (temFiltroEmpresa || ehBuscaComFiltro) ? null : localStorage.getItem('dashboard_stats_cache');
+    if (temFiltroEmpresa || ehBuscaComFiltro) {
+      console.log('🚫 Cache desabilitado devido a filtro de empresa ou busca manual');
+      // Limpar cache do localStorage quando há filtro de empresa
+      try {
+        localStorage.removeItem('dashboard_stats_cache');
+        localStorage.removeItem('dashboard_stats_cache_timestamp');
+      } catch (e) {
+        console.warn('⚠️ Erro ao limpar cache:', e);
+      }
+      // Limpar stats antigos quando há filtro de empresa para evitar mostrar dados incorretos
+      if (temFiltroEmpresa) {
+        console.log('🔄 Limpando stats anteriores devido a filtro de empresa');
+        setStats(null);
+        // Forçar um pequeno delay para garantir que o estado seja limpo
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
     const cacheTimestamp = localStorage.getItem('dashboard_stats_cache_timestamp');
     if (cachedData && cacheTimestamp && !ehBuscaComFiltro) {
       const cacheAge = Date.now() - parseInt(cacheTimestamp);
@@ -286,21 +331,30 @@ const Dashboard = () => {
         apiUrl 
       });
 
-      // Usar múltiplos NCMs se disponível; período 2024 até data atual
+      // Usar overrides quando fornecidos (ex.: clique em Buscar), senão state
+      const dataInicioOverride = overrides.data_inicio;
+      const dataFimOverride = overrides.data_fim;
+      const tipoOverride = overrides.tipoOperacao !== undefined ? overrides.tipoOperacao : tipoOperacao;
+      const ncmOverride = overrides.ncm !== undefined ? overrides.ncm : ncmFiltro;
+      const ncmsOverride = overrides.ncms !== undefined ? overrides.ncms : ncmsFiltro;
+
       const params = {
         meses: Number(meses) || 24,
-        tipoOperacao: tipoOperacao || undefined,
+        tipoOperacao: tipoOverride || undefined,
       };
-      // Enviar data_inicio e data_fim só se período válido (YYYY-MM-DD para evitar 422)
-      if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
+      // Enviar data_inicio e data_fim (overrides do Buscar ou período do state)
+      if (dataInicioOverride && dataFimOverride && /^\d{4}-\d{2}-\d{2}$/.test(String(dataInicioOverride)) && /^\d{4}-\d{2}-\d{2}$/.test(String(dataFimOverride))) {
+        params.data_inicio = dataInicioOverride;
+        params.data_fim = dataFimOverride;
+      } else if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
         params.data_inicio = periodo[0].format('YYYY-MM-DD');
         params.data_fim = periodo[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : periodo[1].format('YYYY-MM-DD');
       }
       
-      if (ncmsFiltro && ncmsFiltro.length > 0) {
-        params.ncms = ncmsFiltro;
-      } else if (ncmFiltro) {
-        params.ncm = ncmFiltro;
+      if (ncmsOverride && ncmsOverride.length > 0) {
+        params.ncms = ncmsOverride;
+      } else if (ncmOverride) {
+        params.ncm = ncmOverride;
       }
       
       // Adicionar filtros de empresa (valor digitado ou selecionado; overrides vêm do clique em Buscar)
@@ -310,9 +364,9 @@ const Dashboard = () => {
       if (filtroExportador) {
         params.empresa_exportadora = String(filtroExportador).trim();
       }
+      console.log('📤 Parâmetros enviados ao backend:', { ...params });
       if (params.empresa_importadora || params.empresa_exportadora) {
-        console.log('🔍 Enviando requisição COM filtro de empresa:', { empresa_importadora: params.empresa_importadora || null, empresa_exportadora: params.empresa_exportadora || null });
-        console.log('🔍 Confira no console a URL da requisição (deve conter empresa_importadora=... e apontar para o backend local se estiver testando)');
+        console.log('🔍 Filtro de empresa na requisição:', { empresa_importadora: params.empresa_importadora || null, empresa_exportadora: params.empresa_exportadora || null });
       }
       
       const response = await dashboardAPI.getStats(params);
@@ -326,6 +380,24 @@ const Dashboard = () => {
       
       console.log('✅ Dados recebidos:', response.data);
       console.log('📊 Filtros usados nesta resposta:', { empresa_importadora: params.empresa_importadora || null, empresa_exportadora: params.empresa_exportadora || null });
+      console.log('💰 Valores nos dados recebidos:', { 
+        valor_total_importacoes: response.data?.valor_total_importacoes, 
+        valor_total_exportacoes: response.data?.valor_total_exportacoes,
+        valor_total_usd: response.data?.valor_total_usd 
+      });
+      
+      // Verificar se os valores realmente mudaram quando há filtro de empresa
+      if (temFiltroEmpresa && stats) {
+        const valorAnteriorImp = stats.valor_total_importacoes ?? stats.valor_total_usd ?? 0;
+        const valorNovoImp = response.data?.valor_total_importacoes ?? response.data?.valor_total_usd ?? 0;
+        if (Math.abs(valorAnteriorImp - valorNovoImp) < 0.01) {
+          console.warn('⚠️ ATENÇÃO: Valores não mudaram após aplicar filtro de empresa!', {
+            empresa: filtroImportador || filtroExportador,
+            valor_anterior: valorAnteriorImp,
+            valor_novo: valorNovoImp
+          });
+        }
+      }
       
       // Validar se a resposta é válida
       if (!response || !response.data) {
@@ -367,9 +439,26 @@ const Dashboard = () => {
           setStats(emptyStats);
           // Não cachear dados vazios
         } else {
-          setStats(response.data);
+          // SEMPRE atualizar stats com os novos dados recebidos (força atualização mesmo se parecer igual)
+          // Criar um novo objeto para forçar re-render do React
+          const novosStats = {
+            ...response.data,
+            _timestamp: Date.now(), // Adicionar timestamp para forçar atualização
+            _filtro_empresa: filtroImportador || filtroExportador || null // Adicionar filtro aplicado
+          };
+          console.log('🔄 Atualizando stats com novos dados:', {
+            valor_total_importacoes: novosStats.valor_total_importacoes,
+            valor_total_exportacoes: novosStats.valor_total_exportacoes,
+            filtro_empresa: filtroImportador || filtroExportador || 'nenhum',
+            timestamp: novosStats._timestamp
+          });
+          // Forçar atualização do estado mesmo se os valores parecerem iguais
+          setStats(null); // Limpar primeiro
+          await new Promise(resolve => setTimeout(resolve, 10)); // Pequeno delay
+          setStats(novosStats); // Depois atualizar com novos dados
+          
           // Só cachear quando não há filtro por empresa (evitar sobrescrever com dados de uma empresa)
-          if (!temFiltroEmpresa) {
+          if (!temFiltroEmpresa && !ehBuscaComFiltro) {
             try {
               localStorage.setItem('dashboard_stats_cache', JSON.stringify(response.data));
               localStorage.setItem('dashboard_stats_cache_timestamp', Date.now().toString());
@@ -377,6 +466,8 @@ const Dashboard = () => {
             } catch (e) {
               console.warn('⚠️ Erro ao salvar cache:', e);
             }
+          } else {
+            console.log('🚫 Cache não salvo devido a filtro de empresa ou busca manual');
           }
         }
       } else {
@@ -511,10 +602,13 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
       isLoadingRef.current = false;
+      searchInProgressRef.current = false; // Buscar concluído; próximo useEffect pode rodar de novo
     }
   }, [meses, tipoOperacao, ncmFiltro, ncmsFiltro, empresaImportadora, empresaExportadora, periodo]);
 
   useEffect(() => {
+    // Não disparar carga automática logo após o usuário clicar em Buscar (evita sobrescrever dados filtrados)
+    if (searchInProgressRef.current) return;
     loadDashboardData();
   }, [loadDashboardData]);
 
@@ -618,28 +712,54 @@ const Dashboard = () => {
 
   const handleSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
-    // Ler valor atual dos campos: DOM primeiro (o que está na tela), depois state/ref
-    let importadorVal = '';
-    let exportadorVal = '';
+    // Usar refs como fonte principal (atualizados a cada digitação); DOM como fallback
+    let importadorVal = (importadorInputRef.current != null && importadorInputRef.current !== undefined)
+      ? String(importadorInputRef.current).trim()
+      : (empresaImportadoraInput || empresaImportadora || '').toString().trim();
+    let exportadorVal = (exportadorInputRef.current != null && exportadorInputRef.current !== undefined)
+      ? String(exportadorInputRef.current).trim()
+      : (empresaExportadoraInput || empresaExportadora || '').toString().trim();
     try {
       const imp = document.querySelector('[data-filter="empresa-importadora"] input');
       const exp = document.querySelector('[data-filter="empresa-exportadora"] input');
-      if (imp && imp.value != null) importadorVal = String(imp.value).trim();
-      if (exp && exp.value != null) exportadorVal = String(exp.value).trim();
+      if (imp && imp.value != null && String(imp.value).trim()) importadorVal = String(imp.value).trim();
+      if (exp && exp.value != null && String(exp.value).trim()) exportadorVal = String(exp.value).trim();
     } catch (_) {}
-    if (!importadorVal) importadorVal = (importadorInputRef.current || empresaImportadoraInput || empresaImportadora || '').toString().trim();
-    if (!exportadorVal) exportadorVal = (exportadorInputRef.current || empresaExportadoraInput || empresaExportadora || '').toString().trim();
     setEmpresaImportadora(importadorVal || null);
     setEmpresaExportadora(exportadorVal || null);
     setEmpresaImportadoraInput(importadorVal);
     setEmpresaExportadoraInput(exportadorVal);
     importadorInputRef.current = importadorVal;
     exportadorInputRef.current = exportadorVal;
-    console.log('🔍 Buscar com filtros:', { empresa_importadora: importadorVal || null, empresa_exportadora: exportadorVal || null, periodo, tipoOperacao, ncmsFiltro: ncmsFiltro?.length ? ncmsFiltro : ncmFiltro });
-    loadDashboardData({
+
+    // Limpar cache ANTES de buscar para garantir dados atualizados
+    try {
+      localStorage.removeItem('dashboard_stats_cache');
+      localStorage.removeItem('dashboard_stats_cache_timestamp');
+      console.log('🗑️ Cache limpo antes da busca');
+    } catch (e) {
+      console.warn('⚠️ Erro ao limpar cache:', e);
+    }
+    
+    // Montar overrides com TODOS os filtros visíveis para garantir que cards/gráficos usem exatamente o que está na tela
+    const overrides = {
       empresa_importadora: importadorVal || undefined,
       empresa_exportadora: exportadorVal || undefined,
-    });
+      tipoOperacao: tipoOperacao || undefined,
+      ncm: ncmFiltro || undefined,
+      ncms: (ncmsFiltro && ncmsFiltro.length > 0) ? ncmsFiltro : undefined,
+    };
+    if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
+      overrides.data_inicio = periodo[0].format('YYYY-MM-DD');
+      overrides.data_fim = periodo[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : periodo[1].format('YYYY-MM-DD');
+    }
+    console.log('🔍 Buscar com filtros:', overrides);
+    console.log('📋 Valores dos inputs:', { importadorVal, exportadorVal });
+    
+    // Limpar stats antes de buscar para evitar mostrar dados antigos
+    setStats(null);
+    searchInProgressRef.current = true; // Evita que o useEffect dispare outra requisição e sobrescreva o resultado
+    loadDashboardData(overrides);
   };
 
   const loadTabelaDados = useCallback(async (page = 1, pageSize = 10) => {
@@ -985,6 +1105,9 @@ const Dashboard = () => {
       })
     : [];
 
+  // Key estável para forçar remount dos gráficos ao mudar filtro (evita getBoundingClientRect em null)
+  const chartKey = `charts-${empresaImportadora || ''}-${empresaExportadora || ''}-${topImportadores.length}-${topExportadores.length}`;
+
   // Formatar valores
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -1081,10 +1204,9 @@ const Dashboard = () => {
           </Col>
         </Row>
         <Row gutter={[16, 16]} align="middle" style={{ marginTop: '16px' }}>
-          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }}>
+          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }} data-filter="empresa-importadora">
             <AutoComplete
               style={{ width: '100%', minWidth: 0 }}
-              data-filter="empresa-importadora"
               placeholder="Provável Importador"
               dropdownStyle={{ maxWidth: 'min(100vw - 32px, 400px)' }}
               value={empresaImportadoraInput !== '' ? empresaImportadoraInput : (empresaImportadora ?? '')}
@@ -1108,9 +1230,27 @@ const Dashboard = () => {
               onSelect={(value) => {
                 const v = (value ?? '').toString().trim();
                 importadorInputRef.current = v;
+                // Marcar busca em progresso ANTES de atualizar estados para evitar que useEffect interfira
+                searchInProgressRef.current = true;
                 setEmpresaImportadoraInput(v);
                 setEmpresaImportadora(v || null);
-                if (v) loadDashboardData({ empresa_importadora: v, empresa_exportadora: empresaExportadora || undefined });
+                if (v) {
+                  const overrides = {
+                    empresa_importadora: v,
+                    empresa_exportadora: empresaExportadora || undefined,
+                    tipoOperacao: tipoOperacao || undefined,
+                    ncm: ncmFiltro || undefined,
+                    ncms: (ncmsFiltro && ncmsFiltro.length > 0) ? ncmsFiltro : undefined,
+                  };
+                  if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
+                    overrides.data_inicio = periodo[0].format('YYYY-MM-DD');
+                    overrides.data_fim = periodo[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : periodo[1].format('YYYY-MM-DD');
+                  }
+                  console.log('🔍 Seleção de empresa importadora:', v, 'Overrides:', overrides);
+                  loadDashboardData(overrides);
+                } else {
+                  searchInProgressRef.current = false;
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSearch(e);
@@ -1121,11 +1261,10 @@ const Dashboard = () => {
               filterOption={false}
             />
           </Col>
-          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }}>
+          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }} data-filter="empresa-exportadora">
             <AutoComplete
               style={{ width: '100%', minWidth: 0 }}
               placeholder="Provável Exportador"
-              data-filter="empresa-exportadora"
               dropdownStyle={{ maxWidth: 'min(100vw - 32px, 400px)' }}
               value={empresaExportadoraInput !== '' ? empresaExportadoraInput : (empresaExportadora ?? '')}
               onFocus={() => {
@@ -1148,9 +1287,27 @@ const Dashboard = () => {
               onSelect={(value) => {
                 const v = (value ?? '').toString().trim();
                 exportadorInputRef.current = v;
+                // Marcar busca em progresso ANTES de atualizar estados para evitar que useEffect interfira
+                searchInProgressRef.current = true;
                 setEmpresaExportadoraInput(v);
                 setEmpresaExportadora(v || null);
-                if (v) loadDashboardData({ empresa_exportadora: v, empresa_importadora: empresaImportadora || undefined });
+                if (v) {
+                  const overrides = {
+                    empresa_exportadora: v,
+                    empresa_importadora: empresaImportadora || undefined,
+                    tipoOperacao: tipoOperacao || undefined,
+                    ncm: ncmFiltro || undefined,
+                    ncms: (ncmsFiltro && ncmsFiltro.length > 0) ? ncmsFiltro : undefined,
+                  };
+                  if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
+                    overrides.data_inicio = periodo[0].format('YYYY-MM-DD');
+                    overrides.data_fim = periodo[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : periodo[1].format('YYYY-MM-DD');
+                  }
+                  console.log('🔍 Seleção de empresa exportadora:', v, 'Overrides:', overrides);
+                  loadDashboardData(overrides);
+                } else {
+                  searchInProgressRef.current = false;
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSearch(e);
@@ -1208,11 +1365,23 @@ const Dashboard = () => {
           />
         )}
 
+      {stats && !error && stats.aviso_dados_sem_empresa && (
+        <Alert
+          message="Filtro por empresa sem efeito nos dados atuais"
+          description="As operações no banco não têm importador/exportador (ou CNPJ) preenchidos. O Excel importado hoje é agregado por NCM, UF e país, sem nome de empresa por linha. Para ver atividade da Vale S.A, Hidrau Torque etc., é preciso importar uma base que tenha colunas de importador/exportador por operação (ex.: dados desagregados do MDIC/Aliceweb)."
+          type="warning"
+          showIcon
+          style={{ marginBottom: '24px' }}
+        />
+      )}
+
       {/* Cards de Métricas Principais */}
-      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }}>
+      {/* Usar key única baseada nos filtros para forçar re-render quando filtros mudarem */}
+      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }} key={`cards-${empresaImportadora || ''}-${empresaExportadora || ''}-${stats?._timestamp || 0}`}>
         <Col xs={24} sm={12} lg={6}>
           <Card 
             className="dashboard-metric-card"
+            key={`card-importacoes-${stats?._timestamp || 0}-${stats?.valor_total_importacoes || 0}`}
             style={{ 
               borderRadius: '8px',
               background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -1237,7 +1406,9 @@ const Dashboard = () => {
                 }}>
                   {formatCurrency(
                     tipoOperacao === 'Exportação' ? 0 :
-                    (statsFinal.valor_total_importacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
+                    (statsFinal?.valor_total_importacoes != null && statsFinal.valor_total_importacoes !== undefined
+                      ? statsFinal.valor_total_importacoes
+                      : (tipoOperacao === 'Importação' ? (statsFinal?.valor_total_usd ?? 0) : 0))
                   )}
                 </div>
                 <div style={{ 
@@ -1257,6 +1428,7 @@ const Dashboard = () => {
         <Col xs={24} sm={12} lg={6}>
           <Card 
             className="dashboard-metric-card"
+            key={`card-exportacoes-${stats?._timestamp || 0}-${stats?.valor_total_exportacoes || 0}`}
             style={{ 
               borderRadius: '8px',
               background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
@@ -1281,7 +1453,9 @@ const Dashboard = () => {
                 }}>
                   {formatCurrency(
                     tipoOperacao === 'Importação' ? 0 :
-                    (statsFinal.valor_total_exportacoes ?? (tipoOperacao === null ? statsFinal.valor_total_usd : 0))
+                    (statsFinal?.valor_total_exportacoes != null && statsFinal.valor_total_exportacoes !== undefined
+                      ? statsFinal.valor_total_exportacoes
+                      : (tipoOperacao === 'Exportação' ? (statsFinal?.valor_total_usd ?? 0) : 0))
                   )}
                 </div>
                 <div style={{ 
@@ -1494,12 +1668,12 @@ const Dashboard = () => {
               Total FOB estimado importado por mês
             </div>
             {importadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={isMobile ? Math.max(320, window.innerHeight * 0.4) : Math.max(380, window.innerHeight * 0.42)}>
+              <ResponsiveContainer key={chartKey} width="100%" height={isMobile ? Math.max(320, window.innerHeight * 0.4) : Math.max(380, window.innerHeight * 0.42)}>
                 <LineChart data={importadoresTempoData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
-                  <Tooltip formatter={(value) => formatCurrency(value)} />
+                  <Tooltip content={<SafeTooltip formatter={(value) => formatCurrency(value)} />} />
                   <Legend />
                   {topImportadores.map((imp, idx) => (
                     <Line
@@ -1592,12 +1766,12 @@ const Dashboard = () => {
               Total FOB estimado exportado por mês
             </div>
             {exportadoresTempoData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={isMobile ? Math.max(320, window.innerHeight * 0.4) : Math.max(380, window.innerHeight * 0.42)}>
+              <ResponsiveContainer key={chartKey} width="100%" height={isMobile ? Math.max(320, window.innerHeight * 0.4) : Math.max(380, window.innerHeight * 0.42)}>
                 <LineChart data={exportadoresTempoData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
                   <YAxis tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }} />
-                  <Tooltip formatter={(value) => formatCurrency(value)} />
+                  <Tooltip content={<SafeTooltip formatter={(value) => formatCurrency(value)} />} />
                   <Legend />
                   {topExportadores.map((exp, idx) => (
                     <Line
@@ -1632,7 +1806,7 @@ const Dashboard = () => {
               Valor total importado e peso
             </div>
             {tendenciasData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={isMobile ? Math.max(280, window.innerHeight * 0.35) : Math.max(250, window.innerHeight * 0.3)}>
+              <ResponsiveContainer key={chartKey} width="100%" height={isMobile ? Math.max(280, window.innerHeight * 0.35) : Math.max(250, window.innerHeight * 0.3)}>
                 <ComposedChart data={tendenciasData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
@@ -1648,11 +1822,15 @@ const Dashboard = () => {
                     tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }}
                   />
                   <Tooltip 
-                    formatter={(value, name) => {
-                      if (name === 'fob') return formatCurrency(value);
-                      if (name === 'peso') return formatWeight(value) + ' KG';
-                      return value;
-                    }}
+                    content={
+                      <SafeTooltip 
+                        formatter={(value, name) => {
+                          if (name === 'fob') return formatCurrency(value);
+                          if (name === 'peso') return formatWeight(value) + ' KG';
+                          return value;
+                        }} 
+                      />
+                    }
                   />
                   <Legend />
                   <Bar yAxisId="left" dataKey="fob" fill="#722ed1" name="FOB (USD)" />

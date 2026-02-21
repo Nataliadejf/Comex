@@ -50,7 +50,6 @@ frontend/.env.development
 logs/
 
 # Data directory
-D:\comex_data\
 comex_data/
 backend/data/*.csv
 backend/data/*.xlsx
