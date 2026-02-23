@@ -69,9 +69,10 @@ with engine.connect() as conn:
         print(f"  {empresa:50} | {row[1]:6,} registros | valor: ${row[2]}")
 
 print("\n" + "="*100)
-print("💾 PARA EXECUTAR LIMPEZA, DESCOMENTE NO CÓDIGO:")
+print("💾 EXECUTANDO LIMPEZA...")
 print("="*100)
-print("""
+
+# EXECUTAR DELETE
 with engine.begin() as conn:  # begin() = transação automática
     q_delete = text('''
         DELETE FROM operacoes_comex 
@@ -81,7 +82,32 @@ with engine.begin() as conn:  # begin() = transação automática
     ''')
     result = conn.execute(q_delete)
     print(f'✅ Deletados {result.rowcount:,} registros')
-""")
+
+# Verificar resultado
+print("\n" + "="*100)
+print("📊 APÓS LIMPEZA:")
+print("="*100)
+
+with engine.connect() as conn:
+    q_after = text("SELECT COUNT(*) FROM operacoes_comex")
+    count_after = conn.execute(q_after).scalar()
+    print(f"\n✅ Total agora: {count_after:,} registros (era 643.701)")
+    
+    # Distribuição nova
+    q_dist = text("""
+    SELECT 
+        arquivo_origem,
+        COUNT(*) as total,
+        ROUND(SUM(valor_fob)/1000000, 2) as valor_milhoes
+    FROM operacoes_comex
+    GROUP BY arquivo_origem
+    ORDER BY total DESC
+    """)
+    result = conn.execute(q_dist)
+    print("\nRegistros por arquivo:")
+    for row in result:
+        origem = row[0] or 'NULL'
+        print(f"  {origem:50} | {row[1]:,} | ${row[2]:.2f} Mi")
 
 print("\n" + "="*100)
 print("⚠️  ADVERTÊNCIAS:")
