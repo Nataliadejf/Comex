@@ -226,6 +226,53 @@ Use **o mesmo valor** em:
 
 ## 🚨 Troubleshooting
 
+### Git push retorna 403 Forbidden
+
+Se você recebe um erro como:
+
+```
+fatal: unable to access 'https://github.com/Nataliadejf/comex.git/': The requested URL returned error: 403
+```
+
+Significa que as credenciais usadas pelo Git não estão autorizadas. As causas
+mais comuns são:
+
+1. **Token expirado/errado**: crie um novo Personal Access Token (PAT) no GitHub
+   com escopo `repo`, então atualize o remoto:
+   ```powershell
+   git remote set-url origin "https://<USER>:<NEW_TOKEN>@github.com/Nataliadejf/comex.git"
+   ```
+2. **Cache de credenciais do Windows**: limpe com `git credential-manager reject https://github.com`
+   ou use `git config --global credential.helper manager-core` e repita o push.
+3. **Prefira SSH**: gere e adicione sua chave pública em GitHub e então use
+   `git@github.com:Nataliadejf/comex.git` como remote.
+
+Nunca execute `buildCommand:` no PowerShell – aquilo faz parte da configuração
+do serviço no Render, não é um comando de terminal. O erro que aparece
+após tentar executar `buildCommand:` é normal e não tem relação com o deploy.
+
+### Erro durante deploy: módulo não encontrado (ex.: loguru)
+
+O log do deploy indica:
+
+```
+ModuleNotFoundError: No module named 'loguru'
+```
+
+Isso quer dizer que o `pip install` executado pelo Render não instalou
+`loguru`. confirme que:
+
+- O `requirements-render-ultra-minimal.txt` (ou o ficheiro que você está
+  referenciando na build) contém a linha `loguru==0.6.0`.
+- O **Build Command** do serviço backend está definido para instalar esse
+  ficheiro dentro de `backend/`:
+  ```yaml
+  buildCommand: cd backend && pip install -r requirements-render-ultra-minimal.txt
+  ```
+
+Após corrigir, faça push e o deploy vai disparar novamente.
+
+
 ### Frontend não consegue fazer chamadas ao backend
 
 **Problema**: CORS error ou 404 nas requisições
