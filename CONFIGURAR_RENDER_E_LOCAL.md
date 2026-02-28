@@ -341,3 +341,7 @@ Certifique-se que NÃO estão no `.gitignore`:
 - **FastAPI Deployment**: https://fastapi.tiangolo.com/deployment/
 - **PostgreSQL em Render**: https://render.com/docs/databases
 - **React Environment Variables**: https://create-react-app.dev/docs/adding-custom-environment-variables/
+
+---
+
+**Última atualização**: 28/02/2026 — Deploy trigger com endpoint /dashboard/stats (filtros plenamente funcionais)
