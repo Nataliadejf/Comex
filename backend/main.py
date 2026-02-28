@@ -4660,6 +4660,115 @@ async def dashboard_dados_ncm_comexstat(
     return {"success": True, "data": resultados[:limite]}
 
 
+@app.get("/dashboard/stats")
+async def dashboard_stats(
+    meses: int = Query(default=24, ge=1, le=240),
+    empresa_importadora: Optional[str] = Query(default=None),
+    empresa_exportadora: Optional[str] = Query(default=None),
+    uf: Optional[str] = Query(default=None),
+    ncm: Optional[str] = Query(default=None),
+    tipo: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """
+    Estatísticas do dashboard agregadas por filtros.
+    Aplica corretamente filtros por `empresa_importadora` e `empresa_exportadora`.
+    """
+    from sqlalchemy import func, and_, or_
+    from datetime import datetime, timedelta
+
+    try:
+        # intervalo de datas
+        data_fim = datetime.now().date()
+        data_inicio = (datetime.now() - timedelta(days=meses * 30)).date()
+
+        def _palavras_filtro(termo):
+            return [p.strip() for p in (termo or "").split() if p.strip()]
+
+        def _normalizar_palavra_empresa_lista(p: str) -> str:
+            t = (p or "").strip().replace('.', '').strip()
+            return t or (p or "").strip()
+
+        # Base de filtros comuns
+        filtros_base = [OperacaoComex.data_operacao >= data_inicio, OperacaoComex.data_operacao <= data_fim]
+
+        if uf:
+            filtros_base.append(OperacaoComex.uf == uf.upper())
+
+        if ncm:
+            ncm_limpo = ncm.replace('.', '').replace(' ', '').strip()
+            if len(ncm_limpo) == 8 and ncm_limpo.isdigit():
+                filtros_base.append(OperacaoComex.ncm == ncm_limpo)
+
+        if tipo:
+            tipo_lower = (tipo or "").lower()
+            if "import" in tipo_lower:
+                filtros_base.append(OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO)
+            elif "export" in tipo_lower:
+                filtros_base.append(OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO)
+
+        # Filtros por empresa importadora/exportadora (AND entre palavras)
+        if empresa_importadora:
+            palavras = _palavras_filtro(empresa_importadora)
+            conds = []
+            # aceitar CNPJ direto se for somente dígitos
+            digits = ''.join(ch for ch in (empresa_importadora or '') if ch.isdigit())
+            if len(digits) == 14:
+                conds.append(OperacaoComex.cnpj_importador == digits)
+            for p in palavras:
+                norm = _normalizar_palavra_empresa_lista(p)
+                if norm:
+                    conds.append(OperacaoComex.razao_social_importador.ilike(f"%{norm}%"))
+            if conds:
+                filtros_base.append(and_(*conds))
+
+        if empresa_exportadora:
+            palavras = _palavras_filtro(empresa_exportadora)
+            conds = []
+            digits = ''.join(ch for ch in (empresa_exportadora or '') if ch.isdigit())
+            if len(digits) == 14:
+                conds.append(OperacaoComex.cnpj_exportador == digits)
+            for p in palavras:
+                norm = _normalizar_palavra_empresa_lista(p)
+                if norm:
+                    conds.append(OperacaoComex.razao_social_exportador.ilike(f"%{norm}%"))
+            if conds:
+                filtros_base.append(and_(*conds))
+
+        # Importações
+        filtros_imp = list(filtros_base)
+        filtros_imp.append(OperacaoComex.tipo_operacao == TipoOperacao.IMPORTACAO)
+
+        total_importacoes = db.query(func.sum(OperacaoComex.valor_fob)).filter(and_(*filtros_imp)).scalar() or 0
+
+        # Exportações
+        filtros_exp = list(filtros_base)
+        filtros_exp.append(OperacaoComex.tipo_operacao == TipoOperacao.EXPORTACAO)
+
+        total_exportacoes = db.query(func.sum(OperacaoComex.valor_fob)).filter(and_(*filtros_exp)).scalar() or 0
+
+        # Principais NCMs (dos registros filtrados)
+        principais = db.query(
+            OperacaoComex.ncm,
+            func.sum(OperacaoComex.valor_fob).label('valor_total')
+        ).filter(and_(*filtros_base)).group_by(OperacaoComex.ncm).order_by(func.sum(OperacaoComex.valor_fob).desc()).limit(10).all()
+
+        principais_ncms = [
+            {"ncm": n or "", "valor_total": float(valor or 0)} for n, valor in principais if n and (n.strip() != "00000000")
+        ]
+
+        resultado = {
+            "valor_total_importacoes": float(total_importacoes or 0),
+            "valor_total_exportacoes": float(total_exportacoes or 0),
+            "valor_total_usd": float((total_importacoes or 0) + (total_exportacoes or 0)),
+            "principais_ncms": principais_ncms,
+        }
+
+        return resultado
+    except Exception as e:
+        return {"error": str(e), "valor_total_importacoes": 0, "valor_total_exportacoes": 0, "valor_total_usd": 0, "principais_ncms": []}
+
+
 @app.get("/dashboard/empresas-recomendadas")
 async def dashboard_empresas_recomendadas(
     limite: int = Query(default=100, ge=1, le=500),
