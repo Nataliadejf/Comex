@@ -49,6 +49,11 @@ postgresql://comexuser:SEU_PASSWORD_ALEATORIO@dpg-xxxxx-a.oregon-postgres.render
    - **Build Command**: `pip install -r backend/requirements-render-ultra-minimal.txt`
    - **Start Command**: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
    - **Region**: Escolha uma próxima à DB
+   
+   ⚠️ *Se o serviço já existir e estiver usando outra buildCommand, atualize-o manualmente
+   no painel Render (Settings → Build & Deploy → Build Command).  Caso você não consiga
+   alterar, a presença de `loguru` no arquivo `requirements.txt` na raiz garante que ele
+   seja instalado mesmo que o comando esteja errado.*
 4. Clique **Create Web Service**
 
 ### Passo 2: Adicionar Variáveis de Ambiente no Render
