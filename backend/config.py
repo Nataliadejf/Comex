@@ -4,12 +4,18 @@ Configurações da aplicação.
 import os
 from pathlib import Path
 from typing import Optional
+
+# Pydantic v2: BaseSettings foi movido para pydantic-settings
 try:
-    # Pydantic v2
     from pydantic_settings import BaseSettings
-except ImportError:
-    # Pydantic v1 (fallback para Render)
-    from pydantic import BaseSettings
+except (ImportError, ModuleNotFoundError):
+    # Se não houver pydantic-settings, pode estar usando Pydantic v1 (legacy)
+    try:
+        from pydantic import BaseSettings
+    except Exception as e:
+        raise ImportError(
+            "BaseSettings não foi encontrado. Instale pydantic-settings >=2.0 com `pip install pydantic-settings`."
+        ) from e
 
 from pydantic import Field
 

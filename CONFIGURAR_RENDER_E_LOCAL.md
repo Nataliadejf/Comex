@@ -44,14 +44,14 @@ postgresql://comexuser:SEU_PASSWORD_ALEATORIO@dpg-xxxxx-a.oregon-postgres.render
 1. No Render Dashboard, clique **+ New** → **Web Service**
 2. Conecte ao seu repositório GitHub (`Nataliadejf/comex`)
 3. Preencha:
-   - **Name**: `comex-backend` (ou similar)
-   - **Environment**: Python 3
-   - **Build Command**: `pip install -r backend/requirements-render-ultra-minimal.txt`
-   - **Start Command**: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
-   - **Region**: Escolha uma próxima à DB
+   - **Name** *(Nome)*: `comex-backend` (ou similar)
+   - **Environment** *(Ambiente)*: Python 3
+   - **Build Command** *(comando de build)*: `pip install -r backend/requirements-render-ultra-minimal.txt`
+   - **Start Command** *(comando de início)*: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Region** *(região)*: Escolha uma próxima à DB
    
-   ⚠️ *Se o serviço já existir e estiver usando outra buildCommand, atualize-o manualmente
-   no painel Render (Settings → Build & Deploy → Build Command).  Caso você não consiga
+   ⚠️ *Se o serviço já existir e estiver usando outro comando de build, atualize-o manualmente
+   no painel Render (Settings → Build & Deploy → Build Command). Caso você não consiga
    alterar, a presença de `loguru` no arquivo `requirements.txt` na raiz garante que ele
    seja instalado mesmo que o comando esteja errado.*
 4. Clique **Create Web Service**
