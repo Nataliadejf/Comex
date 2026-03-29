@@ -3,10 +3,57 @@
 ## 📌 Resumo Rápido
 
 Você precisa configurar:
-- **Backend** (FastAPI) no Render → 5 variáveis de ambiente
-- **Frontend** (React) no Render → 1 variável de ambiente + 1 build env
+- **Backend** (FastAPI) no Render → variáveis de ambiente (DB, secrets, opcional BigQuery)
+- **Frontend** (React) no Render → `REACT_APP_API_URL` apontando para o backend
 - **Banco de dados** PostgreSQL no Render → URL de conexão
+- **BigQuery (Google Cloud)** → credenciais da service account + tabela (dados do dash / enriquecimento)
 - **Local** (para testes) → arquivo `.env` no backend
+
+---
+
+## 🔄 Nova conta GitHub + nova conta Render (cenário comum)
+
+Se o repositório foi movido para outra conta (ex.: **`Nataliadejf`**) e você criou **nova conta no Render** (conta anterior suspensa):
+
+### 1. GitHub (`Nataliadejf/...`)
+
+1. Confirme que o código está em `https://github.com/Nataliadejf/<seu-repo>` e que o branch principal (ex.: `main`) está atualizado.
+2. No **Render** → **Account Settings** → **Connected accounts** → conecte o GitHub e autorize acesso ao usuário/org **Nataliadejf** e ao repositório correto.
+3. Se o serviço antigo apontava para outro fork/user, crie **novo** Web Service / Static Site e escolha o repositório da **Nataliadejf** (não reaproveite o link antigo se ele ainda aponta para outro remote).
+
+### 2. Render (conta nova)
+
+1. Crie de novo: **PostgreSQL** (se precisar de b novo), **Web Service** (backend), **Static Site** (frontend).
+2. Copie as **novas URLs** (`https://seu-backend.onrender.com`, etc.) — elas mudam em relação ao deploy antigo.
+3. No **frontend**, atualize `REACT_APP_API_URL` para a URL **nova** do backend.
+4. No **backend**, gere um `SECRET_KEY` novo e use a `DATABASE_URL` do **novo** Postgres (não reutilize URL antiga se o banco foi recriado).
+
+### 3. BigQuery (refazer no novo backend)
+
+Os dados que vêm do **BigQuery** no Google Cloud **não** ficam “dentro” do Render: você só precisa colocar de novo as **mesmas** credenciais e variáveis no **novo** serviço backend:
+
+| Variável | Obrigatório | Descrição |
+|----------|-------------|-----------|
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | **Sim** (para BigQuery) | Conteúdo **completo** do JSON da **Service Account** (uma linha, começa com `{`). Marque como **Secret** no Render. |
+| `BIGQUERY_COMEX_TABLE` | Opcional | Tabela no formato `projeto.dataset.tabela`. Padrão no código: `liquid-receiver-483923-n6.Projeto_Comex.Comex` — **ajuste** se o seu projeto/tabela no GCP for outro. |
+
+**Passo a passo detalhado** (criar service account, permissões BigQuery, colar JSON no Render): veja **`CONFIGURAR_BIGQUERY_RENDER.md`**.
+
+**Validar após o deploy:**
+
+- Abra `https://<SEU-BACKEND>.onrender.com/validar-bigquery`  
+- Deve indicar credenciais válidas e conexão OK.
+
+**Permissões no Google Cloud:** a service account precisa de pelo menos **BigQuery Data Viewer** (ou **BigQuery User**) no projeto onde está a tabela.
+
+### 4. Checklist rápido (migração)
+
+- [ ] Repositório na conta **Nataliadejf** e Render conectado a esse repo  
+- [ ] PostgreSQL novo + `DATABASE_URL` no backend  
+- [ ] `SECRET_KEY`, `ENVIRONMENT=production`, `DEBUG=False`  
+- [ ] `GOOGLE_APPLICATION_CREDENTIALS_JSON` (secret) + `BIGQUERY_COMEX_TABLE` se não for o padrão  
+- [ ] Frontend com `REACT_APP_API_URL` = URL nova do backend  
+- [ ] Teste `/health` e `/validar-bigquery` no backend novo  
 
 ---
 
@@ -74,6 +121,8 @@ Adicione estas variáveis (**obrigatórias**):
 | `AUTO_IMPORT_EXCEL_ONLY_IF_EMPTY` | `true` | Só importar se banco vazio |
 | `AUTO_IMPORT_EXCEL_CLEAR_BY_FILE` | `true` | Limpar dados do arquivo antes de reimportar |
 | `AUTO_IMPORT_EXCEL_FILENAME` | `H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx` | Nome do arquivo Excel a importar |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | *(JSON completo da Service Account GCP)* | **BigQuery**: cole o JSON inteiro; marque como **Secret**. Ver `CONFIGURAR_BIGQUERY_RENDER.md`. |
+| `BIGQUERY_COMEX_TABLE` | `projeto.dataset.tabela` | Opcional; se omitido, o backend usa o padrão definido em `main.py`. Ajuste se sua tabela no BigQuery for outra. |
 
 ✅ **Clique em "Save"**
 
@@ -231,6 +280,14 @@ Use **o mesmo valor** em:
 
 ## 🚨 Troubleshooting
 
+### Deploy: `Form data requires "python-multipart" to be installed`
+
+O backend sobe com FastAPI e rotas que usam **upload** / **form** (`multipart`). É obrigatório instalar **`python-multipart`**.
+
+1. No repositório, confira que o **`requirements.txt` na raiz** contém `python-multipart==0.0.6` (ou equivalente).
+2. Faça **commit e push** para o GitHub — o Render só instala o que está no repo remoto.
+3. Opcional no Render: **Environment** → `PYTHON_VERSION` = `3.11.0` (recomendado; evita Python 3.14 ainda experimental). O projeto inclui **`runtime.txt`** na raiz com `3.11.0` para o Render detectar a versão.
+
 ### Git push retorna 403 Forbidden
 
 Se você recebe um erro como:
@@ -349,4 +406,4 @@ Certifique-se que NÃO estão no `.gitignore`:
 
 ---
 
-**Última atualização**: 28/02/2026 — Deploy trigger com endpoint /dashboard/stats (filtros plenamente funcionais)
+**Última atualização**: 17/02/2026 — Seção migração GitHub (Nataliadejf) + Render novo + BigQuery; tabela de env com `GOOGLE_APPLICATION_CREDENTIALS_JSON` e `BIGQUERY_COMEX_TABLE`.
