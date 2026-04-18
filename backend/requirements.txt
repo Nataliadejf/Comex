@@ -1,49 +1,24 @@
-# API Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
-
-# Database
-sqlalchemy==2.0.23
-
-# Data Processing
-pandas>=2.2.0  # Versão mais recente com suporte a Python 3.13
-numpy>=1.26.0
-openpyxl>=3.1.2
-
-# BigQuery (coleta Base dos Dados)
-google-cloud-bigquery>=3.11.0
-db-dtypes>=1.2.0  # Necessário para results.to_dataframe()
-
-# Web Scraping (se necessário)
-selenium==4.15.2
-playwright==1.40.0
-beautifulsoup4==4.12.2
-requests==2.31.0
-aiohttp==3.9.1
-httpx==0.25.2
-
-# Utilities
-python-dotenv==1.0.0
-schedule==1.2.0
-
-# Logging
-loguru==0.7.2
-
-# Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-
-# CORS
-python-multipart==0.0.6
-
-# Database migrations
-alembic==1.13.1
-
-# PDF Export (opcional)
-reportlab==4.0.7
-passlib[bcrypt]==1.7.4
-python-jose[cryptography]==3.3.0
-bcrypt==4.0.1
-psycopg2-binary==2.9.9
+flask
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlalchemy
+alembic
+pandas
+numpy
+openpyxl
+google-cloud-bigquery
+db-dtypes
+requests
+aiohttp
+python-dotenv
+loguru
+python-multipart
+psycopg2-binary
+passlib[bcrypt]
+python-jose[cryptography]
+bcrypt
+schedule
+reportlab
+beautifulsoup4
