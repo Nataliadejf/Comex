@@ -5,26 +5,29 @@ import os
 from pathlib import Path
 from typing import Optional
 
-# Pydantic v2: BaseSettings foi movido para pydantic-settings
+# Pydantic v2: BaseSettings e SettingsConfigDict vêm de pydantic-settings
 try:
-    from pydantic_settings import BaseSettings
-except (ImportError, ModuleNotFoundError):
-    # Se não houver pydantic-settings, pode estar usando Pydantic v1 (legacy)
-    try:
-        from pydantic import BaseSettings
-    except Exception as e:
-        raise ImportError(
-            "BaseSettings não foi encontrado. Instale pydantic-settings >=2.0 com `pip install pydantic-settings`."
-        ) from e
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except (ImportError, ModuleNotFoundError) as e:
+    raise ImportError(
+        "Instale pydantic-settings >=2.0: pip install pydantic-settings"
+    ) from e
 
 from pydantic import Field
 
 
 class Settings(BaseSettings):
     """Configurações da aplicação."""
-    
-    # Ambiente - BaseSettings do Pydantic v1 lê automaticamente variáveis de ambiente em maiúsculas
-    # quando case_sensitive = False
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Variáveis de ambiente em maiúsculas (ex.: ENVIRONMENT, SECRET_KEY) são mapeadas
+    # automaticamente para estes campos quando case_sensitive=False
     environment: str = Field(default="development")
     debug: bool = Field(default=True)
     
@@ -48,31 +51,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
     log_dir: Optional[Path] = Field(default=Path(__file__).parent.parent / "comex_data" / "logs")
     
-    # Autenticação
-    secret_key: str = Field(default="sua-chave-secreta-aqui-mude-em-producao")
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False  # Permite ler ENVIRONMENT mesmo com campo environment
-        extra = "ignore"  # Ignora variáveis de ambiente não declaradas (ex.: GOOGLE_APPLICATION_CREDENTIALS_JSON)
-        # Mapear campos para variáveis de ambiente em maiúsculas
-        fields = {
-            'environment': {'env': 'ENVIRONMENT'},
-            'debug': {'env': 'DEBUG'},
-            'data_dir': {'env': 'DATA_DIR'},
-            'database_url': {'env': 'DATABASE_URL'},
-            'comex_stat_api_url': {'env': 'COMEX_STAT_API_URL'},
-            'comex_stat_api_key': {'env': 'COMEX_STAT_API_KEY'},
-            'update_interval_hours': {'env': 'UPDATE_INTERVAL_HOURS'},
-            'months_to_fetch': {'env': 'MONTHS_TO_FETCH'},
-            'retry_attempts': {'env': 'RETRY_ATTEMPTS'},
-            'retry_delay_seconds': {'env': 'RETRY_DELAY_SECONDS'},
-            'log_level': {'env': 'LOG_LEVEL'},
-            'log_dir': {'env': 'LOG_DIR'},
-            'secret_key': {'env': 'SECRET_KEY'},
-        }
-        
+    # Autenticação (em produção defina SECRET_KEY no Render)
+    secret_key: str = Field(default="comex-dev-secret-key-change-in-production")
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         
