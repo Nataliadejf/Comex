@@ -22,3 +22,4 @@ bcrypt
 schedule
 reportlab
 beautifulsoup4
+httpx
