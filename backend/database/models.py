@@ -337,3 +337,29 @@ class EmpresasRecomendadas(Base):
     def __repr__(self):
         return f"<EmpresasRecomendadas(id={self.id}, nome={self.nome}, tipo={self.tipo_principal}, peso={self.peso_participacao})>"
 
+
+class EmpresaNCMEstado(Base):
+    """
+    Consolidação estado × NCM × empresa (ex.: após sync BigQuery → PostgreSQL).
+    """
+
+    __tablename__ = "empresa_ncm_estado"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome_empresa = Column(String(255), nullable=False, index=True)
+    cnpj = Column(String(14), nullable=True, index=True)
+    tipo = Column(String(20), nullable=False, comment="importadora ou exportadora")
+    estado = Column(String(2), nullable=False, index=True)
+    ncm = Column(String(20), nullable=False, index=True)
+    valor_fob = Column(Float, nullable=True)
+    ano = Column(Integer, nullable=False, index=True)
+    atualizado_em = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_enc_estado_ncm", "estado", "ncm"),
+        Index("idx_enc_ano_tipo", "ano", "tipo"),
+    )
+
+    def __repr__(self):
+        return f"<EmpresaNCMEstado(id={self.id}, nome={self.nome_empresa[:20]!r}, uf={self.estado}, ncm={self.ncm})>"
+

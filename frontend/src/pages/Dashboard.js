@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Row, Col, Card, Statistic, Spin, Alert, Table, Tag, 
   DatePicker, Select, Input, Button, Space, Divider, AutoComplete
@@ -24,7 +24,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI } from '../services/api';
+import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI } from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
 
@@ -151,6 +151,84 @@ const Dashboard = () => {
   
   // Estado para detectar mobile
   const [isMobile, setIsMobile] = useState(false);
+
+  // Dados reais BigQuery / relatório estado–NCM
+  const [bqAno, setBqAno] = useState(2025);
+  const [bqRanking, setBqRanking] = useState([]);
+  const [bqRelatorioRows, setBqRelatorioRows] = useState([]);
+  const [filtBqUf, setFiltBqUf] = useState(null);
+  const [filtBqTipo, setFiltBqTipo] = useState(null);
+  const [filtBqNcm, setFiltBqNcm] = useState('');
+  const [loadingBq, setLoadingBq] = useState(false);
+  const [syncingBq, setSyncingBq] = useState(false);
+  const [cnpjNcmBusca, setCnpjNcmBusca] = useState('');
+  const [ncmsCnpjResult, setNcmsCnpjResult] = useState([]);
+
+  const flattenRelatorioTree = useCallback((tree) => {
+    const rows = [];
+    Object.entries(tree || {}).forEach(([uf, ncmMap]) => {
+      Object.entries(ncmMap || {}).forEach(([ncm, empresas]) => {
+        (empresas || []).forEach((emp) => {
+          rows.push({ estado: uf, ncm, nome: emp.nome, tipo: emp.tipo, valor_fob: emp.valor_fob });
+        });
+      });
+    });
+    return rows;
+  }, []);
+
+  const carregarBigQueryRanking = useCallback(async () => {
+    setLoadingBq(true);
+    try {
+      const [ex, im] = await Promise.all([
+        dadosReaisAPI.getExportadoras(bqAno, 100),
+        dadosReaisAPI.getImportadoras(bqAno, 100),
+      ]);
+      const dEx = ex.data?.dados || [];
+      const dIm = im.data?.dados || [];
+      const merged = [
+        ...dEx.map((r) => ({ ...r, tipo: 'exportadora' })),
+        ...dIm.map((r) => ({ ...r, tipo: 'importadora' })),
+      ].sort((a, b) => (Number(b.valor_total_fob) || 0) - (Number(a.valor_total_fob) || 0));
+      setBqRanking(merged);
+    } catch (e) {
+      console.warn('BigQuery ranking:', e?.message || e);
+      setBqRanking([]);
+    } finally {
+      setLoadingBq(false);
+    }
+  }, [bqAno]);
+
+  const carregarRelatorioBq = useCallback(async () => {
+    try {
+      const res = await dadosReaisAPI.getRelatorioEstadoNcm(bqAno);
+      const tree = res.data || {};
+      setBqRelatorioRows(flattenRelatorioTree(tree));
+    } catch (e) {
+      console.warn('Relatório estado-NCM:', e?.message || e);
+      setBqRelatorioRows([]);
+    }
+  }, [bqAno, flattenRelatorioTree]);
+
+  useEffect(() => {
+    carregarBigQueryRanking();
+  }, [carregarBigQueryRanking]);
+
+  const bqRankingFiltrado = useMemo(() => {
+    return bqRanking.filter((r) => {
+      if (filtBqUf && String(r.estado || '').toUpperCase() !== filtBqUf) return false;
+      if (filtBqTipo && r.tipo !== filtBqTipo) return false;
+      return true;
+    });
+  }, [bqRanking, filtBqUf, filtBqTipo]);
+
+  const bqRelatorioFiltrado = useMemo(() => {
+    const n = (filtBqNcm || '').trim().replace(/\D/g, '');
+    if (!n) return bqRelatorioRows;
+    return bqRelatorioRows.filter((r) => {
+      const raw = String(r.ncm || '').replace(/\D/g, '');
+      return raw.includes(n);
+    });
+  }, [bqRelatorioRows, filtBqNcm]);
 
   // Detectar se está em mobile (deve estar antes de qualquer cálculo)
   useEffect(() => {
@@ -2398,6 +2476,160 @@ const Dashboard = () => {
                 </div>
               )}
             </Spin>
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={16} style={{ marginTop: 16 }}>
+        <Col span={24}>
+          <Card
+            title="Dados reais (BigQuery — Base dos Dados)"
+            extra={
+              <Space wrap>
+                <Select
+                  size="small"
+                  style={{ width: 100 }}
+                  value={bqAno}
+                  onChange={(v) => setBqAno(v)}
+                  options={[2022, 2023, 2024, 2025].map((y) => ({ value: y, label: String(y) }))}
+                />
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  loading={loadingBq}
+                  onClick={carregarBigQueryRanking}
+                >
+                  Atualizar ranking
+                </Button>
+                <Button
+                  size="small"
+                  loading={syncingBq}
+                  onClick={async () => {
+                    setSyncingBq(true);
+                    try {
+                      await dadosReaisAPI.popularEstadoNcmBq(bqAno);
+                      await carregarRelatorioBq();
+                    } catch (e) {
+                      console.warn(e);
+                    } finally {
+                      setSyncingBq(false);
+                    }
+                  }}
+                >
+                  Sincronizar tabela estado×NCM
+                </Button>
+                <Button size="small" onClick={carregarRelatorioBq}>
+                  Carregar relatório
+                </Button>
+              </Space>
+            }
+          >
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="Ranking agrega exportação/importação por município (comex_stat). O relatório agrupado usa a tabela PostgreSQL preenchida pelo botão Sincronizar."
+            />
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Select
+                allowClear
+                placeholder="UF"
+                style={{ width: 90 }}
+                value={filtBqUf}
+                onChange={setFiltBqUf}
+                options={Object.keys(UF_PARA_ESTADO).map((uf) => ({ value: uf, label: uf }))}
+              />
+              <Select
+                allowClear
+                placeholder="Tipo"
+                style={{ width: 140 }}
+                value={filtBqTipo}
+                onChange={setFiltBqTipo}
+              >
+                <Option value="exportadora">Exportadora</Option>
+                <Option value="importadora">Importadora</Option>
+              </Select>
+              <Input
+                placeholder="Filtrar relatório por NCM (parcial)"
+                style={{ width: 240 }}
+                allowClear
+                value={filtBqNcm}
+                onChange={(e) => setFiltBqNcm(e.target.value)}
+              />
+            </Space>
+            <Spin spinning={loadingBq}>
+              <Table
+                size="small"
+                rowKey={(r, i) => `${r.nome_empresa}-${r.estado}-${r.tipo}-${i}`}
+                dataSource={bqRankingFiltrado}
+                pagination={{ pageSize: 15 }}
+                scroll={{ x: 800 }}
+                columns={[
+                  { title: 'Empresa', dataIndex: 'nome_empresa', ellipsis: true },
+                  { title: 'UF', dataIndex: 'estado', width: 70 },
+                  { title: 'Tipo', dataIndex: 'tipo', width: 110 },
+                  {
+                    title: 'Valor FOB (US$)',
+                    dataIndex: 'valor_total_fob',
+                    align: 'right',
+                    render: (v) =>
+                      v != null
+                        ? Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 })
+                        : '-',
+                    sorter: (a, b) =>
+                      (Number(a.valor_total_fob) || 0) - (Number(b.valor_total_fob) || 0),
+                  },
+                  { title: 'Ops.', dataIndex: 'total_operacoes', width: 80 },
+                ]}
+              />
+            </Spin>
+            <Divider orientation="left">Relatório estado × NCM × empresa</Divider>
+            <Table
+              size="small"
+              rowKey={(r, i) => `${r.estado}-${r.ncm}-${r.nome}-${i}`}
+              dataSource={bqRelatorioFiltrado}
+              pagination={{ pageSize: 12 }}
+              columns={[
+                { title: 'UF', dataIndex: 'estado', width: 70 },
+                { title: 'NCM', dataIndex: 'ncm', width: 120 },
+                { title: 'Empresa', dataIndex: 'nome', ellipsis: true },
+                { title: 'Tipo', dataIndex: 'tipo', width: 100 },
+                {
+                  title: 'Valor FOB',
+                  dataIndex: 'valor_fob',
+                  align: 'right',
+                  render: (v) =>
+                    v != null
+                      ? Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 })
+                      : '-',
+                },
+              ]}
+            />
+            <Divider orientation="left">NCMs por CNPJ (PostgreSQL — operacoes_comex)</Divider>
+            <Space.Compact style={{ maxWidth: 480, marginBottom: 8 }}>
+              <Input
+                placeholder="CNPJ (somente números)"
+                value={cnpjNcmBusca}
+                onChange={(e) => setCnpjNcmBusca(e.target.value)}
+              />
+              <Button
+                type="primary"
+                onClick={async () => {
+                  try {
+                    const res = await dadosReaisAPI.getNcmsPorCnpj(cnpjNcmBusca.trim());
+                    setNcmsCnpjResult(res.data?.ncms || []);
+                  } catch (e) {
+                    setNcmsCnpjResult([]);
+                    console.warn(e);
+                  }
+                }}
+              >
+                Buscar
+              </Button>
+            </Space.Compact>
+            {ncmsCnpjResult.length > 0 && (
+              <div style={{ fontSize: 13 }}>{ncmsCnpjResult.join(', ')}</div>
+            )}
           </Card>
         </Col>
       </Row>

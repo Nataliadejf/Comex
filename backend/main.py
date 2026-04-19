@@ -170,6 +170,14 @@ try:
 except ImportError as e:
     logger.warning(f"Router de coleta Base dos Dados não disponível: {e}")
 
+# Router BigQuery / relatório estado–NCM–empresa / DOU
+try:
+    from routers.bigquery_routes import router as bq_dashboard_router
+    app.include_router(bq_dashboard_router)
+    logger.info("✅ Router BigQuery dashboard (/api/empresas/*, /api/relatorio/*) incluído")
+except ImportError as e:
+    logger.warning(f"Router BigQuery dashboard não disponível: {e}")
+
 
 # Inicializar banco de dados na startup
 @app.on_event("startup")
