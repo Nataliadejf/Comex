@@ -27,7 +27,7 @@ def _only_digits(s: str) -> str:
 
 @router.get("/empresas/exportadoras")
 async def api_empresas_exportadoras(
-    ano: int = Query(2025, ge=1997, le=2035),
+    ano: int = Query(2021, ge=1997, le=2035),
     limit: int = Query(100, ge=1, le=500),
 ):
     """Ranking exportador (BigQuery comex_stat — município / legado NO_EXP)."""
@@ -37,7 +37,7 @@ async def api_empresas_exportadoras(
 
 @router.get("/empresas/importadoras")
 async def api_empresas_importadoras(
-    ano: int = Query(2025, ge=1997, le=2035),
+    ano: int = Query(2021, ge=1997, le=2035),
     limit: int = Query(100, ge=1, le=500),
 ):
     rows = bqbd.empresas_importadoras(ano=ano, limit=limit)
@@ -114,7 +114,7 @@ async def api_relatorio_estado_ncm_empresa(
 
 @router.post("/relatorio/popular-estado-ncm-bq")
 async def api_popular_estado_ncm_bq(
-    ano: int = Query(2025, ge=1997, le=2035),
+    ano: int = Query(2021, ge=1997, le=2035),
     db: Session = Depends(get_db),
 ):
     """

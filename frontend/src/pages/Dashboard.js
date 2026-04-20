@@ -24,7 +24,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI } from '../services/api';
+import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI } from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
 
@@ -153,7 +153,7 @@ const Dashboard = () => {
   const [isMobile, setIsMobile] = useState(false);
 
   // Dados reais BigQuery / relatório estado–NCM
-  const [bqAno, setBqAno] = useState(2025);
+  const [bqAno, setBqAno] = useState(2021);
   const [bqRanking, setBqRanking] = useState([]);
   const [bqRelatorioRows, setBqRelatorioRows] = useState([]);
   const [filtBqUf, setFiltBqUf] = useState(null);
@@ -163,6 +163,30 @@ const Dashboard = () => {
   const [syncingBq, setSyncingBq] = useState(false);
   const [cnpjNcmBusca, setCnpjNcmBusca] = useState('');
   const [ncmsCnpjResult, setNcmsCnpjResult] = useState([]);
+  const [adminSyncToken, setAdminSyncToken] = useState(() => {
+    try {
+      return localStorage.getItem('admin_sync_token') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [localPgRows, setLocalPgRows] = useState([]);
+  const [loadingLocalPg, setLoadingLocalPg] = useState(false);
+
+  const mesesRef = useRef(meses);
+  mesesRef.current = meses;
+  const tipoOperacaoRef = useRef(tipoOperacao);
+  tipoOperacaoRef.current = tipoOperacao;
+  const ncmFiltroRef = useRef(ncmFiltro);
+  ncmFiltroRef.current = ncmFiltro;
+  const ncmsFiltroRef = useRef(ncmsFiltro);
+  ncmsFiltroRef.current = ncmsFiltro;
+  const empresaImportadoraRef = useRef(empresaImportadora);
+  empresaImportadoraRef.current = empresaImportadora;
+  const empresaExportadoraRef = useRef(empresaExportadora);
+  empresaExportadoraRef.current = empresaExportadora;
+  const periodoRef = useRef(periodo);
+  periodoRef.current = periodo;
 
   const flattenRelatorioTree = useCallback((tree) => {
     const rows = [];
@@ -342,9 +366,13 @@ const Dashboard = () => {
   }, [periodo]);
 
   const loadDashboardData = useCallback(async (overrides = {}) => {
-    // Usar overrides quando vieram do clique em Buscar (garante que filtros da tela são aplicados)
-    const filtroImportador = overrides.empresa_importadora !== undefined ? (overrides.empresa_importadora && String(overrides.empresa_importadora).trim()) : (empresaImportadora && String(empresaImportadora).trim());
-    const filtroExportador = overrides.empresa_exportadora !== undefined ? (overrides.empresa_exportadora && String(overrides.empresa_exportadora).trim()) : (empresaExportadora && String(empresaExportadora).trim());
+    // Usar overrides quando vieram do clique em Buscar; caso contrário refs (evita requisição a cada mudança de estado)
+    const filtroImportador = overrides.empresa_importadora !== undefined
+      ? (overrides.empresa_importadora && String(overrides.empresa_importadora).trim())
+      : (empresaImportadoraRef.current && String(empresaImportadoraRef.current).trim());
+    const filtroExportador = overrides.empresa_exportadora !== undefined
+      ? (overrides.empresa_exportadora && String(overrides.empresa_exportadora).trim())
+      : (empresaExportadoraRef.current && String(empresaExportadoraRef.current).trim());
     const temFiltroEmpresa = !!(filtroImportador || filtroExportador);
 
     const currentRequestId = ++requestIdRef.current;
@@ -412,21 +440,24 @@ const Dashboard = () => {
       // Usar overrides quando fornecidos (ex.: clique em Buscar), senão state
       const dataInicioOverride = overrides.data_inicio;
       const dataFimOverride = overrides.data_fim;
-      const tipoOverride = overrides.tipoOperacao !== undefined ? overrides.tipoOperacao : tipoOperacao;
-      const ncmOverride = overrides.ncm !== undefined ? overrides.ncm : ncmFiltro;
-      const ncmsOverride = overrides.ncms !== undefined ? overrides.ncms : ncmsFiltro;
+      const tipoOverride = overrides.tipoOperacao !== undefined ? overrides.tipoOperacao : tipoOperacaoRef.current;
+      const ncmOverride = overrides.ncm !== undefined ? overrides.ncm : ncmFiltroRef.current;
+      const ncmsOverride = overrides.ncms !== undefined ? overrides.ncms : ncmsFiltroRef.current;
 
       const params = {
-        meses: Number(meses) || 24,
+        meses: Number(overrides.meses !== undefined ? overrides.meses : mesesRef.current) || 24,
         tipoOperacao: tipoOverride || undefined,
       };
       // Enviar data_inicio e data_fim (overrides do Buscar ou período do state)
       if (dataInicioOverride && dataFimOverride && /^\d{4}-\d{2}-\d{2}$/.test(String(dataInicioOverride)) && /^\d{4}-\d{2}-\d{2}$/.test(String(dataFimOverride))) {
         params.data_inicio = dataInicioOverride;
         params.data_fim = dataFimOverride;
-      } else if (periodo && periodo[0] && periodo[1] && periodo[0].isValid?.() && periodo[1].isValid?.()) {
-        params.data_inicio = periodo[0].format('YYYY-MM-DD');
-        params.data_fim = periodo[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : periodo[1].format('YYYY-MM-DD');
+      } else {
+        const p = periodoRef.current;
+        if (p && p[0] && p[1] && p[0].isValid?.() && p[1].isValid?.()) {
+          params.data_inicio = p[0].format('YYYY-MM-DD');
+          params.data_fim = p[1].isAfter(dayjs()) ? dayjs().format('YYYY-MM-DD') : p[1].format('YYYY-MM-DD');
+        }
       }
       
       if (ncmsOverride && ncmsOverride.length > 0) {
@@ -435,11 +466,11 @@ const Dashboard = () => {
         params.ncm = ncmOverride;
       }
       
-      // Adicionar filtros de empresa (valor digitado ou selecionado; overrides vêm do clique em Buscar)
-      if (filtroImportador) {
+      // Filtros de empresa: só envia com ≥3 caracteres (evita busca a cada letra)
+      if (filtroImportador && String(filtroImportador).trim().length >= 3) {
         params.empresa_importadora = String(filtroImportador).trim();
       }
-      if (filtroExportador) {
+      if (filtroExportador && String(filtroExportador).trim().length >= 3) {
         params.empresa_exportadora = String(filtroExportador).trim();
       }
       console.log('📤 Parâmetros enviados ao backend:', { ...params });
@@ -682,13 +713,13 @@ const Dashboard = () => {
       isLoadingRef.current = false;
       searchInProgressRef.current = false; // Buscar concluído; próximo useEffect pode rodar de novo
     }
-  }, [meses, tipoOperacao, ncmFiltro, ncmsFiltro, empresaImportadora, empresaExportadora, periodo]);
+  }, []);
 
   useEffect(() => {
-    // Não disparar carga automática logo após o usuário clicar em Buscar (evita sobrescrever dados filtrados)
-    if (searchInProgressRef.current) return;
     loadDashboardData();
-  }, [loadDashboardData]);
+    // Carga inicial apenas; demais atualizações via botão Buscar / Limpar
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Carregar empresas recomendadas quando stats carregar
   useEffect(() => {
@@ -2491,8 +2522,64 @@ const Dashboard = () => {
                   style={{ width: 100 }}
                   value={bqAno}
                   onChange={(v) => setBqAno(v)}
-                  options={[2022, 2023, 2024, 2025].map((y) => ({ value: y, label: String(y) }))}
+                  options={[2019, 2020, 2021, 2022, 2023, 2024, 2025].map((y) => ({ value: y, label: String(y) }))}
                 />
+                {localStorage.getItem('token') && (
+                  <>
+                    <Input.Password
+                      size="small"
+                      style={{ width: 160 }}
+                      placeholder="X-Admin-Token"
+                      value={adminSyncToken}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setAdminSyncToken(v);
+                        try {
+                          localStorage.setItem('admin_sync_token', v);
+                        } catch (_) {}
+                      }}
+                    />
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={syncingBq}
+                      onClick={async () => {
+                        setSyncingBq(true);
+                        try {
+                          await adminSyncAPI.sincronizarTudo(bqAno, adminSyncToken || undefined);
+                        } catch (e) {
+                          console.warn(e);
+                        } finally {
+                          setSyncingBq(false);
+                        }
+                      }}
+                    >
+                      Sincronizar dados (admin)
+                    </Button>
+                  </>
+                )}
+                <Button
+                  size="small"
+                  loading={loadingLocalPg}
+                  onClick={async () => {
+                    setLoadingLocalPg(true);
+                    try {
+                      const res = await dashboardLocalAPI.buscar({
+                        ano: bqAno,
+                        limit: 50,
+                        page: 1,
+                      });
+                      setLocalPgRows(res.data?.items || []);
+                    } catch (e) {
+                      console.warn(e);
+                      setLocalPgRows([]);
+                    } finally {
+                      setLoadingLocalPg(false);
+                    }
+                  }}
+                >
+                  Carregar dados locais (PG)
+                </Button>
                 <Button
                   size="small"
                   icon={<ReloadOutlined />}
@@ -2583,6 +2670,29 @@ const Dashboard = () => {
                 ]}
               />
             </Spin>
+            <Divider orientation="left">Dados locais (PostgreSQL — pós sincronização)</Divider>
+            <Table
+              size="small"
+              rowKey={(r, i) => `${r.ncm}-${r.uf}-${r.tipo_operacao}-${i}`}
+              dataSource={localPgRows}
+              pagination={false}
+              scroll={{ x: 900 }}
+              columns={[
+                { title: 'NCM', dataIndex: 'ncm', width: 100 },
+                { title: 'UF', dataIndex: 'uf', width: 60 },
+                { title: 'Tipo', dataIndex: 'tipo_operacao', width: 100 },
+                {
+                  title: 'Valor FOB US$',
+                  dataIndex: 'valor_fob_usd',
+                  align: 'right',
+                  render: (v) =>
+                    v != null
+                      ? Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 })
+                      : '-',
+                },
+                { title: 'Mês', dataIndex: 'mes', width: 60 },
+              ]}
+            />
             <Divider orientation="left">Relatório estado × NCM × empresa</Divider>
             <Table
               size="small"

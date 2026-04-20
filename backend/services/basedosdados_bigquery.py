@@ -59,7 +59,7 @@ def _run_query(client, sql: str, params: Optional[Dict[str, Any]] = None) -> Lis
     return _rows_to_dicts(job.result())
 
 
-def empresas_exportadoras(ano: int = 2025, limit: int = 100) -> List[Dict[str, Any]]:
+def empresas_exportadoras(ano: int = 2021, limit: int = 100) -> List[Dict[str, Any]]:
     client = get_bigquery_client()
     if not client:
         return []
@@ -102,7 +102,7 @@ def empresas_exportadoras(ano: int = 2025, limit: int = 100) -> List[Dict[str, A
         return []
 
 
-def empresas_importadoras(ano: int = 2025, limit: int = 100) -> List[Dict[str, Any]]:
+def empresas_importadoras(ano: int = 2021, limit: int = 100) -> List[Dict[str, Any]]:
     client = get_bigquery_client()
     if not client:
         return []

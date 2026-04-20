@@ -317,16 +317,30 @@ export const comexstatAPI = {
 
 /** BigQuery Base dos Dados + relatório estado/NCM + DOU */
 export const dadosReaisAPI = {
-  getExportadoras: (ano = 2025, limit = 100) =>
+  getExportadoras: (ano = 2021, limit = 100) =>
     api.get('/api/empresas/exportadoras', { params: { ano, limit } }),
-  getImportadoras: (ano = 2025, limit = 100) =>
+  getImportadoras: (ano = 2021, limit = 100) =>
     api.get('/api/empresas/importadoras', { params: { ano, limit } }),
   getNcmsPorCnpj: (cnpj) => api.get(`/api/empresas/${encodeURIComponent(cnpj)}/ncms`),
   getRelatorioEstadoNcm: (ano) =>
     api.get('/api/relatorio/estado-ncm-empresa', { params: ano != null ? { ano } : {} }),
-  popularEstadoNcmBq: (ano = 2025) =>
+  popularEstadoNcmBq: (ano = 2021) =>
     api.post('/api/relatorio/popular-estado-ncm-bq', null, { params: { ano } }),
   getDouNcms: (q) => api.get('/api/diario-oficial/ncms', { params: { q } }),
+};
+
+/** Sincronização BigQuery → PostgreSQL (admin) */
+export const adminSyncAPI = {
+  sincronizarTudo: (ano = 2021, adminToken) =>
+    api.post('/admin/sincronizar/tudo', null, {
+      params: { ano },
+      headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+    }),
+};
+
+/** Dashboard apenas PostgreSQL (pós-sync) */
+export const dashboardLocalAPI = {
+  buscar: (params = {}) => api.get('/api/dashboard/buscar', { params }),
 };
 
 export const coletaAPI = {

@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Optional
 from sqlalchemy import (
     Column, Integer, String, Float, Date, DateTime,
-    Index, Text, ForeignKey, Enum as SQLEnum
+    Index, Text, ForeignKey, Enum as SQLEnum, UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -362,4 +362,73 @@ class EmpresaNCMEstado(Base):
 
     def __repr__(self):
         return f"<EmpresaNCMEstado(id={self.id}, nome={self.nome_empresa[:20]!r}, uf={self.estado}, ncm={self.ncm})>"
+
+
+class EmpresaComex(Base):
+    """
+    Empresas agregadas a partir do comex_stat (sincronização BigQuery → PostgreSQL).
+    """
+
+    __tablename__ = "empresas_comex"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cnpj = Column(String(14), nullable=True, index=True)
+    razao_social = Column(String(512), nullable=False, index=True)
+    uf = Column(String(2), nullable=False, index=True)
+    municipio = Column(String(255), nullable=True)
+    tipo = Column(String(20), nullable=False, index=True)
+    valor_fob_total = Column(Float, nullable=False, default=0)
+    total_operacoes = Column(Integer, nullable=False, default=0)
+    ano_referencia = Column(Integer, nullable=False, index=True)
+    atualizado_em = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ano_referencia",
+            "tipo",
+            "razao_social",
+            "uf",
+            "municipio",
+            name="uq_empresas_comex_natural",
+        ),
+    )
+
+    def __repr__(self):
+        return f"<EmpresaComex(id={self.id}, razao={self.razao_social[:30]!r}, uf={self.uf}, tipo={self.tipo})>"
+
+
+class OperacaoNCMEstado(Base):
+    """
+    Operações agregadas por NCM × UF × mês (ncm_exportacao / ncm_importacao).
+    """
+
+    __tablename__ = "operacao_ncm_estado"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ano = Column(Integer, nullable=False, index=True)
+    mes = Column(Integer, nullable=True, index=True)
+    ncm = Column(String(8), nullable=False, index=True)
+    descricao_ncm = Column(String(512), nullable=True)
+    uf = Column(String(2), nullable=False, index=True)
+    tipo_operacao = Column(String(20), nullable=False, index=True)
+    valor_fob_usd = Column(Float, nullable=False)
+    quantidade_estatistica = Column(Float, nullable=True)
+    peso_kg = Column(Float, nullable=True)
+    razao_social = Column(String(512), nullable=True, index=True)
+    atualizado_em = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ano",
+            "mes",
+            "ncm",
+            "uf",
+            "tipo_operacao",
+            name="uq_operacao_ncm_estado_key",
+        ),
+        Index("idx_one_ncm_uf_tipo", "ncm", "uf", "tipo_operacao"),
+    )
+
+    def __repr__(self):
+        return f"<OperacaoNCMEstado(ano={self.ano}, ncm={self.ncm}, uf={self.uf}, tipo={self.tipo_operacao})>"
 

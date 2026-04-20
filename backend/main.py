@@ -178,6 +178,20 @@ try:
 except ImportError as e:
     logger.warning(f"Router BigQuery dashboard não disponível: {e}")
 
+try:
+    from routers.admin_routes import router as admin_sync_router
+    app.include_router(admin_sync_router)
+    logger.info("✅ Router admin sincronização (/admin/sincronizar/*) incluído")
+except ImportError as e:
+    logger.warning(f"Router admin sync não disponível: {e}")
+
+try:
+    from routers.dashboard_data_routes import router as dashboard_local_router
+    app.include_router(dashboard_local_router)
+    logger.info("✅ Router dashboard local (/api/dashboard/buscar) incluído")
+except ImportError as e:
+    logger.warning(f"Router dashboard local não disponível: {e}")
+
 
 # Inicializar banco de dados na startup
 @app.on_event("startup")
