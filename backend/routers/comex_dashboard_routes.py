@@ -110,6 +110,31 @@ def _run_query(client, query: str, params: List[object]) -> List[dict]:
     return [dict(row.items()) for row in client.query(query, job_config=job_config).result()]
 
 
+def _raise_http_for_bigquery(exc: Exception, log_message: str) -> None:
+    """Registra o erro e lança HTTPException (403 em falhas típicas de IAM no BigQuery)."""
+    logger.exception(log_message)
+    msg = str(exc)
+    low = msg.lower()
+    if (
+        "access denied" in low
+        or "does not have permission" in low
+        or "permission denied" in low
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "BigQuery recusou leitura (IAM). No Google Cloud, conceda à conta de serviço do backend "
+                "(campo client_email do JSON em GOOGLE_APPLICATION_CREDENTIALS_JSON no Render): "
+                "(1) BigQuery Data Viewer no dataset (ou na tabela) referenciada por COMEX_BQ_TABLE_EMPRESAS_NCM; "
+                "(2) BigQuery Job User no projeto em que as consultas são executadas (o do próprio JSON costuma bastar). "
+                "Se a tabela estiver noutro projeto, defina COMEX_BQ_TABLE_EMPRESAS_NCM=projeto.dataset.tabela e "
+                "conceda as mesmas funções nesse projeto. Detalhe: "
+                + msg
+            ),
+        )
+    raise HTTPException(status_code=500, detail=msg)
+
+
 def _shift_months(y: int, m: int, delta: int) -> Tuple[int, int]:
     m += delta
     while m > 12:
@@ -460,8 +485,7 @@ def get_main_dashboard_stats_bq(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Erro em /api/comex-dashboard/dashboard-stats")
-        raise HTTPException(status_code=500, detail=str(exc))
+        _raise_http_for_bigquery(exc, "Erro em /api/comex-dashboard/dashboard-stats")
 
 
 def _map_row_to_operacao_detalhe(row: dict, idx: int) -> dict:
@@ -565,8 +589,7 @@ def get_tabela_detalhada_bq(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Erro em /api/comex-dashboard/tabela-detalhada")
-        raise HTTPException(status_code=500, detail=str(exc))
+        _raise_http_for_bigquery(exc, "Erro em /api/comex-dashboard/tabela-detalhada")
 
 
 @router.get("/autocomplete/empresa")
@@ -645,9 +668,10 @@ def autocomplete_empresa_ncm_uf(
                 }
             )
         return {"items": items, "fonte_dados": _fonte_dados()}
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Erro no autocomplete empresa (BigQuery)")
-        raise HTTPException(status_code=500, detail=str(exc))
+        _raise_http_for_bigquery(exc, "Erro no autocomplete empresa (BigQuery)")
 
 
 def _base_filtered_cte(where_clause: str) -> str:
@@ -683,9 +707,10 @@ def get_filter_options():
             "ufs": ufs,
             "fonte_dados": _fonte_dados(),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Erro ao carregar opcoes de filtro")
-        raise HTTPException(status_code=500, detail=f"Erro ao carregar filtros: {exc}")
+        _raise_http_for_bigquery(exc, "Erro ao carregar opcoes de filtro")
 
 
 @router.get("/data")
@@ -816,9 +841,10 @@ def get_dashboard_data(
             },
             "fonte_dados": _fonte_dados(),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Erro ao montar dados do dashboard Comex")
-        raise HTTPException(status_code=500, detail=f"Erro ao consultar BigQuery: {exc}")
+        _raise_http_for_bigquery(exc, "Erro ao montar dados do dashboard Comex")
 
 
 @router.get("/export-csv")
@@ -889,6 +915,7 @@ def export_csv(
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=comex_dashboard_export.csv"},
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Erro ao exportar CSV do dashboard Comex")
-        raise HTTPException(status_code=500, detail=f"Erro ao exportar CSV: {exc}")
+        _raise_http_for_bigquery(exc, "Erro ao exportar CSV do dashboard Comex")
