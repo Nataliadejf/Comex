@@ -192,6 +192,13 @@ try:
 except ImportError as e:
     logger.warning(f"Router dashboard local não disponível: {e}")
 
+try:
+    from routers.comex_dashboard_routes import router as comex_dashboard_router
+    app.include_router(comex_dashboard_router)
+    logger.info("✅ Router Comex Dashboard (/api/comex-dashboard/*) incluído")
+except ImportError as e:
+    logger.warning(f"Router Comex Dashboard não disponível: {e}")
+
 
 # Inicializar banco de dados na startup
 @app.on_event("startup")
