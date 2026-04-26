@@ -12,7 +12,16 @@ export interface DashboardFilters {
   sortOrder?: "asc" | "desc";
 }
 
+/** Metadados da origem — todas as consultas do Comex BigQuery usam esta tabela. */
+export interface FonteDadosComex {
+  motor: string;
+  tabela_id: string;
+  tabela_sql: string;
+  nome_logico: string;
+}
+
 export interface DashboardDataResponse {
+  fonte_dados?: FonteDadosComex;
   kpis: {
     total_importado: number;
     total_exportado: number;
@@ -76,7 +85,12 @@ const normalizeParams = (filters: DashboardFilters): Record<string, string | num
 export const comexDashboardAPI = {
   getFilterOptions: async () => {
     const response = await api.get("/api/comex-dashboard/options");
-    return response.data as { anos: number[]; meses: number[]; ufs: string[] };
+    return response.data as {
+      anos: number[];
+      meses: number[];
+      ufs: string[];
+      fonte_dados?: FonteDadosComex;
+    };
   },
 
   getDashboardData: async (filters: DashboardFilters) => {

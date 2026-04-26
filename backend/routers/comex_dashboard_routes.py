@@ -13,7 +13,28 @@ from loguru import logger
 
 router = APIRouter(prefix="/api/comex-dashboard", tags=["comex-dashboard"])
 
-TABLE_REF = "`liquid-receiver-483923-n6.Projeto_Comex.empresas_ncm_import_export_uf`"
+# Tabela padrão do escopo Comex (BigQuery). Sobrescreva com COMEX_BQ_TABLE_EMPRESAS_NCM se o projeto/dataset mudar.
+_DEFAULT_BQ_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.empresas_ncm_import_export_uf"
+
+
+def _get_table_ref() -> str:
+    """Referência SQL BigQuery (com backticks) para empresas_ncm_import_export_uf."""
+    raw = (os.getenv("COMEX_BQ_TABLE_EMPRESAS_NCM") or _DEFAULT_BQ_TABLE).strip().strip("`")
+    if not raw:
+        raw = _DEFAULT_BQ_TABLE
+    return f"`{raw}`"
+
+
+def _fonte_dados() -> Dict[str, str]:
+    ref = _get_table_ref()
+    return {
+        "motor": "bigquery",
+        "tabela_id": ref.strip("`"),
+        "tabela_sql": ref,
+        "nome_logico": "empresas_ncm_import_export_uf",
+    }
+
+
 SORTABLE_COLUMNS = {
     "cnpj": "cnpj",
     "razao_social": "razao_social",
@@ -87,6 +108,86 @@ def _run_query(client, query: str, params: List[object]) -> List[dict]:
     return [dict(row.items()) for row in client.query(query, job_config=job_config).result()]
 
 
+@router.get("/autocomplete/empresa")
+def autocomplete_empresa_ncm_uf(
+    q: str = Query("", description="Trecho de razão social ou CNPJ"),
+    tipo: str = Query(
+        "",
+        description="importacao | exportacao | vazio (ambos com movimento)",
+    ),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """
+    Sugestões para os campos Provável Importador / Exportador, lidas da tabela
+    empresas_ncm_import_export_uf no BigQuery (agrupado por CNPJ).
+    """
+    from google.cloud import bigquery
+
+    q_strip = (q or "").strip()
+    if len(q_strip) < 1:
+        return {"items": [], "fonte_dados": _fonte_dados()}
+
+    raw_tipo = (tipo or "").strip().lower()
+    if raw_tipo in ("importacao", "importação", "import"):
+        tipo_l = "importacao"
+    elif raw_tipo in ("exportacao", "exportação", "export"):
+        tipo_l = "exportacao"
+    else:
+        tipo_l = ""
+
+    tref = _get_table_ref()
+    params: List[object] = [
+        bigquery.ScalarQueryParameter("q_like", "STRING", f"%{q_strip}%"),
+        bigquery.ScalarQueryParameter("limit_value", "INT64", limit),
+    ]
+    where_name = (
+        "(LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@q_like) "
+        "OR CAST(cnpj AS STRING) LIKE @q_like)"
+    )
+    having = ""
+    if tipo_l == "importacao":
+        having = "HAVING SUM(total_importacao_fob) > 0"
+    elif tipo_l == "exportacao":
+        having = "HAVING SUM(total_exportacao_fob) > 0"
+
+    sql = f"""
+    SELECT
+      cnpj,
+      ANY_VALUE(razao_social) AS nome,
+      SUM(total_importacao_fob) AS total_importacao_fob,
+      SUM(total_exportacao_fob) AS total_exportacao_fob,
+      COUNT(*) AS total_operacoes
+    FROM {tref}
+    WHERE {where_name}
+    GROUP BY cnpj
+    {having}
+    ORDER BY (SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC
+    LIMIT @limit_value
+    """
+
+    try:
+        client = _get_bigquery_client()
+        rows = _run_query(client, sql, params)
+        items = []
+        for row in rows:
+            nome = str(row.get("nome") or "").strip()
+            if not nome:
+                continue
+            items.append(
+                {
+                    "nome": nome,
+                    "cnpj": row.get("cnpj"),
+                    "total_operacoes": int(row.get("total_operacoes") or 0),
+                    "valor_total": 0.0,
+                    "fonte": "bigquery_empresas_ncm_uf",
+                }
+            )
+        return {"items": items, "fonte_dados": _fonte_dados()}
+    except Exception as exc:
+        logger.exception("Erro no autocomplete empresa (BigQuery)")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 def _base_filtered_cte(where_clause: str) -> str:
     return f"""
     WITH filtered AS (
@@ -99,7 +200,7 @@ def _base_filtered_cte(where_clause: str) -> str:
         id_ncm,
         COALESCE(total_importacao_fob, 0) AS total_importacao_fob,
         COALESCE(total_exportacao_fob, 0) AS total_exportacao_fob
-      FROM {TABLE_REF}
+      FROM {_get_table_ref()}
       WHERE {where_clause}
     )
     """
@@ -109,11 +210,17 @@ def _base_filtered_cte(where_clause: str) -> str:
 def get_filter_options():
     client = _get_bigquery_client()
     try:
-        years_query = f"SELECT DISTINCT ano FROM {TABLE_REF} WHERE ano IS NOT NULL ORDER BY ano DESC"
-        uf_query = f"SELECT DISTINCT sigla_uf FROM {TABLE_REF} WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf"
+        tref = _get_table_ref()
+        years_query = f"SELECT DISTINCT ano FROM {tref} WHERE ano IS NOT NULL ORDER BY ano DESC"
+        uf_query = f"SELECT DISTINCT sigla_uf FROM {tref} WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf"
         years = [row["ano"] for row in _run_query(client, years_query, [])]
         ufs = [row["sigla_uf"] for row in _run_query(client, uf_query, [])]
-        return {"anos": years, "meses": list(range(1, 13)), "ufs": ufs}
+        return {
+            "anos": years,
+            "meses": list(range(1, 13)),
+            "ufs": ufs,
+            "fonte_dados": _fonte_dados(),
+        }
     except Exception as exc:
         logger.exception("Erro ao carregar opcoes de filtro")
         raise HTTPException(status_code=500, detail=f"Erro ao carregar filtros: {exc}")
@@ -245,6 +352,7 @@ def get_dashboard_data(
                 "total": total,
                 "total_pages": max(1, (total + page_size - 1) // page_size),
             },
+            "fonte_dados": _fonte_dados(),
         }
     except Exception as exc:
         logger.exception("Erro ao montar dados do dashboard Comex")

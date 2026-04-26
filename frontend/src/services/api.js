@@ -343,6 +343,14 @@ export const dashboardLocalAPI = {
   buscar: (params = {}) => api.get('/api/dashboard/buscar', { params }),
 };
 
+/** Autocomplete de empresas a partir da tabela BigQuery empresas_ncm_import_export_uf */
+export const comexDashboardBqAPI = {
+  autocompleteEmpresa: (q, tipo = '', limit = 25) =>
+    api.get('/api/comex-dashboard/autocomplete/empresa', {
+      params: { q: q || '', tipo: tipo || '', limit },
+    }),
+};
+
 export const coletaAPI = {
   coletarDados: () => api.post('/coletar-dados'),
 };

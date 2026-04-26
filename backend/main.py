@@ -5199,7 +5199,7 @@ async def autocomplete_importadoras(
                             "fonte": "empresas"
                         })
         
-        # 1. Buscar empresas importadoras que contêm o termo nas operações
+        # 1. Buscar empresas importadoras que contêm o termo nas operações (query_clean evita espaços nas pontas no ILIKE)
         empresas = db.query(
             OperacaoComex.razao_social_importador.label('empresa'),
             func.count(OperacaoComex.id).label('total_operacoes'),
@@ -5207,13 +5207,13 @@ async def autocomplete_importadoras(
         ).filter(
             OperacaoComex.razao_social_importador.isnot(None),
             OperacaoComex.razao_social_importador != '',
-            OperacaoComex.razao_social_importador.ilike(f"%{q}%")
+            OperacaoComex.razao_social_importador.ilike(f"%{query_clean}%")
         ).group_by(
             OperacaoComex.razao_social_importador
         ).order_by(
             func.sum(OperacaoComex.valor_fob).desc()
         ).limit(limit).all()
-        
+
         for empresa, total_operacoes, valor_total in empresas:
             nome_emp = (empresa or "").strip()
             if not nome_emp:
@@ -5230,7 +5230,7 @@ async def autocomplete_importadoras(
         if len(resultado) < limit:
             try:
                 resultados_bq = _buscar_empresas_bigquery(
-                    q=q,
+                    q=query_clean,
                     tipo="importacao",
                     limit=limit - len(resultado)
                 )
@@ -5256,7 +5256,7 @@ async def autocomplete_importadoras(
                 empresas_mdic_filtradas = [
                     emp for emp in empresas_mdic
                     if emp.get("tipo_operacao", "").lower() in ["importação", "importacao", ""] and
-                    q.lower() in emp.get("razao_social", "").lower()
+                    (query_clean and query_clean.lower() in emp.get("razao_social", "").lower())
                 ]
                 
                 # Adicionar empresas do MDIC que não estão no resultado
@@ -5308,7 +5308,7 @@ async def autocomplete_importadoras(
                 for emp in empresas_com_sinergia:
                     nome = emp.get("razao_social", "")
                     if (nome.lower() not in empresas_ja_adicionadas and
-                        q.lower() in nome.lower() and
+                        query_clean and query_clean.lower() in nome.lower() and
                         emp.get("importacoes", {}).get("total_operacoes", 0) > 0):
                         resultado.append({
                             "nome": nome,
@@ -5379,8 +5379,8 @@ async def autocomplete_exportadoras(
             OperacaoComex.razao_social_exportador.isnot(None),
             OperacaoComex.razao_social_exportador != '',
         ]
-        if q:
-            filter_export.append(OperacaoComex.razao_social_exportador.ilike(f"%{q}%"))
+        if query_clean:
+            filter_export.append(OperacaoComex.razao_social_exportador.ilike(f"%{query_clean}%"))
         
         empresas_query = db.query(
             OperacaoComex.razao_social_exportador,
@@ -5414,7 +5414,7 @@ async def autocomplete_exportadoras(
         if len(resultado) < limit:
             try:
                 resultados_bq = _buscar_empresas_bigquery(
-                    q=q,
+                    q=query_clean,
                     tipo="exportacao",
                     limit=limit - len(resultado)
                 )
@@ -5439,7 +5439,7 @@ async def autocomplete_exportadoras(
                 empresas_mdic_filtradas = [
                     emp for emp in empresas_mdic
                     if emp.get("tipo_operacao", "").lower() in ["exportação", "exportacao", ""] and
-                    q.lower() in emp.get("razao_social", "").lower()
+                    (query_clean and query_clean.lower() in emp.get("razao_social", "").lower())
                 ]
                 
                 # Adicionar empresas do MDIC que não estão no resultado
@@ -5491,7 +5491,7 @@ async def autocomplete_exportadoras(
                 for emp in empresas_com_sinergia:
                     nome = emp.get("razao_social", "")
                     if (nome.lower() not in empresas_ja_adicionadas and
-                        q.lower() in nome.lower() and
+                        query_clean and query_clean.lower() in nome.lower() and
                         emp.get("exportacoes", {}).get("total_operacoes", 0) > 0):
                         resultado.append({
                             "nome": nome,

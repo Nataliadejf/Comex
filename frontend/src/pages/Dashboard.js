@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Row, Col, Card, Statistic, Spin, Alert, Table, Tag, 
-  DatePicker, Select, Input, Button, Space, Divider, AutoComplete
+  DatePicker, Select, Input, Button, Space, Divider, AutoComplete, message
 } from 'antd';
 import {
   DollarOutlined,
@@ -24,7 +24,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI } from '../services/api';
+import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI, comexDashboardBqAPI } from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
 
@@ -34,6 +34,38 @@ const { RangePicker } = DatePicker;
 const { Option } = Select;
 
 const COLORS = ['#0088FE', '#FF8042', '#FFBB28', '#00C49F', '#8884d8', '#82ca9d'];
+
+/** Nome para exibir/autocomplete — a API pode retornar `nome`, `razao_social`, etc. */
+const nomeEmpresaListaItem = (empresa) => {
+  if (empresa == null) return '';
+  if (typeof empresa === 'string') return String(empresa).trim();
+  const n =
+    empresa.nome ??
+    empresa.razao_social ??
+    empresa.empresa ??
+    empresa.razao_social_importador ??
+    empresa.razao_social_exportador ??
+    '';
+  return String(n).trim();
+};
+
+const MIN_CHARS_FILTRO_EMPRESA = 2;
+
+/** Lê o texto atual do campo AutoComplete (Ant Design 5 usa input dentro de .ant-select). */
+const lerInputEmpresaNoDom = (dataFilterAttr) => {
+  try {
+    const root = document.querySelector(`[data-filter="${dataFilterAttr}"]`);
+    if (!root) return '';
+    const input =
+      root.querySelector('input.ant-select-selection-search-input') ||
+      root.querySelector('.ant-select-selection-search input') ||
+      root.querySelector('input');
+    if (!input || input.value == null) return '';
+    return String(input.value).trim();
+  } catch (_) {
+    return '';
+  }
+};
 
 // Tooltip seguro para Recharts: evita getBoundingClientRect em elemento nulo ao mudar filtros (ex.: Hidrau Torque)
 const SafeTooltip = ({ active, payload, formatter, label, ...rest }) => {
@@ -284,25 +316,45 @@ const Dashboard = () => {
       setLoadingImportadoras(true);
       try {
         let lista = [];
-        try {
-          const response = await empresasAPI.autocompleteImportadoras(termo, 25);
-          const data = response?.data;
-          if (data != null && Array.isArray(data)) {
-            lista = data;
-          } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
-            lista = data.data;
-          }
-        } catch (e) {
-          console.warn('⚠️ Autocomplete importadoras falhou, usando fallback debug:', e.message);
-          const res = await empresasAPI.debugEmpresas('importador', 25, termo);
-          if (res && res.data && Array.isArray(res.data.importadoras)) {
-            lista = res.data.importadoras;
+        if (termo.length >= 1) {
+          try {
+            const bqRes = await comexDashboardBqAPI.autocompleteEmpresa(termo, 'importacao', 25);
+            const bqItems = bqRes?.data?.items;
+            if (Array.isArray(bqItems) && bqItems.length > 0) {
+              lista = bqItems;
+            }
+          } catch (e) {
+            console.warn('⚠️ Autocomplete BigQuery (importadoras):', e?.message || e);
           }
         }
-        const options = lista.map((empresa) => ({
-          value: empresa.nome || empresa.empresa || '',
-          label: `${empresa.nome || empresa.empresa || 'N/A'} (${empresa.total_operacoes ?? 0} operações)`,
-        })).filter((o) => o.value);
+        if (lista.length === 0) {
+          try {
+            const response = await empresasAPI.autocompleteImportadoras(termo, 25);
+            const data = response?.data;
+            if (data != null && Array.isArray(data)) {
+              lista = data;
+            } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
+              lista = data.data;
+            }
+          } catch (e) {
+            console.warn('⚠️ Autocomplete importadoras falhou, usando fallback debug:', e.message);
+            const res = await empresasAPI.debugEmpresas('importador', 25, termo);
+            if (res && res.data && Array.isArray(res.data.importadoras)) {
+              lista = res.data.importadoras;
+            }
+          }
+        }
+        const options = lista
+          .map((empresa) => {
+            const nome = nomeEmpresaListaItem(empresa);
+            const ops = empresa.total_operacoes ?? empresa.total ?? 0;
+            const cnpj = empresa.cnpj != null && String(empresa.cnpj).trim() ? String(empresa.cnpj).trim() : '';
+            const label = cnpj
+              ? `${nome || 'N/A'} — ${cnpj} (${ops} reg.)`
+              : `${nome || 'N/A'} (${ops} operações)`;
+            return { value: nome, label };
+          })
+          .filter((o) => o.value);
         setImportadorasOptions(options);
       } catch (error) {
         console.error('❌ Erro ao buscar importadoras:', error?.message || error);
@@ -321,25 +373,45 @@ const Dashboard = () => {
       setLoadingExportadoras(true);
       try {
         let lista = [];
-        try {
-          const response = await empresasAPI.autocompleteExportadoras(termo, 25);
-          const data = response?.data;
-          if (data != null && Array.isArray(data)) {
-            lista = data;
-          } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
-            lista = data.data;
-          }
-        } catch (e) {
-          console.warn('⚠️ Autocomplete exportadoras falhou, usando fallback debug:', e.message);
-          const res = await empresasAPI.debugEmpresas('exportador', 25, termo);
-          if (res && res.data && Array.isArray(res.data.exportadoras)) {
-            lista = res.data.exportadoras;
+        if (termo.length >= 1) {
+          try {
+            const bqRes = await comexDashboardBqAPI.autocompleteEmpresa(termo, 'exportacao', 25);
+            const bqItems = bqRes?.data?.items;
+            if (Array.isArray(bqItems) && bqItems.length > 0) {
+              lista = bqItems;
+            }
+          } catch (e) {
+            console.warn('⚠️ Autocomplete BigQuery (exportadoras):', e?.message || e);
           }
         }
-        const options = lista.map((empresa) => ({
-          value: empresa.nome || empresa.empresa || '',
-          label: `${empresa.nome || empresa.empresa || 'N/A'} (${empresa.total_operacoes ?? 0} operações)`,
-        })).filter((o) => o.value);
+        if (lista.length === 0) {
+          try {
+            const response = await empresasAPI.autocompleteExportadoras(termo, 25);
+            const data = response?.data;
+            if (data != null && Array.isArray(data)) {
+              lista = data;
+            } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
+              lista = data.data;
+            }
+          } catch (e) {
+            console.warn('⚠️ Autocomplete exportadoras falhou, usando fallback debug:', e.message);
+            const res = await empresasAPI.debugEmpresas('exportador', 25, termo);
+            if (res && res.data && Array.isArray(res.data.exportadoras)) {
+              lista = res.data.exportadoras;
+            }
+          }
+        }
+        const options = lista
+          .map((empresa) => {
+            const nome = nomeEmpresaListaItem(empresa);
+            const ops = empresa.total_operacoes ?? empresa.total ?? 0;
+            const cnpj = empresa.cnpj != null && String(empresa.cnpj).trim() ? String(empresa.cnpj).trim() : '';
+            const label = cnpj
+              ? `${nome || 'N/A'} — ${cnpj} (${ops} reg.)`
+              : `${nome || 'N/A'} (${ops} operações)`;
+            return { value: nome, label };
+          })
+          .filter((o) => o.value);
         setExportadorasOptions(options);
       } catch (error) {
         console.error('❌ Erro ao buscar exportadoras:', error?.message || error);
@@ -466,11 +538,11 @@ const Dashboard = () => {
         params.ncm = ncmOverride;
       }
       
-      // Filtros de empresa: só envia com ≥3 caracteres (evita busca a cada letra)
-      if (filtroImportador && String(filtroImportador).trim().length >= 3) {
+      // Filtros de empresa: mínimo de caracteres (evita consultas triviais; 2 permite siglas como VW)
+      if (filtroImportador && String(filtroImportador).trim().length >= MIN_CHARS_FILTRO_EMPRESA) {
         params.empresa_importadora = String(filtroImportador).trim();
       }
-      if (filtroExportador && String(filtroExportador).trim().length >= 3) {
+      if (filtroExportador && String(filtroExportador).trim().length >= MIN_CHARS_FILTRO_EMPRESA) {
         params.empresa_exportadora = String(filtroExportador).trim();
       }
       console.log('📤 Parâmetros enviados ao backend:', { ...params });
@@ -827,12 +899,21 @@ const Dashboard = () => {
     let exportadorVal = (exportadorInputRef.current != null && exportadorInputRef.current !== undefined)
       ? String(exportadorInputRef.current).trim()
       : (empresaExportadoraInput || empresaExportadora || '').toString().trim();
-    try {
-      const imp = document.querySelector('[data-filter="empresa-importadora"] input');
-      const exp = document.querySelector('[data-filter="empresa-exportadora"] input');
-      if (imp && imp.value != null && String(imp.value).trim()) importadorVal = String(imp.value).trim();
-      if (exp && exp.value != null && String(exp.value).trim()) exportadorVal = String(exp.value).trim();
-    } catch (_) {}
+    const impDom = lerInputEmpresaNoDom('empresa-importadora');
+    const expDom = lerInputEmpresaNoDom('empresa-exportadora');
+    if (impDom) importadorVal = impDom;
+    if (expDom) exportadorVal = expDom;
+
+    const tinhaTextoImp = !!(importadorVal && String(importadorVal).trim());
+    const tinhaTextoExp = !!(exportadorVal && String(exportadorVal).trim());
+    if (
+      (tinhaTextoImp && String(importadorVal).trim().length < MIN_CHARS_FILTRO_EMPRESA) ||
+      (tinhaTextoExp && String(exportadorVal).trim().length < MIN_CHARS_FILTRO_EMPRESA)
+    ) {
+      message.warning(
+        `Informe pelo menos ${MIN_CHARS_FILTRO_EMPRESA} caracteres em Provável Importador ou Exportador para aplicar o filtro.`
+      );
+    }
     setEmpresaImportadora(importadorVal || null);
     setEmpresaExportadora(exportadorVal || null);
     setEmpresaImportadoraInput(importadorVal);
@@ -1312,7 +1393,8 @@ const Dashboard = () => {
           </Col>
         </Row>
         <Row gutter={[16, 16]} align="middle" style={{ marginTop: '16px' }}>
-          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }} data-filter="empresa-importadora">
+          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }}>
+            <div data-filter="empresa-importadora" style={{ minWidth: 0 }}>
             <AutoComplete
               style={{ width: '100%', minWidth: 0 }}
               placeholder="Provável Importador"
@@ -1322,21 +1404,21 @@ const Dashboard = () => {
                 if (importadorasOptions.length === 0) buscarImportadoras(empresaImportadoraInput || '');
               }}
               onChange={(value) => {
-                const v = value ?? '';
+                const v = value == null ? '' : String(value);
                 importadorInputRef.current = v;
                 setEmpresaImportadoraInput(v);
                 setEmpresaImportadora(v.trim() ? v : null);
-                if (v) buscarImportadoras(v);
+                if (v.trim()) buscarImportadoras(v);
                 else setImportadorasOptions([]);
               }}
               onSearch={(text) => {
-                const t = text ?? '';
+                const t = text == null ? '' : String(text);
                 importadorInputRef.current = t;
                 setEmpresaImportadoraInput(t);
                 buscarImportadoras(t);
               }}
               onSelect={(value) => {
-                const v = (value ?? '').toString().trim();
+                const v = (value == null ? '' : String(value)).trim();
                 importadorInputRef.current = v;
                 // Marcar busca em progresso ANTES de atualizar estados para evitar que useEffect interfira
                 searchInProgressRef.current = true;
@@ -1364,12 +1446,14 @@ const Dashboard = () => {
                 if (e.key === 'Enter') handleSearch(e);
               }}
               options={importadorasOptions}
-              loading={loadingImportadoras}
+              notFoundContent={loadingImportadoras ? <Spin size="small" /> : 'Nenhuma empresa encontrada'}
               allowClear
-              filterOption={false}
+              filterOption={() => true}
             />
+            </div>
           </Col>
-          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }} data-filter="empresa-exportadora">
+          <Col xs={24} sm={24} md={12} lg={8} style={{ minWidth: 0 }}>
+            <div data-filter="empresa-exportadora" style={{ minWidth: 0 }}>
             <AutoComplete
               style={{ width: '100%', minWidth: 0 }}
               placeholder="Provável Exportador"
@@ -1379,21 +1463,21 @@ const Dashboard = () => {
                 if (exportadorasOptions.length === 0) buscarExportadoras(empresaExportadoraInput || '');
               }}
               onChange={(value) => {
-                const v = value ?? '';
+                const v = value == null ? '' : String(value);
                 exportadorInputRef.current = v;
                 setEmpresaExportadoraInput(v);
                 setEmpresaExportadora(v.trim() ? v : null);
-                if (v) buscarExportadoras(v);
+                if (v.trim()) buscarExportadoras(v);
                 else setExportadorasOptions([]);
               }}
               onSearch={(text) => {
-                const t = text ?? '';
+                const t = text == null ? '' : String(text);
                 exportadorInputRef.current = t;
                 setEmpresaExportadoraInput(t);
                 buscarExportadoras(t);
               }}
               onSelect={(value) => {
-                const v = (value ?? '').toString().trim();
+                const v = (value == null ? '' : String(value)).trim();
                 exportadorInputRef.current = v;
                 // Marcar busca em progresso ANTES de atualizar estados para evitar que useEffect interfira
                 searchInProgressRef.current = true;
@@ -1421,10 +1505,11 @@ const Dashboard = () => {
                 if (e.key === 'Enter') handleSearch(e);
               }}
               options={exportadorasOptions}
-              loading={loadingExportadoras}
+              notFoundContent={loadingExportadoras ? <Spin size="small" /> : 'Nenhuma empresa encontrada'}
               allowClear
-              filterOption={false}
+              filterOption={() => true}
             />
+            </div>
           </Col>
           <Col xs={24} sm={24} md={24} lg={8} style={{ marginTop: isMobile ? '8px' : 0 }}>
             <Space wrap size="small">

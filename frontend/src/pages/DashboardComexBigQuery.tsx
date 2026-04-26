@@ -122,6 +122,20 @@ const DashboardComexBigQuery: React.FC = () => {
     <div className="space-y-4 bg-slate-100 p-4">
       <h1 className="text-2xl font-bold text-slate-900">Dashboard Comex (BigQuery)</h1>
 
+      {data.fonte_dados && (
+        <div
+          className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950"
+          role="status"
+        >
+          <strong>Fonte dos dados:</strong> {data.fonte_dados.motor} — tabela{" "}
+          <code className="rounded bg-white px-1.5 py-0.5 text-xs font-mono">
+            {data.fonte_dados.tabela_id}
+          </code>
+          . Todas as consultas desta página leem exclusivamente{" "}
+          <span className="font-semibold">{data.fonte_dados.nome_logico}</span> (valores FOB em USD).
+        </div>
+      )}
+
       <Filters
         empresa={String(draftFilters.empresa || "")}
         ano={draftFilters.ano}
