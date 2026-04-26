@@ -4,6 +4,8 @@ import csv
 import io
 import json
 import os
+import re
+from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query
@@ -108,6 +110,465 @@ def _run_query(client, query: str, params: List[object]) -> List[dict]:
     return [dict(row.items()) for row in client.query(query, job_config=job_config).result()]
 
 
+def _shift_months(y: int, m: int, delta: int) -> Tuple[int, int]:
+    m += delta
+    while m > 12:
+        y += 1
+        m -= 12
+    while m < 1:
+        y -= 1
+        m += 12
+    return y, m
+
+
+def _ym_bounds_from_meses(meses: int) -> Tuple[int, int]:
+    today = date.today()
+    y2, m2 = today.year, today.month
+    y1, m1 = _shift_months(y2, m2, -(max(1, min(120, int(meses) or 24)) - 1))
+    return y1 * 100 + m1, y2 * 100 + m2
+
+
+def _parse_ym_bounds(
+    data_inicio: Optional[str],
+    data_fim: Optional[str],
+    meses: int,
+) -> Tuple[int, int]:
+    """Retorna (ym_start, ym_end) como inteiros YYYYMM para filtro (ano*100+mes)."""
+    di = (data_inicio or "").strip()
+    df = (data_fim or "").strip()
+    m1 = re.match(r"^(\d{4})-(\d{2})-\d{2}$", di)
+    m2 = re.match(r"^(\d{4})-(\d{2})-\d{2}$", df)
+    if m1 and m2:
+        y1, mo1 = int(m1.group(1)), int(m1.group(2))
+        y2, mo2 = int(m2.group(1)), int(m2.group(2))
+        ym_start = y1 * 100 + mo1
+        ym_end = y2 * 100 + mo2
+        if ym_start > ym_end:
+            ym_start, ym_end = ym_end, ym_start
+        return ym_start, ym_end
+    return _ym_bounds_from_meses(meses)
+
+
+def _sanitize_ncm_digits_list(ncm: Optional[str], ncms: Optional[List[str]]) -> List[str]:
+    out: List[str] = []
+
+    def one(s: Optional[str]) -> Optional[str]:
+        d = re.sub(r"\D", "", str(s or ""))[:8]
+        return d if len(d) == 8 else None
+
+    if ncms:
+        for x in ncms:
+            v = one(x)
+            if v and v not in out:
+                out.append(v)
+    v = one(ncm)
+    if v and v not in out:
+        out.append(v)
+    return out[:50]
+
+
+def _build_main_dashboard_where(
+    ym_start: int,
+    ym_end: int,
+    tipo_operacao: Optional[str],
+    ncm: Optional[str],
+    ncms: Optional[List[str]],
+    empresa_importadora: Optional[str],
+    empresa_exportadora: Optional[str],
+) -> Tuple[str, List[object]]:
+    """Filtros sobre a tabela empresas_ncm_import_export_uf (mesmo escopo do dashboard principal)."""
+    from google.cloud import bigquery
+
+    conditions: List[str] = [
+        "ano IS NOT NULL AND mes IS NOT NULL",
+        "(ano * 100 + mes) >= @ym_start",
+        "(ano * 100 + mes) <= @ym_end",
+    ]
+    params: List[object] = [
+        bigquery.ScalarQueryParameter("ym_start", "INT64", int(ym_start)),
+        bigquery.ScalarQueryParameter("ym_end", "INT64", int(ym_end)),
+    ]
+
+    top = (tipo_operacao or "").strip().lower()
+    if "import" in top:
+        conditions.append("total_importacao_fob > 0")
+    elif "export" in top:
+        conditions.append("total_exportacao_fob > 0")
+
+    ncm_list = _sanitize_ncm_digits_list(ncm, ncms)
+    if ncm_list:
+        conditions.append("REGEXP_REPLACE(CAST(id_ncm AS STRING), r'[^0-9]', '') IN UNNEST(@ncm_list)")
+        params.append(bigquery.ArrayQueryParameter("ncm_list", "STRING", ncm_list))
+
+    ei = (empresa_importadora or "").strip()
+    if ei:
+        like = f"%{ei}%"
+        conditions.append(
+            "("
+            "LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like_imp) "
+            "OR CAST(cnpj AS STRING) LIKE @like_imp"
+            ")"
+        )
+        params.append(bigquery.ScalarQueryParameter("like_imp", "STRING", like))
+
+    ee = (empresa_exportadora or "").strip()
+    if ee:
+        like_e = f"%{ee}%"
+        conditions.append(
+            "("
+            "LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like_exp) "
+            "OR CAST(cnpj AS STRING) LIKE @like_exp"
+            ")"
+        )
+        params.append(bigquery.ScalarQueryParameter("like_exp", "STRING", like_e))
+
+    return " AND ".join(conditions), params
+
+
+def _dashboard_stats_payload_from_bq(
+    client,
+    ym_start: int,
+    ym_end: int,
+    tipo_operacao: Optional[str],
+    ncm: Optional[str],
+    ncms: Optional[List[str]],
+    empresa_importadora: Optional[str],
+    empresa_exportadora: Optional[str],
+) -> Dict:
+    where_clause, params = _build_main_dashboard_where(
+        ym_start,
+        ym_end,
+        tipo_operacao,
+        ncm,
+        ncms,
+        empresa_importadora,
+        empresa_exportadora,
+    )
+    cte = _base_filtered_cte(where_clause)
+    top_l = (tipo_operacao or "").strip().lower()
+    ncm_metric_imp = "COALESCE(SUM(total_importacao_fob), 0)"
+    ncm_metric_exp = "COALESCE(SUM(total_exportacao_fob), 0)"
+    if "export" in top_l and "import" not in top_l:
+        ncm_order_metric = ncm_metric_exp
+    elif "import" in top_l and "export" not in top_l:
+        ncm_order_metric = ncm_metric_imp
+    else:
+        ncm_order_metric = f"({ncm_metric_imp} + {ncm_metric_exp})"
+
+    kpi_sql = cte + """
+    SELECT
+      COALESCE(SUM(total_importacao_fob), 0) AS v_imp,
+      COALESCE(SUM(total_exportacao_fob), 0) AS v_exp,
+      COUNTIF(total_importacao_fob > 0) AS cnt_imp_rows,
+      COUNTIF(total_exportacao_fob > 0) AS cnt_exp_rows,
+      COUNT(*) AS cnt_all
+    FROM filtered
+    """
+    kpi = _run_query(client, kpi_sql, params)
+    row0 = kpi[0] if kpi else {}
+    v_imp = float(row0.get("v_imp") or 0)
+    v_exp = float(row0.get("v_exp") or 0)
+    cnt_imp = int(row0.get("cnt_imp_rows") or 0)
+    cnt_exp = int(row0.get("cnt_exp_rows") or 0)
+    cnt_all = int(row0.get("cnt_all") or 0)
+
+    monthly_sql = cte + """
+    SELECT
+      FORMAT('%04d-%02d', ano, mes) AS ym,
+      COUNT(*) AS registros,
+      COALESCE(SUM(total_importacao_fob + total_exportacao_fob), 0) AS valor_mes
+    FROM filtered
+    GROUP BY ano, mes
+    ORDER BY ano, mes
+    """
+    monthly = _run_query(client, monthly_sql, params)
+    registros_por_mes: Dict[str, int] = {}
+    valores_por_mes: Dict[str, float] = {}
+    pesos_por_mes: Dict[str, float] = {}
+    for r in monthly:
+        ym = str(r.get("ym") or "")
+        if not ym:
+            continue
+        registros_por_mes[ym] = int(r.get("registros") or 0)
+        valores_por_mes[ym] = float(r.get("valor_mes") or 0)
+        pesos_por_mes[ym] = 0.0
+
+    ncm_sql = cte + f"""
+    SELECT
+      REGEXP_REPLACE(CAST(id_ncm AS STRING), r'[^0-9]', '') AS ncm,
+      {ncm_metric_imp} AS v_imp_ncm,
+      {ncm_metric_exp} AS v_exp_ncm
+    FROM filtered
+    GROUP BY id_ncm
+    ORDER BY {ncm_order_metric} DESC
+    LIMIT 15
+    """
+    ncm_rows = _run_query(client, ncm_sql, params)
+    principais_ncms: List[dict] = []
+    for r in ncm_rows:
+        ncm_s = str(r.get("ncm") or "").strip()
+        if not ncm_s:
+            continue
+        vi = float(r.get("v_imp_ncm") or 0)
+        ve = float(r.get("v_exp_ncm") or 0)
+        if "export" in top_l and "import" not in top_l:
+            vtot = ve
+        elif "import" in top_l and "export" not in top_l:
+            vtot = vi
+        else:
+            vtot = vi + ve
+        if vtot <= 0:
+            continue
+        principais_ncms.append(
+            {
+                "ncm": ncm_s,
+                "descricao": "",
+                "valor_total": vtot,
+                "total_operacoes": 0,
+            }
+        )
+
+    uf_sql = cte + """
+    SELECT
+      sigla_uf AS uf_key,
+      COALESCE(SUM(total_importacao_fob + total_exportacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE sigla_uf IS NOT NULL AND CAST(sigla_uf AS STRING) != ''
+    GROUP BY sigla_uf
+    ORDER BY valor_total DESC
+    LIMIT 20
+    """
+    uf_rows = _run_query(client, uf_sql, params)
+    principais_paises: List[dict] = []
+    for r in uf_rows:
+        uf_k = str(r.get("uf_key") or "").strip()
+        if not uf_k:
+            continue
+        principais_paises.append(
+            {
+                "pais": f"UF: {uf_k}",
+                "valor_total": float(r.get("valor_total") or 0),
+                "total_operacoes": int(r.get("total_operacoes") or 0),
+            }
+        )
+
+    imp_top_sql = cte + """
+    SELECT
+      ANY_VALUE(razao_social) AS nome,
+      cnpj,
+      COALESCE(SUM(total_importacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE total_importacao_fob > 0
+    GROUP BY cnpj
+    ORDER BY valor_total DESC
+    LIMIT 10
+    """
+    imp_rows = _run_query(client, imp_top_sql, params)
+    principais_importadores = [
+        {
+            "nome": str(r.get("nome") or "N/A").strip() or "N/A",
+            "valor_total": float(r.get("valor_total") or 0),
+            "total_operacoes": int(r.get("total_operacoes") or 0),
+            "peso_total": 0.0,
+        }
+        for r in imp_rows
+        if r.get("cnpj") is not None
+    ]
+
+    exp_top_sql = cte + """
+    SELECT
+      ANY_VALUE(razao_social) AS nome,
+      cnpj,
+      COALESCE(SUM(total_exportacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE total_exportacao_fob > 0
+    GROUP BY cnpj
+    ORDER BY valor_total DESC
+    LIMIT 10
+    """
+    exp_rows = _run_query(client, exp_top_sql, params)
+    principais_exportadores = [
+        {
+            "nome": str(r.get("nome") or "N/A").strip() or "N/A",
+            "valor_total": float(r.get("valor_total") or 0),
+            "total_operacoes": int(r.get("total_operacoes") or 0),
+            "peso_total": 0.0,
+        }
+        for r in exp_rows
+        if r.get("cnpj") is not None
+    ]
+
+    if "export" in top_l and "import" not in top_l:
+        valor_total_usd = v_exp
+    elif "import" in top_l and "export" not in top_l:
+        valor_total_usd = v_imp
+    else:
+        valor_total_usd = v_imp + v_exp
+    return {
+        "volume_importacoes": 0.0,
+        "volume_exportacoes": 0.0,
+        "valor_total_usd": valor_total_usd,
+        "valor_total_importacoes": v_imp,
+        "valor_total_exportacoes": v_exp,
+        "quantidade_estatistica_importacoes": float(cnt_imp),
+        "quantidade_estatistica_exportacoes": float(cnt_exp),
+        "quantidade_estatistica_total": float(cnt_all),
+        "principais_ncms": principais_ncms,
+        "principais_paises": principais_paises,
+        "principais_importadores": principais_importadores,
+        "principais_exportadores": principais_exportadores,
+        "registros_por_mes": registros_por_mes,
+        "valores_por_mes": valores_por_mes,
+        "pesos_por_mes": pesos_por_mes,
+        "aviso_dados_sem_empresa": None,
+        "fonte_dados": _fonte_dados(),
+    }
+
+
+@router.get("/dashboard-stats")
+def get_main_dashboard_stats_bq(
+    meses: int = Query(24, ge=1, le=120),
+    tipo_operacao: Optional[str] = Query(None),
+    ncm: Optional[str] = Query(None),
+    ncms: Optional[List[str]] = Query(None),
+    data_inicio: Optional[str] = Query(None),
+    data_fim: Optional[str] = Query(None),
+    empresa_importadora: Optional[str] = Query(None),
+    empresa_exportadora: Optional[str] = Query(None),
+):
+    """
+    Estatísticas no formato do dashboard principal (cards e gráficos), exclusivamente da tabela
+    empresas_ncm_import_export_uf no BigQuery.
+    """
+    ym_start, ym_end = _parse_ym_bounds(data_inicio, data_fim, meses)
+    try:
+        client = _get_bigquery_client()
+        payload = _dashboard_stats_payload_from_bq(
+            client,
+            ym_start,
+            ym_end,
+            tipo_operacao,
+            ncm,
+            ncms,
+            empresa_importadora,
+            empresa_exportadora,
+        )
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Erro em /api/comex-dashboard/dashboard-stats")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _map_row_to_operacao_detalhe(row: dict, idx: int) -> dict:
+    imp = float(row.get("total_importacao_fob") or 0)
+    exp = float(row.get("total_exportacao_fob") or 0)
+    razao = str(row.get("razao_social") or "").strip()
+    cnpj = row.get("cnpj")
+    ano = int(row.get("ano") or 0)
+    mes = int(row.get("mes") or 0)
+    uf = str(row.get("sigla_uf") or "").strip()
+    id_ncm = row.get("id_ncm")
+    ncm_s = re.sub(r"\D", "", str(id_ncm or ""))[:8] or str(id_ncm or "")
+
+    if imp > 0 and exp > 0:
+        tipo = "Importação" if imp >= exp else "Exportação"
+    elif imp > 0:
+        tipo = "Importação"
+    elif exp > 0:
+        tipo = "Exportação"
+    else:
+        tipo = "Importação"
+
+    rid = f"{cnpj}-{ncm_s}-{ano}-{mes}-{uf}-{idx}"
+    return {
+        "id": rid,
+        "ncm": ncm_s,
+        "descricao_produto": "—",
+        "tipo_operacao": tipo,
+        "razao_social_importador": razao if imp > 0 else "",
+        "razao_social_exportador": razao if exp > 0 else "",
+        "pais_origem_destino": "—",
+        "uf": uf,
+        "valor_fob": imp + exp,
+        "peso_liquido_kg": 0,
+        "data_operacao": f"{ano:04d}-{mes:02d}-01" if ano and mes else "",
+    }
+
+
+@router.get("/tabela-detalhada")
+def get_tabela_detalhada_bq(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    meses: int = Query(24, ge=1, le=120),
+    tipo_operacao: Optional[str] = Query(None),
+    ncm: Optional[str] = Query(None),
+    ncms: Optional[List[str]] = Query(None),
+    data_inicio: Optional[str] = Query(None),
+    data_fim: Optional[str] = Query(None),
+    empresa_importadora: Optional[str] = Query(None),
+    empresa_exportadora: Optional[str] = Query(None),
+):
+    """Linhas detalhadas para a tabela do dashboard principal (formato legado), só BigQuery."""
+    ym_start, ym_end = _parse_ym_bounds(data_inicio, data_fim, meses)
+    where_clause, params = _build_main_dashboard_where(
+        ym_start,
+        ym_end,
+        tipo_operacao,
+        ncm,
+        ncms,
+        empresa_importadora,
+        empresa_exportadora,
+    )
+    cte = _base_filtered_cte(where_clause)
+    offset = (page - 1) * page_size
+    from google.cloud import bigquery
+
+    params_page = [
+        *params,
+        bigquery.ScalarQueryParameter("limit_value", "INT64", page_size),
+        bigquery.ScalarQueryParameter("offset_value", "INT64", offset),
+    ]
+    try:
+        client = _get_bigquery_client()
+        total_sql = cte + "SELECT COUNT(*) AS total_rows FROM filtered"
+        total_rows = _run_query(client, total_sql, params)
+        total = int(total_rows[0]["total_rows"]) if total_rows else 0
+
+        data_sql = cte + """
+        SELECT
+          cnpj,
+          razao_social,
+          sigla_uf,
+          id_ncm,
+          ano,
+          mes,
+          total_importacao_fob,
+          total_exportacao_fob
+        FROM filtered
+        ORDER BY ano DESC, mes DESC, total_importacao_fob + total_exportacao_fob DESC
+        LIMIT @limit_value OFFSET @offset_value
+        """
+        raw = _run_query(client, data_sql, params_page)
+        results = [_map_row_to_operacao_detalhe(r, i) for i, r in enumerate(raw)]
+        return {
+            "results": results,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "fonte_dados": _fonte_dados(),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Erro em /api/comex-dashboard/tabela-detalhada")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/autocomplete/empresa")
 def autocomplete_empresa_ncm_uf(
     q: str = Query("", description="Trecho de razão social ou CNPJ"),
@@ -144,11 +605,13 @@ def autocomplete_empresa_ncm_uf(
         "(LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@q_like) "
         "OR CAST(cnpj AS STRING) LIKE @q_like)"
     )
-    having = ""
+    # Sem HAVING: empresas só exportadoras/importadoras ainda aparecem na sugestão (ordenamos por relevância ao campo).
     if tipo_l == "importacao":
-        having = "HAVING SUM(total_importacao_fob) > 0"
+        order_by = "SUM(total_importacao_fob) DESC, SUM(total_exportacao_fob) DESC"
     elif tipo_l == "exportacao":
-        having = "HAVING SUM(total_exportacao_fob) > 0"
+        order_by = "SUM(total_exportacao_fob) DESC, SUM(total_importacao_fob) DESC"
+    else:
+        order_by = "(SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC"
 
     sql = f"""
     SELECT
@@ -160,8 +623,7 @@ def autocomplete_empresa_ncm_uf(
     FROM {tref}
     WHERE {where_name}
     GROUP BY cnpj
-    {having}
-    ORDER BY (SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC
+    ORDER BY {order_by}
     LIMIT @limit_value
     """
 

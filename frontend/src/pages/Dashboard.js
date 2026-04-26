@@ -24,7 +24,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { dashboardAPI, buscaAPI, empresasAPI, sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI, comexDashboardBqAPI } from '../services/api';
+import { sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI, comexDashboardBqAPI } from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
 
@@ -319,29 +319,10 @@ const Dashboard = () => {
         if (termo.length >= 1) {
           try {
             const bqRes = await comexDashboardBqAPI.autocompleteEmpresa(termo, 'importacao', 25);
-            const bqItems = bqRes?.data?.items;
-            if (Array.isArray(bqItems) && bqItems.length > 0) {
-              lista = bqItems;
-            }
+            const items = bqRes?.data?.items;
+            if (Array.isArray(items)) lista = items;
           } catch (e) {
-            console.warn('⚠️ Autocomplete BigQuery (importadoras):', e?.message || e);
-          }
-        }
-        if (lista.length === 0) {
-          try {
-            const response = await empresasAPI.autocompleteImportadoras(termo, 25);
-            const data = response?.data;
-            if (data != null && Array.isArray(data)) {
-              lista = data;
-            } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
-              lista = data.data;
-            }
-          } catch (e) {
-            console.warn('⚠️ Autocomplete importadoras falhou, usando fallback debug:', e.message);
-            const res = await empresasAPI.debugEmpresas('importador', 25, termo);
-            if (res && res.data && Array.isArray(res.data.importadoras)) {
-              lista = res.data.importadoras;
-            }
+            console.warn('⚠️ Autocomplete BigQuery empresas_ncm_import_export_uf (importador):', e?.message || e);
           }
         }
         const options = lista
@@ -376,29 +357,10 @@ const Dashboard = () => {
         if (termo.length >= 1) {
           try {
             const bqRes = await comexDashboardBqAPI.autocompleteEmpresa(termo, 'exportacao', 25);
-            const bqItems = bqRes?.data?.items;
-            if (Array.isArray(bqItems) && bqItems.length > 0) {
-              lista = bqItems;
-            }
+            const items = bqRes?.data?.items;
+            if (Array.isArray(items)) lista = items;
           } catch (e) {
-            console.warn('⚠️ Autocomplete BigQuery (exportadoras):', e?.message || e);
-          }
-        }
-        if (lista.length === 0) {
-          try {
-            const response = await empresasAPI.autocompleteExportadoras(termo, 25);
-            const data = response?.data;
-            if (data != null && Array.isArray(data)) {
-              lista = data;
-            } else if (data != null && !Array.isArray(data) && Array.isArray(data?.data)) {
-              lista = data.data;
-            }
-          } catch (e) {
-            console.warn('⚠️ Autocomplete exportadoras falhou, usando fallback debug:', e.message);
-            const res = await empresasAPI.debugEmpresas('exportador', 25, termo);
-            if (res && res.data && Array.isArray(res.data.exportadoras)) {
-              lista = res.data.exportadoras;
-            }
+            console.warn('⚠️ Autocomplete BigQuery empresas_ncm_import_export_uf (exportador):', e?.message || e);
           }
         }
         const options = lista
@@ -459,8 +421,8 @@ const Dashboard = () => {
     setLoading(true);
     setError(null);
     
-    // NUNCA usar cache quando há filtro de empresa ou busca manual (garantir dados atualizados)
-    const cachedData = (temFiltroEmpresa || ehBuscaComFiltro) ? null : localStorage.getItem('dashboard_stats_cache');
+    // Dashboard principal: totais e gráficos vêm só do BigQuery (sem cache local de stats).
+    const cachedData = null;
     if (temFiltroEmpresa || ehBuscaComFiltro) {
       console.log('🚫 Cache desabilitado devido a filtro de empresa ou busca manual');
       // Limpar cache do localStorage quando há filtro de empresa
@@ -550,7 +512,7 @@ const Dashboard = () => {
         console.log('🔍 Filtro de empresa na requisição:', { empresa_importadora: params.empresa_importadora || null, empresa_exportadora: params.empresa_exportadora || null });
       }
       
-      const response = await dashboardAPI.getStats(params);
+      const response = await comexDashboardBqAPI.getDashboardStats(params);
       
       // Ignorar resposta se outra requisição já foi disparada (evitar sobrescrever filtro com dados antigos)
       if (currentRequestId !== requestIdRef.current) {
@@ -638,18 +600,7 @@ const Dashboard = () => {
           await new Promise(resolve => setTimeout(resolve, 10)); // Pequeno delay
           setStats(novosStats); // Depois atualizar com novos dados
           
-          // Só cachear quando não há filtro por empresa (evitar sobrescrever com dados de uma empresa)
-          if (!temFiltroEmpresa && !ehBuscaComFiltro) {
-            try {
-              localStorage.setItem('dashboard_stats_cache', JSON.stringify(response.data));
-              localStorage.setItem('dashboard_stats_cache_timestamp', Date.now().toString());
-              console.log('💾 Dados salvos no cache');
-            } catch (e) {
-              console.warn('⚠️ Erro ao salvar cache:', e);
-            }
-          } else {
-            console.log('🚫 Cache não salvo devido a filtro de empresa ou busca manual');
-          }
+          console.log('📊 Stats BigQuery aplicados (cache local desativado).');
         }
       } else {
         // Fallback: definir stats vazio se resposta não tiver data
@@ -957,12 +908,15 @@ const Dashboard = () => {
       const filtros = {
         page,
         page_size: pageSize,
+        meses: mesesRef.current != null ? Number(mesesRef.current) : 24,
       };
 
       // Adicionar filtros de data
       if (periodo && periodo[0] && periodo[1]) {
         filtros.data_inicio = periodo[0].format('YYYY-MM-DD');
-        filtros.data_fim = periodo[1].format('YYYY-MM-DD');
+        filtros.data_fim = periodo[1].isAfter(dayjs())
+          ? dayjs().format('YYYY-MM-DD')
+          : periodo[1].format('YYYY-MM-DD');
       }
 
       // Adicionar filtro de tipo de operação
@@ -977,16 +931,17 @@ const Dashboard = () => {
         filtros.ncms = [ncmFiltro];
       }
 
-      // Adicionar filtros de empresa
-      if (empresaImportadora) {
-        filtros.empresa_importadora = empresaImportadora;
+      // Adicionar filtros de empresa (mesmo mínimo de caracteres que o carregamento dos stats)
+      const ei = empresaImportadora && String(empresaImportadora).trim();
+      const ee = empresaExportadora && String(empresaExportadora).trim();
+      if (ei && ei.length >= MIN_CHARS_FILTRO_EMPRESA) {
+        filtros.empresa_importadora = ei;
       }
-      
-      if (empresaExportadora) {
-        filtros.empresa_exportadora = empresaExportadora;
+      if (ee && ee.length >= MIN_CHARS_FILTRO_EMPRESA) {
+        filtros.empresa_exportadora = ee;
       }
 
-      const response = await buscaAPI.buscar(filtros);
+      const response = await comexDashboardBqAPI.getTabelaDetalhada(filtros);
       
       if (response && response.data) {
         setTabelaDados(response.data.results || []);
@@ -1002,7 +957,7 @@ const Dashboard = () => {
     } finally {
       setLoadingTabela(false);
     }
-  }, [periodo, tipoOperacao, ncmFiltro, ncmsFiltro, empresaImportadora, empresaExportadora]);
+  }, [periodo, tipoOperacao, ncmFiltro, ncmsFiltro, empresaImportadora, empresaExportadora, meses]);
 
   useEffect(() => {
     if (stats) {
@@ -1551,7 +1506,10 @@ const Dashboard = () => {
         (stats.valor_total_importacoes ?? 0) === 0 && (stats.valor_total_exportacoes ?? 0) === 0 && (stats.valor_total_usd ?? 0) === 0 && (
           <Alert
             message="Nenhuma operação encontrada para os filtros aplicados."
-            description="Confira o período, o NCM (8 dígitos) e o nome da empresa. Se o banco ainda não tiver operações importadas, os totais ficarão zerados."
+            description={
+              'Confira o período, o NCM (8 dígitos) e o nome da empresa. Cards, gráficos e tabela desta página vêm exclusivamente do BigQuery (tabela empresas_ncm_import_export_uf). ' +
+              'Configure GOOGLE_APPLICATION_CREDENTIALS ou GOOGLE_APPLICATION_CREDENTIALS_JSON no backend e permissão de leitura na tabela.'
+            }
             type="info"
             showIcon
             style={{ marginBottom: '24px' }}

@@ -135,6 +135,34 @@ const retryWithBackoff = async (fn, maxRetries = 3, baseDelay = 1000) => {
   }
 };
 
+/** Parâmetros de filtro alinhados ao dashboard principal (BigQuery empresas_ncm_import_export_uf). */
+function buildComexDashboardBqQueryParams(paramsObj = {}) {
+  const params = paramsObj || {};
+  const urlParams = new URLSearchParams();
+  const mesesVal = Math.min(120, Math.max(1, parseInt(params.meses, 10) || 24));
+  urlParams.append('meses', String(mesesVal));
+  if (params.tipoOperacao && String(params.tipoOperacao).trim()) {
+    urlParams.append('tipo_operacao', String(params.tipoOperacao).trim());
+  }
+  if (params.ncm && String(params.ncm).trim()) urlParams.append('ncm', String(params.ncm).trim());
+  if (params.ncms && Array.isArray(params.ncms)) {
+    params.ncms.forEach((ncm) => {
+      if (ncm != null && String(ncm).trim()) urlParams.append('ncms', String(ncm).trim());
+    });
+  }
+  if (params.data_inicio && /^\d{4}-\d{2}-\d{2}$/.test(String(params.data_inicio))) {
+    urlParams.append('data_inicio', params.data_inicio);
+  }
+  if (params.data_fim && /^\d{4}-\d{2}-\d{2}$/.test(String(params.data_fim))) {
+    urlParams.append('data_fim', params.data_fim);
+  }
+  const empImp = params.empresa_importadora != null ? String(params.empresa_importadora).trim() : '';
+  const empExp = params.empresa_exportadora != null ? String(params.empresa_exportadora).trim() : '';
+  if (empImp) urlParams.append('empresa_importadora', empImp);
+  if (empExp) urlParams.append('empresa_exportadora', empExp);
+  return urlParams;
+}
+
 // Endpoints
 export const dashboardAPI = {
   getStats: async (paramsObj = {}) => {
@@ -343,12 +371,48 @@ export const dashboardLocalAPI = {
   buscar: (params = {}) => api.get('/api/dashboard/buscar', { params }),
 };
 
-/** Autocomplete de empresas a partir da tabela BigQuery empresas_ncm_import_export_uf */
+/** Dashboard principal + autocomplete a partir da tabela BigQuery empresas_ncm_import_export_uf */
 export const comexDashboardBqAPI = {
   autocompleteEmpresa: (q, tipo = '', limit = 25) =>
     api.get('/api/comex-dashboard/autocomplete/empresa', {
       params: { q: q || '', tipo: tipo || '', limit },
     }),
+  getDashboardStats: async (paramsObj = {}) => {
+    const urlParams = buildComexDashboardBqQueryParams(paramsObj);
+    const url = `/api/comex-dashboard/dashboard-stats?${urlParams.toString()}`;
+    return await retryWithBackoff(async () => {
+      const response = await api.get(url, {
+        timeout: 90000,
+        validateStatus: (status) => status < 500,
+      });
+      if (response.status >= 400) {
+        const detail = response.data?.detail;
+        const detailStr =
+          typeof detail === 'string'
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((d) => d?.msg || JSON.stringify(d)).join(', ')
+              : JSON.stringify(detail || response.data || response.statusText);
+        throw new Error(`Erro ${response.status}: ${detailStr}`);
+      }
+      if (!response || !response.data) {
+        throw new Error('Resposta vazia do servidor');
+      }
+      if (typeof response.data === 'string' && response.data.trim().startsWith('<!')) {
+        throw new Error('Servidor retornou HTML ao invés de JSON.');
+      }
+      return response;
+    }, 3, 1000);
+  },
+  getTabelaDetalhada: (paramsObj = {}) => {
+    const urlParams = buildComexDashboardBqQueryParams(paramsObj);
+    urlParams.append('page', String(Math.max(1, parseInt(paramsObj.page, 10) || 1)));
+    urlParams.append(
+      'page_size',
+      String(Math.min(100, Math.max(1, parseInt(paramsObj.page_size, 10) || 10)))
+    );
+    return api.get(`/api/comex-dashboard/tabela-detalhada?${urlParams.toString()}`, { timeout: 90000 });
+  },
 };
 
 export const coletaAPI = {
