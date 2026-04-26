@@ -640,22 +640,7 @@ const Dashboard = () => {
           errorMessage = `Erro ${err.response.status}: ${err.response.statusText}`;
         }
       } else if (err.request) {
-        // Erro de conexão - tentar usar cache se disponível
-        const cachedData = localStorage.getItem('dashboard_stats_cache');
-        if (cachedData) {
-          try {
-            const parsedCache = JSON.parse(cachedData);
-            console.log('📦 Backend offline, usando dados do cache');
-            setStats(parsedCache);
-            setError('⚠️ Backend temporariamente indisponível. Exibindo dados em cache. Tente novamente em alguns instantes.');
-            isLoadingRef.current = false;
-            setLoading(false);
-            return; // Sair sem mostrar erro crítico
-          } catch (e) {
-            console.warn('⚠️ Erro ao ler cache:', e);
-          }
-        }
-        
+        // Sem fallback em localStorage: o cache antigo era de /dashboard/stats (PostgreSQL) e misturava com o dashboard só BigQuery.
         const apiUrl = process.env.REACT_APP_API_URL || 'https://comex-backend-gecp.onrender.com';
         errorMessage = `Não foi possível conectar ao servidor em ${apiUrl}. O backend pode estar temporariamente indisponível ou em modo sleep. Tente novamente em alguns instantes.`;
       } else {
@@ -681,35 +666,13 @@ const Dashboard = () => {
           pesos_por_mes: {}
         });
       } else {
-        // 503 = serviço/banco temporariamente indisponível: manter dados atuais ou cache, só mostrar aviso
         if (err.response?.status === 503) {
           const detail = err.response?.data?.detail;
           setError(detail || 'Serviço temporariamente indisponível. Tente novamente em alguns segundos.');
-          if (!stats) {
-            const cachedData = localStorage.getItem('dashboard_stats_cache');
-            if (cachedData) {
-              try {
-                setStats(JSON.parse(cachedData));
-              } catch (e) { /* ignorar */ }
-            }
-          }
         } else {
-          // Outros erros: tentar cache antes de mostrar erro
-          const cachedData = localStorage.getItem('dashboard_stats_cache');
-          if (cachedData) {
-            try {
-              const parsedCache = JSON.parse(cachedData);
-              console.log('📦 Usando dados do cache devido a erro de conexão');
-              setStats(parsedCache);
-              setError('⚠️ Backend temporariamente indisponível. Exibindo dados em cache. Clique em "Tentar Novamente" para atualizar.');
-            } catch (e) {
-              setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
-            }
-          } else {
-            setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
-          }
+          setError(`Erro ao carregar dados do dashboard: ${errorMessage}`);
         }
-        
+
         console.error('❌ Erro completo:', err);
         console.error('❌ Detalhes:', {
           message: err.message,
@@ -719,18 +682,6 @@ const Dashboard = () => {
           code: err.code
         });
       }
-      
-      // Em caso de erro, manter dados anteriores se existirem (ou cache)
-      if (!stats) {
-        const cachedData = localStorage.getItem('dashboard_stats_cache');
-        if (cachedData) {
-          try {
-            setStats(JSON.parse(cachedData));
-          } catch (e) {
-            // Ignorar erro de parse
-          }
-        }
-      }
     } finally {
       setLoading(false);
       isLoadingRef.current = false;
@@ -739,6 +690,12 @@ const Dashboard = () => {
   }, []);
 
   useEffect(() => {
+    try {
+      localStorage.removeItem('dashboard_stats_cache');
+      localStorage.removeItem('dashboard_stats_cache_timestamp');
+    } catch (e) {
+      /* ignorar */
+    }
     loadDashboardData();
     // Carga inicial apenas; demais atualizações via botão Buscar / Limpar
   }, []);
