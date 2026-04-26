@@ -4,5 +4,9 @@ module.exports = {
   theme: {
     extend: {},
   },
+  // Evita conflito com Ant Design no dashboard principal (Preflight reseta estilos de componentes).
+  corePlugins: {
+    preflight: false,
+  },
   plugins: [],
 };

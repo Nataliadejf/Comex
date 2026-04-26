@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { Layout } from 'antd';
 import AppLayout from './components/Layout/AppLayout';
 import Dashboard from './pages/Dashboard';
+import DashboardComexBigQuery from './pages/DashboardComexBigQuery';
 import BuscaAvancada from './pages/BuscaAvancada';
 import AnaliseNCM from './pages/AnaliseNCM';
 import Login from './pages/Login';
@@ -32,6 +33,7 @@ function App() {
                   <Routes>
                     <Route path="/" element={<Dashboard />} />
                     <Route path="/dashboard" element={<Dashboard />} />
+                    <Route path="/dashboard-comex-bq" element={<DashboardComexBigQuery />} />
                     <Route path="/busca" element={<BuscaAvancada />} />
                     <Route path="/ncm/:ncm" element={<AnaliseNCM />} />
                   </Routes>

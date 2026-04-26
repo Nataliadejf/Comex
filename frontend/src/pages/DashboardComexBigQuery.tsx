@@ -26,7 +26,8 @@ const initialData: DashboardDataResponse = {
   pagination: { page: 1, page_size: 25, total: 0, total_pages: 1 },
 };
 
-const Dashboard: React.FC = () => {
+/** Dashboard focado na tabela BigQuery empresas_ncm_import_export_uf (rota separada). */
+const DashboardComexBigQuery: React.FC = () => {
   const [filters, setFilters] = useState<DashboardFilters>({
     page: 1,
     pageSize: 25,
@@ -119,7 +120,7 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-4 bg-slate-100 p-4">
-      <h1 className="text-2xl font-bold text-slate-900">Dashboard Comex</h1>
+      <h1 className="text-2xl font-bold text-slate-900">Dashboard Comex (BigQuery)</h1>
 
       <Filters
         empresa={String(draftFilters.empresa || "")}
@@ -170,4 +171,4 @@ const Dashboard: React.FC = () => {
   );
 };
 
-export default Dashboard;
+export default DashboardComexBigQuery;

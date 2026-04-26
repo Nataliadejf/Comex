@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Layout, Menu, Button, Space, Dropdown } from 'antd';
 import {
   DashboardOutlined,
+  LineChartOutlined,
   SearchOutlined,
   LogoutOutlined,
   UserOutlined,
@@ -41,6 +42,11 @@ const AppLayout = ({ children }) => {
       key: '/',
       icon: <DashboardOutlined />,
       label: 'Dashboard',
+    },
+    {
+      key: '/dashboard-comex-bq',
+      icon: <LineChartOutlined />,
+      label: 'Comex BigQuery',
     },
     {
       key: '/busca',
