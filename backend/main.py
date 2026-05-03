@@ -200,31 +200,52 @@ except ImportError as e:
     logger.warning(f"Router Comex Dashboard não disponível: {e}")
 
 
+def _env_truthy(name: str) -> bool:
+    v = (os.getenv(name) or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _alembic_upgrade_timeout_seconds() -> int:
+    """Timeout do subprocess alembic upgrade (30–900 s). Padrão 300 para Render/Postgres lentos."""
+    try:
+        n = int((os.getenv("ALEMBIC_UPGRADE_TIMEOUT_SECONDS") or "300").strip())
+    except ValueError:
+        n = 300
+    return max(30, min(900, n))
+
+
 # Inicializar banco de dados na startup
 @app.on_event("startup")
 async def startup_event():
     """Inicializa o banco de dados na startup."""
     try:
-        # Executar migrations do Alembic antes de inicializar
+        # Executar migrations do Alembic antes de inicializar (opcional; evita timeout em todo deploy)
         import subprocess
         import sys
-        logger.info("🔄 Executando migrations do Alembic...")
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "alembic", "upgrade", "head"],
-                cwd=Path(__file__).parent,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            if result.returncode == 0:
-                logger.info("✅ Migrations executadas com sucesso")
-            else:
-                logger.warning(f"⚠️ Migration retornou código {result.returncode}: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("⚠️ Migration timeout, continuando...")
-        except Exception as migration_error:
-            logger.warning(f"⚠️ Erro ao executar migrations: {migration_error}, continuando...")
+        if _env_truthy("SKIP_ALEMBIC_ON_STARTUP"):
+            logger.info("⏭️ Alembic ignorado na startup (SKIP_ALEMBIC_ON_STARTUP=1). Rode migrations manualmente se necessário.")
+        else:
+            timeout_sec = _alembic_upgrade_timeout_seconds()
+            logger.info(f"🔄 Executando migrations do Alembic (timeout {timeout_sec}s)...")
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "alembic", "upgrade", "head"],
+                    cwd=Path(__file__).parent,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                )
+                if result.returncode == 0:
+                    logger.info("✅ Migrations executadas com sucesso")
+                else:
+                    logger.warning(f"⚠️ Migration retornou código {result.returncode}: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    f"⚠️ Migration timeout ({timeout_sec}s). Aumente ALEMBIC_UPGRADE_TIMEOUT_SECONDS ou defina "
+                    "SKIP_ALEMBIC_ON_STARTUP=1 após migrar o banco. Continuando..."
+                )
+            except Exception as migration_error:
+                logger.warning(f"⚠️ Erro ao executar migrations: {migration_error}, continuando...")
         
         # Inicializar banco (cria tabelas se não existirem)
         init_db()
