@@ -15,19 +15,122 @@ from loguru import logger
 
 router = APIRouter(prefix="/api/comex-dashboard", tags=["comex-dashboard"])
 
-# Tabela padrão do escopo Comex (BigQuery). Sobrescreva com COMEX_BQ_TABLE_EMPRESAS_NCM se o projeto/dataset mudar.
+# Tabela única legada (grão CNPJ × NCM × UF). Use quando COMEX_BQ_RELATED_MODEL não estiver ativo.
 _DEFAULT_BQ_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.empresas_ncm_import_export_uf"
+
+# Modelo relacionado: fatos UF×NCM (import + export) × empresas (base + empresasimportexport), sem super-tabela física.
+_DEFAULT_IMPORT_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.importacao_uf_ncm"
+_DEFAULT_EXPORT_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.exportacao_uf_ncm"
+_DEFAULT_EMPRESAS_BASE_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.empresas_base"
+_DEFAULT_EMPRESAS_IMPEX_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport"
+
+
+def _strip_bt(s: str) -> str:
+    return (s or "").strip().strip("`")
+
+
+def _bt(ref: str) -> str:
+    r = _strip_bt(ref)
+    return f"`{r}`" if r else ""
 
 
 def _get_table_ref() -> str:
-    """Referência SQL BigQuery (com backticks) para empresas_ncm_import_export_uf."""
+    """Referência SQL BigQuery (com backticks) para empresas_ncm_import_export_uf (modo legado)."""
     raw = (os.getenv("COMEX_BQ_TABLE_EMPRESAS_NCM") or _DEFAULT_BQ_TABLE).strip().strip("`")
     if not raw:
         raw = _DEFAULT_BQ_TABLE
     return f"`{raw}`"
 
 
+def _use_related_model() -> bool:
+    """JOIN lógico import/export UF×NCM + empresas_base ⟷ empresasimportexport (mesmo UF)."""
+    v = (os.getenv("COMEX_BQ_RELATED_MODEL") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _table_env(key: str, default_full_id: str) -> str:
+    return _strip_bt(os.getenv(key) or default_full_id)
+
+
+def _empresas_impex_autocomplete_sql(where_name: str) -> str:
+    """Lista empresas com cadastro em empresasimportexport (sem cruzar fatos UF×NCM — autocomplete rápido)."""
+    t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
+    t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
+    return f"""
+    SELECT
+      b.cnpj,
+      b.razao_social,
+      CAST(0 AS FLOAT64) AS total_importacao_fob,
+      CAST(0 AS FLOAT64) AS total_exportacao_fob
+    FROM {t_base} AS b
+    INNER JOIN {t_ie} AS x
+      ON REGEXP_REPLACE(CAST(b.cnpj AS STRING), r'[^0-9]', '')
+       = REGEXP_REPLACE(CAST(x.cnpj AS STRING), r'[^0-9]', '')
+    WHERE {where_name}
+    """
+
+
+def _related_joined_select_sql() -> str:
+    """
+    Select com o mesmo grão esperado pelo dashboard: cnpj, razao_social, ano, mes, sigla_uf, id_ncm, totais FOB.
+    Volume do UF×NCM é repetido por empresa do mesmo UF (lista empresasimportexport ∩ empresas_base).
+    """
+    t_imp = _bt(_table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_TABLE))
+    t_exp = _bt(_table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_TABLE))
+    t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
+    t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
+    return f"""
+    SELECT
+      e.cnpj,
+      e.razao_social,
+      u.ano,
+      u.mes,
+      u.sigla_uf,
+      u.id_ncm,
+      u.total_importacao_fob,
+      u.total_exportacao_fob
+    FROM (
+      SELECT
+        COALESCE(i.ano, e.ano) AS ano,
+        COALESCE(i.mes, e.mes) AS mes,
+        COALESCE(i.sigla_uf, e.sigla_uf) AS sigla_uf,
+        CAST(COALESCE(i.id_ncm, e.id_ncm) AS STRING) AS id_ncm,
+        COALESCE(i.total_importacao_fob, 0) AS total_importacao_fob,
+        COALESCE(e.total_exportacao_fob, 0) AS total_exportacao_fob
+      FROM {t_imp} AS i
+      FULL OUTER JOIN {t_exp} AS e
+        ON i.ano = e.ano
+       AND i.mes = e.mes
+       AND i.sigla_uf = e.sigla_uf
+       AND CAST(i.id_ncm AS STRING) = CAST(e.id_ncm AS STRING)
+    ) AS u
+    INNER JOIN (
+      SELECT
+        b.cnpj,
+        b.razao_social,
+        b.sigla_uf
+      FROM {t_base} AS b
+      INNER JOIN {t_ie} AS x
+        ON REGEXP_REPLACE(CAST(b.cnpj AS STRING), r'[^0-9]', '')
+         = REGEXP_REPLACE(CAST(x.cnpj AS STRING), r'[^0-9]', '')
+    ) AS e
+      ON UPPER(TRIM(CAST(u.sigla_uf AS STRING))) = UPPER(TRIM(CAST(e.sigla_uf AS STRING)))
+    """
+
+
 def _fonte_dados() -> Dict[str, str]:
+    if _use_related_model():
+        imp = _table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_TABLE)
+        exp = _table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_TABLE)
+        base = _table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE)
+        ie = _table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE)
+        desc = f"{imp} + {exp} JOIN {base} + {ie} (UF)"
+        return {
+            "motor": "bigquery",
+            "tabela_id": desc,
+            "tabela_sql": desc,
+            "nome_logico": "related_uf_ncm_x_empresas_impex",
+        }
     ref = _get_table_ref()
     return {
         "motor": "bigquery",
@@ -125,7 +228,8 @@ def _raise_http_for_bigquery(exc: Exception, log_message: str) -> None:
             detail=(
                 "BigQuery recusou leitura (IAM). No Google Cloud, conceda à conta de serviço do backend "
                 "(campo client_email do JSON em GOOGLE_APPLICATION_CREDENTIALS_JSON no Render): "
-                "(1) BigQuery Data Viewer no dataset (ou na tabela) referenciada por COMEX_BQ_TABLE_EMPRESAS_NCM; "
+                "(1) BigQuery Data Viewer no dataset/tabelas usadas (COMEX_BQ_TABLE_EMPRESAS_NCM ou, em modo relacionado, "
+                "import/export UF×NCM + empresas_base + empresasimportexport); "
                 "(2) BigQuery Job User no projeto em que as consultas são executadas (o do próprio JSON costuma bastar). "
                 "Se a tabela estiver noutro projeto, defina COMEX_BQ_TABLE_EMPRESAS_NCM=projeto.dataset.tabela e "
                 "conceda as mesmas funções nesse projeto. Detalhe: "
@@ -465,8 +569,8 @@ def get_main_dashboard_stats_bq(
     empresa_exportadora: Optional[str] = Query(None),
 ):
     """
-    Estatísticas no formato do dashboard principal (cards e gráficos), exclusivamente da tabela
-    empresas_ncm_import_export_uf no BigQuery.
+    Estatísticas no formato do dashboard principal (cards e gráficos) via BigQuery:
+    tabela única `empresas_ncm_import_export_uf` ou modelo relacionado (env COMEX_BQ_RELATED_MODEL).
     """
     ym_start, ym_end = _parse_ym_bounds(data_inicio, data_fim, meses)
     try:
@@ -619,7 +723,6 @@ def autocomplete_empresa_ncm_uf(
     else:
         tipo_l = ""
 
-    tref = _get_table_ref()
     params: List[object] = [
         bigquery.ScalarQueryParameter("q_like", "STRING", f"%{q_strip}%"),
         bigquery.ScalarQueryParameter("limit_value", "INT64", limit),
@@ -629,12 +732,24 @@ def autocomplete_empresa_ncm_uf(
         "OR CAST(cnpj AS STRING) LIKE @q_like)"
     )
     # Sem HAVING: empresas só exportadoras/importadoras ainda aparecem na sugestão (ordenamos por relevância ao campo).
-    if tipo_l == "importacao":
+    if _use_related_model():
+        order_by = "ANY_VALUE(razao_social) ASC"
+    elif tipo_l == "importacao":
         order_by = "SUM(total_importacao_fob) DESC, SUM(total_exportacao_fob) DESC"
     elif tipo_l == "exportacao":
         order_by = "SUM(total_exportacao_fob) DESC, SUM(total_importacao_fob) DESC"
     else:
         order_by = "(SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC"
+
+    if _use_related_model():
+        from_sql = _empresas_impex_autocomplete_sql(where_name).strip()
+    else:
+        tref = _get_table_ref()
+        from_sql = f"""
+        SELECT cnpj, razao_social, total_importacao_fob, total_exportacao_fob
+        FROM {tref}
+        WHERE {where_name}
+        """
 
     sql = f"""
     SELECT
@@ -643,8 +758,7 @@ def autocomplete_empresa_ncm_uf(
       SUM(total_importacao_fob) AS total_importacao_fob,
       SUM(total_exportacao_fob) AS total_exportacao_fob,
       COUNT(*) AS total_operacoes
-    FROM {tref}
-    WHERE {where_name}
+    FROM ({from_sql.strip()})
     GROUP BY cnpj
     ORDER BY {order_by}
     LIMIT @limit_value
@@ -675,6 +789,11 @@ def autocomplete_empresa_ncm_uf(
 
 
 def _base_filtered_cte(where_clause: str) -> str:
+    if _use_related_model():
+        inner = _related_joined_select_sql().strip()
+        from_clause = f"({inner})"
+    else:
+        from_clause = _get_table_ref()
     return f"""
     WITH filtered AS (
       SELECT
@@ -686,7 +805,7 @@ def _base_filtered_cte(where_clause: str) -> str:
         id_ncm,
         COALESCE(total_importacao_fob, 0) AS total_importacao_fob,
         COALESCE(total_exportacao_fob, 0) AS total_exportacao_fob
-      FROM {_get_table_ref()}
+      FROM {from_clause} AS src
       WHERE {where_clause}
     )
     """
@@ -696,9 +815,14 @@ def _base_filtered_cte(where_clause: str) -> str:
 def get_filter_options():
     client = _get_bigquery_client()
     try:
-        tref = _get_table_ref()
-        years_query = f"SELECT DISTINCT ano FROM {tref} WHERE ano IS NOT NULL ORDER BY ano DESC"
-        uf_query = f"SELECT DISTINCT sigla_uf FROM {tref} WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf"
+        if _use_related_model():
+            t_imp = _bt(_table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_TABLE))
+            years_query = f"SELECT DISTINCT ano FROM {t_imp} WHERE ano IS NOT NULL ORDER BY ano DESC"
+            uf_query = f"SELECT DISTINCT sigla_uf FROM {t_imp} WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf"
+        else:
+            tref = _get_table_ref()
+            years_query = f"SELECT DISTINCT ano FROM {tref} WHERE ano IS NOT NULL ORDER BY ano DESC"
+            uf_query = f"SELECT DISTINCT sigla_uf FROM {tref} WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf"
         years = [row["ano"] for row in _run_query(client, years_query, [])]
         ufs = [row["sigla_uf"] for row in _run_query(client, uf_query, [])]
         return {
