@@ -43,9 +43,13 @@ def _get_table_ref() -> str:
 
 
 def _use_related_model() -> bool:
-    """JOIN lógico import/export UF×NCM + empresas_base ⟷ empresasimportexport (mesmo UF)."""
+    """
+    JOIN lógico import/export UF×NCM + empresas (opcional, mesmo UF).
+    Padrão: ativo (tabelas separadas). Defina COMEX_BQ_RELATED_MODEL=false para usar só
+    COMEX_BQ_TABLE_EMPRESAS_NCM (tabela única legada).
+    """
     v = (os.getenv("COMEX_BQ_RELATED_MODEL") or "").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    return v not in ("0", "false", "no", "off")
 
 
 def _table_env(key: str, default_full_id: str) -> str:
@@ -72,8 +76,10 @@ def _empresas_impex_autocomplete_sql(where_name: str) -> str:
 
 def _related_joined_select_sql() -> str:
     """
-    Select com o mesmo grão esperado pelo dashboard: cnpj, razao_social, ano, mes, sigla_uf, id_ncm, totais FOB.
-    Volume do UF×NCM é repetido por empresa do mesmo UF (lista empresasimportexport ∩ empresas_base).
+    Mesmo grão do dashboard: cnpj, razao_social, ano, mes, sigla_uf, id_ncm, totais FOB.
+    Fatos vêm de import/export UF×NCM. Empresas: LEFT JOIN (se não houver match, cnpj/razao NULL
+    mas totais UF×NCM seguem — evita dashboard zerado quando a tabela impex/base não cruza).
+    Há match: volume UF×NCM repetido por empresa do mesmo UF (impex ∩ base).
     """
     t_imp = _bt(_table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_TABLE))
     t_exp = _bt(_table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_TABLE))
@@ -104,7 +110,7 @@ def _related_joined_select_sql() -> str:
        AND i.sigla_uf = e.sigla_uf
        AND CAST(i.id_ncm AS STRING) = CAST(e.id_ncm AS STRING)
     ) AS u
-    INNER JOIN (
+    LEFT JOIN (
       SELECT
         b.cnpj,
         b.razao_social,
@@ -489,7 +495,7 @@ def _dashboard_stats_payload_from_bq(
       COALESCE(SUM(total_importacao_fob), 0) AS valor_total,
       COUNT(*) AS total_operacoes
     FROM filtered
-    WHERE total_importacao_fob > 0
+    WHERE total_importacao_fob > 0 AND cnpj IS NOT NULL
     GROUP BY cnpj
     ORDER BY valor_total DESC
     LIMIT 10
@@ -513,7 +519,7 @@ def _dashboard_stats_payload_from_bq(
       COALESCE(SUM(total_exportacao_fob), 0) AS valor_total,
       COUNT(*) AS total_operacoes
     FROM filtered
-    WHERE total_exportacao_fob > 0
+    WHERE total_exportacao_fob > 0 AND cnpj IS NOT NULL
     GROUP BY cnpj
     ORDER BY valor_total DESC
     LIMIT 10

@@ -52,6 +52,10 @@ services:
       - key: AUTO_IMPORT_EXCEL_FILENAME
         value: "H_EXPORTACAO_E IMPORTACAO_GERAL_2025-01_2025-12_DT20260107.xlsx"
 
+      # BigQuery: usar importacao_uf_ncm + exportacao_uf_ncm (e join opcional com empresas) em vez de tabela única vazia
+      - key: COMEX_BQ_RELATED_MODEL
+        value: "true"
+
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"
 # Veja DEPLOY_FRONTEND_RENDER.md para instruções detalhadas
