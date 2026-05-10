@@ -74,28 +74,11 @@ def _empresas_impex_autocomplete_sql(where_name: str) -> str:
     """
 
 
-def _related_joined_select_sql() -> str:
-    """
-    Mesmo grão do dashboard: cnpj, razao_social, ano, mes, sigla_uf, id_ncm, totais FOB.
-    Fatos vêm de import/export UF×NCM. Empresas: LEFT JOIN (se não houver match, cnpj/razao NULL
-    mas totais UF×NCM seguem — evita dashboard zerado quando a tabela impex/base não cruza).
-    Há match: volume UF×NCM repetido por empresa do mesmo UF (impex ∩ base).
-    """
+def _uf_ncm_fact_subquery_sql() -> str:
+    """Fato mensal UF × NCM (import + export), sem empresas."""
     t_imp = _bt(_table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_TABLE))
     t_exp = _bt(_table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_TABLE))
-    t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
-    t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
     return f"""
-    SELECT
-      e.cnpj,
-      e.razao_social,
-      u.ano,
-      u.mes,
-      u.sigla_uf,
-      u.id_ncm,
-      u.total_importacao_fob,
-      u.total_exportacao_fob
-    FROM (
       SELECT
         COALESCE(i.ano, e.ano) AS ano,
         COALESCE(i.mes, e.mes) AS mes,
@@ -109,19 +92,24 @@ def _related_joined_select_sql() -> str:
        AND i.mes = e.mes
        AND i.sigla_uf = e.sigla_uf
        AND CAST(i.id_ncm AS STRING) = CAST(e.id_ncm AS STRING)
-    ) AS u
-    LEFT JOIN (
+    """.strip()
+
+
+def _emp_impex_subquery_sql() -> str:
+    """Empresas com cadastro em comex (uma linha por CNPJ × UF)."""
+    t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
+    t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
+    return f"""
       SELECT
+        ANY_VALUE(b.razao_social) AS razao_social,
         b.cnpj,
-        b.razao_social,
         b.sigla_uf
       FROM {t_base} AS b
       INNER JOIN {t_ie} AS x
         ON REGEXP_REPLACE(CAST(b.cnpj AS STRING), r'[^0-9]', '')
          = REGEXP_REPLACE(CAST(x.cnpj AS STRING), r'[^0-9]', '')
-    ) AS e
-      ON UPPER(TRIM(CAST(u.sigla_uf AS STRING))) = UPPER(TRIM(CAST(e.sigla_uf AS STRING)))
-    """
+      GROUP BY b.cnpj, b.sigla_uf
+    """.strip()
 
 
 def _fonte_dados() -> Dict[str, str]:
@@ -310,8 +298,11 @@ def _build_main_dashboard_where(
     ncms: Optional[List[str]],
     empresa_importadora: Optional[str],
     empresa_exportadora: Optional[str],
+    *,
+    imp_col: str = "total_importacao_fob",
+    exp_col: str = "total_exportacao_fob",
 ) -> Tuple[str, List[object]]:
-    """Filtros sobre a tabela empresas_ncm_import_export_uf (mesmo escopo do dashboard principal)."""
+    """Filtros do dashboard principal. Em modo relacionado use imp_col=u_imp e exp_col=u_exp (antes da alocação por empresa)."""
     from google.cloud import bigquery
 
     conditions: List[str] = [
@@ -326,9 +317,9 @@ def _build_main_dashboard_where(
 
     top = (tipo_operacao or "").strip().lower()
     if "import" in top:
-        conditions.append("total_importacao_fob > 0")
+        conditions.append(f"{imp_col} > 0")
     elif "export" in top:
-        conditions.append("total_exportacao_fob > 0")
+        conditions.append(f"{exp_col} > 0")
 
     ncm_list = _sanitize_ncm_digits_list(ncm, ncms)
     if ncm_list:
@@ -370,6 +361,7 @@ def _dashboard_stats_payload_from_bq(
     empresa_importadora: Optional[str],
     empresa_exportadora: Optional[str],
 ) -> Dict:
+    rel = _use_related_model()
     where_clause, params = _build_main_dashboard_where(
         ym_start,
         ym_end,
@@ -378,6 +370,8 @@ def _dashboard_stats_payload_from_bq(
         ncms,
         empresa_importadora,
         empresa_exportadora,
+        imp_col="u_imp" if rel else "total_importacao_fob",
+        exp_col="u_exp" if rel else "total_exportacao_fob",
     )
     cte = _base_filtered_cte(where_clause)
     top_l = (tipo_operacao or "").strip().lower()
@@ -649,6 +643,7 @@ def get_tabela_detalhada_bq(
 ):
     """Linhas detalhadas para a tabela do dashboard principal (formato legado), só BigQuery."""
     ym_start, ym_end = _parse_ym_bounds(data_inicio, data_fim, meses)
+    rel = _use_related_model()
     where_clause, params = _build_main_dashboard_where(
         ym_start,
         ym_end,
@@ -657,6 +652,8 @@ def get_tabela_detalhada_bq(
         ncms,
         empresa_importadora,
         empresa_exportadora,
+        imp_col="u_imp" if rel else "total_importacao_fob",
+        exp_col="u_exp" if rel else "total_exportacao_fob",
     )
     cte = _base_filtered_cte(where_clause)
     offset = (page - 1) * page_size
@@ -795,11 +792,45 @@ def autocomplete_empresa_ncm_uf(
 
 
 def _base_filtered_cte(where_clause: str) -> str:
+    """
+    Modo relacionado: cada linha fato UF×NCM×mês é repetida por empresa do UF.
+    Divide-se FOB pelo número de linhas no grupo (ano, mês, UF, NCM) para que
+    SUM(totais) coincida com as tabelas mensais importacao_uf_ncm / exportacao_uf_ncm.
+    """
     if _use_related_model():
-        inner = _related_joined_select_sql().strip()
-        from_clause = f"({inner})"
-    else:
-        from_clause = _get_table_ref()
+        u_sql = _uf_ncm_fact_subquery_sql()
+        e_sql = _emp_impex_subquery_sql()
+        return f"""
+    WITH joined_raw AS (
+      SELECT
+        u.ano,
+        u.mes,
+        u.sigla_uf,
+        u.id_ncm,
+        u.total_importacao_fob AS u_imp,
+        u.total_exportacao_fob AS u_exp,
+        e.cnpj,
+        e.razao_social,
+        COUNT(*) OVER (PARTITION BY u.ano, u.mes, u.sigla_uf, u.id_ncm) AS _k
+      FROM ({u_sql}) AS u
+      LEFT JOIN ({e_sql}) AS e
+        ON UPPER(TRIM(CAST(u.sigla_uf AS STRING))) = UPPER(TRIM(CAST(e.sigla_uf AS STRING)))
+    ),
+    filtered AS (
+      SELECT
+        cnpj,
+        razao_social,
+        ano,
+        mes,
+        sigla_uf,
+        id_ncm,
+        COALESCE(u_imp, 0) / NULLIF(_k, 0) AS total_importacao_fob,
+        COALESCE(u_exp, 0) / NULLIF(_k, 0) AS total_exportacao_fob
+      FROM joined_raw
+      WHERE {where_clause}
+    )
+    """
+    from_clause = _get_table_ref()
     return f"""
     WITH filtered AS (
       SELECT
