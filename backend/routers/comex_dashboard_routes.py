@@ -6,7 +6,6 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
@@ -97,20 +96,18 @@ def _uf_ncm_fact_subquery_sql() -> str:
     """.strip()
 
 
-def _emp_impex_subquery_sql() -> str:
-    """Empresas com cadastro em comex (uma linha por CNPJ × UF)."""
+def _sql_ufs_from_empresa_like(param_name: str) -> str:
+    """Subconsulta: UFs onde existe empresa (base∩impex) batendo com LIKE em razão social ou CNPJ."""
     t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
     t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
     return f"""
-      SELECT
-        ANY_VALUE(b.razao_social) AS razao_social,
-        b.cnpj,
-        b.sigla_uf
+      SELECT DISTINCT UPPER(TRIM(CAST(b.sigla_uf AS STRING))) AS uf
       FROM {t_base} AS b
       INNER JOIN {t_ie} AS x
         ON REGEXP_REPLACE(CAST(b.cnpj AS STRING), r'[^0-9]', '')
          = REGEXP_REPLACE(CAST(x.cnpj AS STRING), r'[^0-9]', '')
-      GROUP BY b.cnpj, b.sigla_uf
+      WHERE LOWER(CAST(b.razao_social AS STRING)) LIKE LOWER({param_name})
+         OR CAST(b.cnpj AS STRING) LIKE {param_name}
     """.strip()
 
 
@@ -202,6 +199,42 @@ def _build_filters(
     return " AND ".join(conditions), params
 
 
+def _build_fact_filters_comex_data(
+    empresa: Optional[str],
+    ano: Optional[int],
+    mes: Optional[int],
+    uf: Optional[str],
+    ncm: Optional[str],
+) -> Tuple[str, List[object]]:
+    """WHERE sobre fato UF×NCM (sem coluna cnpj). Filtro `empresa` vira UF via base+impex."""
+    from google.cloud import bigquery
+
+    conditions: List[str] = ["ano IS NOT NULL AND mes IS NOT NULL"]
+    params: List[object] = []
+    if ano is not None:
+        conditions.append("ano = @fd_ano")
+        params.append(bigquery.ScalarQueryParameter("fd_ano", "INT64", int(ano)))
+    if mes is not None:
+        conditions.append("mes = @fd_mes")
+        params.append(bigquery.ScalarQueryParameter("fd_mes", "INT64", int(mes)))
+    if uf:
+        conditions.append("UPPER(TRIM(CAST(sigla_uf AS STRING))) = UPPER(TRIM(@fd_uf))")
+        params.append(bigquery.ScalarQueryParameter("fd_uf", "STRING", uf.strip()))
+    if ncm:
+        conditions.append("CAST(id_ncm AS STRING) LIKE @fd_ncm")
+        params.append(bigquery.ScalarQueryParameter("fd_ncm", "STRING", f"%{ncm.strip()}%"))
+    ei = (empresa or "").strip()
+    if ei:
+        like = f"%{ei}%"
+        conditions.append(
+            "UPPER(TRIM(CAST(sigla_uf AS STRING))) IN ("
+            + _sql_ufs_from_empresa_like("@fd_emp_like")
+            + ")"
+        )
+        params.append(bigquery.ScalarQueryParameter("fd_emp_like", "STRING", like))
+    return " AND ".join(conditions), params
+
+
 def _run_query(client, query: str, params: List[object]) -> List[dict]:
     from google.cloud import bigquery
 
@@ -214,6 +247,16 @@ def _raise_http_for_bigquery(exc: Exception, log_message: str) -> None:
     logger.exception(log_message)
     msg = str(exc)
     low = msg.lower()
+    if "exceeded resource limits" in low or "cpu seconds" in low:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "BigQuery limitou CPU nesta consulta (volume de junção/agregação alto). "
+                "Reduza o período, use filtros de UF/NCM ou particione/clusterize as tabelas de fato. "
+                "Detalhe: "
+                + msg[:1200]
+            ),
+        )
     if (
         "access denied" in low
         or "does not have permission" in low
@@ -303,8 +346,9 @@ def _build_main_dashboard_where(
     *,
     imp_col: str = "total_importacao_fob",
     exp_col: str = "total_exportacao_fob",
+    empresa_filter_as_uf_subquery: bool = False,
 ) -> Tuple[str, List[object]]:
-    """Filtros do dashboard principal. Em modo relacionado use imp_col=u_imp e exp_col=u_exp (antes da alocação por empresa)."""
+    """Filtros do dashboard. Com empresa_filter_as_uf_subquery=True, filtro de empresa vira UF IN (subconsulta na base impex)."""
     from google.cloud import bigquery
 
     conditions: List[str] = [
@@ -331,23 +375,37 @@ def _build_main_dashboard_where(
     ei = (empresa_importadora or "").strip()
     if ei:
         like = f"%{ei}%"
-        conditions.append(
-            "("
-            "LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like_imp) "
-            "OR CAST(cnpj AS STRING) LIKE @like_imp"
-            ")"
-        )
+        if empresa_filter_as_uf_subquery:
+            conditions.append(
+                "UPPER(TRIM(CAST(sigla_uf AS STRING))) IN ("
+                + _sql_ufs_from_empresa_like("@like_imp")
+                + ")"
+            )
+        else:
+            conditions.append(
+                "("
+                "LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like_imp) "
+                "OR CAST(cnpj AS STRING) LIKE @like_imp"
+                ")"
+            )
         params.append(bigquery.ScalarQueryParameter("like_imp", "STRING", like))
 
     ee = (empresa_exportadora or "").strip()
     if ee:
         like_e = f"%{ee}%"
-        conditions.append(
-            "("
-            "LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like_exp) "
-            "OR CAST(cnpj AS STRING) LIKE @like_exp"
-            ")"
-        )
+        if empresa_filter_as_uf_subquery:
+            conditions.append(
+                "UPPER(TRIM(CAST(sigla_uf AS STRING))) IN ("
+                + _sql_ufs_from_empresa_like("@like_exp")
+                + ")"
+            )
+        else:
+            conditions.append(
+                "("
+                "LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like_exp) "
+                "OR CAST(cnpj AS STRING) LIKE @like_exp"
+                ")"
+            )
         params.append(bigquery.ScalarQueryParameter("like_exp", "STRING", like_e))
 
     return " AND ".join(conditions), params
@@ -372,8 +430,9 @@ def _dashboard_stats_payload_from_bq(
         ncms,
         empresa_importadora,
         empresa_exportadora,
-        imp_col="u_imp" if rel else "total_importacao_fob",
-        exp_col="u_exp" if rel else "total_exportacao_fob",
+        imp_col="total_importacao_fob",
+        exp_col="total_exportacao_fob",
+        empresa_filter_as_uf_subquery=rel,
     )
     cte = _base_filtered_cte(where_clause)
     top_l = (tipo_operacao or "").strip().lower()
@@ -454,21 +513,27 @@ def _dashboard_stats_payload_from_bq(
     LIMIT 10
     """
 
-    _jobs = [
+    rel_stats = _use_related_model()
+    _jobs: List[Tuple[str, str]] = [
         ("kpi", kpi_sql),
         ("monthly", monthly_sql),
         ("ncm", ncm_sql),
         ("uf", uf_sql),
-        ("imp_top", imp_top_sql),
-        ("exp_top", exp_top_sql),
     ]
+    if not rel_stats:
+        _jobs.extend(
+            [
+                ("imp_top", imp_top_sql),
+                ("exp_top", exp_top_sql),
+            ]
+        )
 
     def _run_job(name_sql: Tuple[str, str]) -> Tuple[str, List[dict]]:
         name, sql = name_sql
         return name, _run_query(client, sql, params)
 
     _agg: Dict[str, List[dict]] = {}
-    with ThreadPoolExecutor(max_workers=6) as _pool:
+    with ThreadPoolExecutor(max_workers=len(_jobs)) as _pool:
         _futures = [_pool.submit(_run_job, job) for job in _jobs]
         for _fu in as_completed(_futures):
             _name, _rows = _fu.result()
@@ -478,8 +543,8 @@ def _dashboard_stats_payload_from_bq(
     monthly = _agg.get("monthly", [])
     ncm_rows = _agg.get("ncm", [])
     uf_rows = _agg.get("uf", [])
-    imp_rows = _agg.get("imp_top", [])
-    exp_rows = _agg.get("exp_top", [])
+    imp_rows = [] if rel_stats else _agg.get("imp_top", [])
+    exp_rows = [] if rel_stats else _agg.get("exp_top", [])
 
     row0 = kpi[0] if kpi else {}
     v_imp = float(row0.get("v_imp") or 0)
@@ -580,7 +645,11 @@ def _dashboard_stats_payload_from_bq(
         "registros_por_mes": registros_por_mes,
         "valores_por_mes": valores_por_mes,
         "pesos_por_mes": pesos_por_mes,
-        "aviso_dados_sem_empresa": None,
+        "aviso_dados_sem_empresa": (
+            "Totais por UF×NCM (oficiais). Ranking por CNPJ não é calculado neste modo para evitar consultas muito pesadas no BigQuery."
+            if rel_stats
+            else None
+        ),
         "fonte_dados": _fonte_dados(),
     }
 
@@ -640,7 +709,7 @@ def _map_row_to_operacao_detalhe(row: dict, idx: int) -> dict:
     else:
         tipo = "Importação"
 
-    rid = f"{cnpj}-{ncm_s}-{ano}-{mes}-{uf}-{idx}"
+    rid = f"{cnpj or 'agg'}-{ncm_s}-{ano}-{mes}-{uf}-{idx}"
     return {
         "id": rid,
         "ncm": ncm_s,
@@ -680,8 +749,9 @@ def get_tabela_detalhada_bq(
         ncms,
         empresa_importadora,
         empresa_exportadora,
-        imp_col="u_imp" if rel else "total_importacao_fob",
-        exp_col="u_exp" if rel else "total_exportacao_fob",
+        imp_col="total_importacao_fob",
+        exp_col="total_exportacao_fob",
+        empresa_filter_as_uf_subquery=rel,
     )
     cte = _base_filtered_cte(where_clause)
     offset = (page - 1) * page_size
@@ -698,7 +768,23 @@ def get_tabela_detalhada_bq(
         total_rows = _run_query(client, total_sql, params)
         total = int(total_rows[0]["total_rows"]) if total_rows else 0
 
-        data_sql = cte + """
+        if rel:
+            data_sql = cte + """
+        SELECT
+          CAST(NULL AS STRING) AS cnpj,
+          CAST(NULL AS STRING) AS razao_social,
+          sigla_uf,
+          id_ncm,
+          ano,
+          mes,
+          total_importacao_fob,
+          total_exportacao_fob
+        FROM filtered
+        ORDER BY ano DESC, mes DESC, total_importacao_fob + total_exportacao_fob DESC
+        LIMIT @limit_value OFFSET @offset_value
+        """
+        else:
+            data_sql = cte + """
         SELECT
           cnpj,
           razao_social,
@@ -819,45 +905,31 @@ def autocomplete_empresa_ncm_uf(
         _raise_http_for_bigquery(exc, "Erro no autocomplete empresa (BigQuery)")
 
 
-def _base_filtered_cte(where_clause: str) -> str:
-    """
-    Modo relacionado: cada linha fato UF×NCM×mês é repetida por empresa do UF.
-    Divide-se FOB pelo número de linhas no grupo (ano, mês, UF, NCM) para que
-    SUM(totais) coincida com as tabelas mensais importacao_uf_ncm / exportacao_uf_ncm.
-    """
-    if _use_related_model():
-        u_sql = _uf_ncm_fact_subquery_sql()
-        e_sql = _emp_impex_subquery_sql()
-        return f"""
-    WITH joined_raw AS (
+def _base_facts_filtered_cte(where_clause: str) -> str:
+    """Apenas fato mensal UF × NCM (import + export), sem JOIN com empresas — baixo custo de CPU."""
+    u_sql = _uf_ncm_fact_subquery_sql()
+    return f"""
+    WITH filtered AS (
       SELECT
-        u.ano,
-        u.mes,
-        u.sigla_uf,
-        u.id_ncm,
-        u.total_importacao_fob AS u_imp,
-        u.total_exportacao_fob AS u_exp,
-        e.cnpj,
-        e.razao_social,
-        COUNT(*) OVER (PARTITION BY u.ano, u.mes, u.sigla_uf, u.id_ncm) AS _k
-      FROM ({u_sql}) AS u
-      LEFT JOIN ({e_sql}) AS e
-        ON UPPER(TRIM(CAST(u.sigla_uf AS STRING))) = UPPER(TRIM(CAST(e.sigla_uf AS STRING)))
-    ),
-    filtered AS (
-      SELECT
-        cnpj,
-        razao_social,
         ano,
         mes,
         sigla_uf,
         id_ncm,
-        COALESCE(u_imp, 0) / NULLIF(_k, 0) AS total_importacao_fob,
-        COALESCE(u_exp, 0) / NULLIF(_k, 0) AS total_exportacao_fob
-      FROM joined_raw
+        COALESCE(total_importacao_fob, 0) AS total_importacao_fob,
+        COALESCE(total_exportacao_fob, 0) AS total_exportacao_fob
+      FROM ({u_sql}) AS u
       WHERE {where_clause}
     )
     """
+
+
+def _base_filtered_cte(where_clause: str) -> str:
+    """
+    Modo relacionado: mesmo escopo que _base_facts_filtered_cte (sem explosão de linhas).
+    Modo legado: lê tabela única empresas_ncm_import_export_uf.
+    """
+    if _use_related_model():
+        return _base_facts_filtered_cte(where_clause)
     from_clause = _get_table_ref()
     return f"""
     WITH filtered AS (
@@ -915,7 +987,11 @@ def get_dashboard_data(
     sort_order: str = Query(default="desc"),
 ):
     client = _get_bigquery_client()
-    where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
+    rel_data = _use_related_model()
+    if rel_data:
+        where_clause, params = _build_fact_filters_comex_data(empresa, ano, mes, uf, ncm)
+    else:
+        where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
     cte = _base_filtered_cte(where_clause)
 
     direction = "DESC" if sort_order.lower() == "desc" else "ASC"
@@ -931,7 +1007,17 @@ def get_dashboard_data(
     ]
 
     try:
-        kpi_query = cte + """
+        if rel_data:
+            kpi_query = cte + """
+        SELECT
+          COALESCE(SUM(total_importacao_fob), 0) AS total_importado,
+          COALESCE(SUM(total_exportacao_fob), 0) AS total_exportado,
+          COALESCE(SUM(total_exportacao_fob - total_importacao_fob), 0) AS saldo_comercial,
+          CAST(0 AS INT64) AS empresas_unicas
+        FROM filtered
+        """
+        else:
+            kpi_query = cte + """
         SELECT
           COALESCE(SUM(total_importacao_fob), 0) AS total_importado,
           COALESCE(SUM(total_exportacao_fob), 0) AS total_exportado,
@@ -959,7 +1045,11 @@ def get_dashboard_data(
         """
         timeline = _run_query(client, timeline_query, params)
 
-        top_import_query = cte + """
+        if rel_data:
+            top_import = []
+            top_export = []
+        else:
+            top_import_query = cte + """
         SELECT
           cnpj,
           razao_social,
@@ -969,9 +1059,9 @@ def get_dashboard_data(
         ORDER BY total_importacao_fob DESC
         LIMIT 10
         """
-        top_import = _run_query(client, top_import_query, params)
+            top_import = _run_query(client, top_import_query, params)
 
-        top_export_query = cte + """
+            top_export_query = cte + """
         SELECT
           cnpj,
           razao_social,
@@ -981,7 +1071,7 @@ def get_dashboard_data(
         ORDER BY total_exportacao_fob DESC
         LIMIT 10
         """
-        top_export = _run_query(client, top_export_query, params)
+            top_export = _run_query(client, top_export_query, params)
 
         heatmap_query = cte + """
         SELECT
@@ -998,7 +1088,24 @@ def get_dashboard_data(
         total_rows = _run_query(client, total_query, params)
         total = int(total_rows[0]["total_rows"]) if total_rows else 0
 
-        table_query = cte + f"""
+        if rel_data:
+            table_query = cte + f"""
+        SELECT
+          CAST(NULL AS STRING) AS cnpj,
+          CAST(NULL AS STRING) AS razao_social,
+          sigla_uf,
+          id_ncm,
+          ano,
+          mes,
+          total_importacao_fob,
+          total_exportacao_fob,
+          (total_exportacao_fob - total_importacao_fob) AS saldo
+        FROM filtered
+        ORDER BY {safe_sort_col} {direction}
+        LIMIT @limit_value OFFSET @offset_value
+        """
+        else:
+            table_query = cte + f"""
         SELECT
           cnpj,
           razao_social,
@@ -1045,12 +1152,33 @@ def export_csv(
     ncm: Optional[str] = Query(default=None),
 ):
     client = _get_bigquery_client()
-    where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
+    rel_csv = _use_related_model()
+    if rel_csv:
+        where_clause, params = _build_fact_filters_comex_data(empresa, ano, mes, uf, ncm)
+    else:
+        where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
     cte = _base_filtered_cte(where_clause)
     from google.cloud import bigquery
 
     params_with_limit = [*params, bigquery.ScalarQueryParameter("limit_value", "INT64", 50000)]
-    query = cte + """
+    if rel_csv:
+        query = cte + """
+    SELECT
+      CAST(NULL AS STRING) AS cnpj,
+      CAST(NULL AS STRING) AS razao_social,
+      sigla_uf,
+      id_ncm,
+      ano,
+      mes,
+      total_importacao_fob,
+      total_exportacao_fob,
+      (total_exportacao_fob - total_importacao_fob) AS saldo
+    FROM filtered
+    ORDER BY ano DESC, mes DESC, sigla_uf, id_ncm
+    LIMIT @limit_value
+    """
+    else:
+        query = cte + """
     SELECT
       cnpj,
       razao_social,
