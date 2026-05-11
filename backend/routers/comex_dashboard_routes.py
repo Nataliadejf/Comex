@@ -5,6 +5,8 @@ import io
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
@@ -393,14 +395,6 @@ def _dashboard_stats_payload_from_bq(
       COUNT(*) AS cnt_all
     FROM filtered
     """
-    kpi = _run_query(client, kpi_sql, params)
-    row0 = kpi[0] if kpi else {}
-    v_imp = float(row0.get("v_imp") or 0)
-    v_exp = float(row0.get("v_exp") or 0)
-    cnt_imp = int(row0.get("cnt_imp_rows") or 0)
-    cnt_exp = int(row0.get("cnt_exp_rows") or 0)
-    cnt_all = int(row0.get("cnt_all") or 0)
-
     monthly_sql = cte + """
     SELECT
       FORMAT('%04d-%02d', ano, mes) AS ym,
@@ -410,17 +404,6 @@ def _dashboard_stats_payload_from_bq(
     GROUP BY ano, mes
     ORDER BY ano, mes
     """
-    monthly = _run_query(client, monthly_sql, params)
-    registros_por_mes: Dict[str, int] = {}
-    valores_por_mes: Dict[str, float] = {}
-    pesos_por_mes: Dict[str, float] = {}
-    for r in monthly:
-        ym = str(r.get("ym") or "")
-        if not ym:
-            continue
-        registros_por_mes[ym] = int(r.get("registros") or 0)
-        valores_por_mes[ym] = float(r.get("valor_mes") or 0)
-        pesos_por_mes[ym] = 0.0
 
     ncm_sql = cte + f"""
     SELECT
@@ -432,7 +415,90 @@ def _dashboard_stats_payload_from_bq(
     ORDER BY {ncm_order_metric} DESC
     LIMIT 15
     """
-    ncm_rows = _run_query(client, ncm_sql, params)
+
+    uf_sql = cte + """
+    SELECT
+      sigla_uf AS uf_key,
+      COALESCE(SUM(total_importacao_fob + total_exportacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE sigla_uf IS NOT NULL AND CAST(sigla_uf AS STRING) != ''
+    GROUP BY sigla_uf
+    ORDER BY valor_total DESC
+    LIMIT 20
+    """
+
+    imp_top_sql = cte + """
+    SELECT
+      ANY_VALUE(razao_social) AS nome,
+      cnpj,
+      COALESCE(SUM(total_importacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE total_importacao_fob > 0 AND cnpj IS NOT NULL
+    GROUP BY cnpj
+    ORDER BY valor_total DESC
+    LIMIT 10
+    """
+
+    exp_top_sql = cte + """
+    SELECT
+      ANY_VALUE(razao_social) AS nome,
+      cnpj,
+      COALESCE(SUM(total_exportacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE total_exportacao_fob > 0 AND cnpj IS NOT NULL
+    GROUP BY cnpj
+    ORDER BY valor_total DESC
+    LIMIT 10
+    """
+
+    _jobs = [
+        ("kpi", kpi_sql),
+        ("monthly", monthly_sql),
+        ("ncm", ncm_sql),
+        ("uf", uf_sql),
+        ("imp_top", imp_top_sql),
+        ("exp_top", exp_top_sql),
+    ]
+
+    def _run_job(name_sql: Tuple[str, str]) -> Tuple[str, List[dict]]:
+        name, sql = name_sql
+        return name, _run_query(client, sql, params)
+
+    _agg: Dict[str, List[dict]] = {}
+    with ThreadPoolExecutor(max_workers=6) as _pool:
+        _futures = [_pool.submit(_run_job, job) for job in _jobs]
+        for _fu in as_completed(_futures):
+            _name, _rows = _fu.result()
+            _agg[_name] = _rows
+
+    kpi = _agg.get("kpi", [])
+    monthly = _agg.get("monthly", [])
+    ncm_rows = _agg.get("ncm", [])
+    uf_rows = _agg.get("uf", [])
+    imp_rows = _agg.get("imp_top", [])
+    exp_rows = _agg.get("exp_top", [])
+
+    row0 = kpi[0] if kpi else {}
+    v_imp = float(row0.get("v_imp") or 0)
+    v_exp = float(row0.get("v_exp") or 0)
+    cnt_imp = int(row0.get("cnt_imp_rows") or 0)
+    cnt_exp = int(row0.get("cnt_exp_rows") or 0)
+    cnt_all = int(row0.get("cnt_all") or 0)
+
+    registros_por_mes: Dict[str, int] = {}
+    valores_por_mes: Dict[str, float] = {}
+    pesos_por_mes: Dict[str, float] = {}
+    for r in monthly:
+        ym = str(r.get("ym") or "")
+        if not ym:
+            continue
+        registros_por_mes[ym] = int(r.get("registros") or 0)
+        valores_por_mes[ym] = float(r.get("valor_mes") or 0)
+        pesos_por_mes[ym] = 0.0
+
     principais_ncms: List[dict] = []
     for r in ncm_rows:
         ncm_s = str(r.get("ncm") or "").strip()
@@ -457,18 +523,6 @@ def _dashboard_stats_payload_from_bq(
             }
         )
 
-    uf_sql = cte + """
-    SELECT
-      sigla_uf AS uf_key,
-      COALESCE(SUM(total_importacao_fob + total_exportacao_fob), 0) AS valor_total,
-      COUNT(*) AS total_operacoes
-    FROM filtered
-    WHERE sigla_uf IS NOT NULL AND CAST(sigla_uf AS STRING) != ''
-    GROUP BY sigla_uf
-    ORDER BY valor_total DESC
-    LIMIT 20
-    """
-    uf_rows = _run_query(client, uf_sql, params)
     principais_paises: List[dict] = []
     for r in uf_rows:
         uf_k = str(r.get("uf_key") or "").strip()
@@ -482,19 +536,6 @@ def _dashboard_stats_payload_from_bq(
             }
         )
 
-    imp_top_sql = cte + """
-    SELECT
-      ANY_VALUE(razao_social) AS nome,
-      cnpj,
-      COALESCE(SUM(total_importacao_fob), 0) AS valor_total,
-      COUNT(*) AS total_operacoes
-    FROM filtered
-    WHERE total_importacao_fob > 0 AND cnpj IS NOT NULL
-    GROUP BY cnpj
-    ORDER BY valor_total DESC
-    LIMIT 10
-    """
-    imp_rows = _run_query(client, imp_top_sql, params)
     principais_importadores = [
         {
             "nome": str(r.get("nome") or "N/A").strip() or "N/A",
@@ -506,19 +547,6 @@ def _dashboard_stats_payload_from_bq(
         if r.get("cnpj") is not None
     ]
 
-    exp_top_sql = cte + """
-    SELECT
-      ANY_VALUE(razao_social) AS nome,
-      cnpj,
-      COALESCE(SUM(total_exportacao_fob), 0) AS valor_total,
-      COUNT(*) AS total_operacoes
-    FROM filtered
-    WHERE total_exportacao_fob > 0 AND cnpj IS NOT NULL
-    GROUP BY cnpj
-    ORDER BY valor_total DESC
-    LIMIT 10
-    """
-    exp_rows = _run_query(client, exp_top_sql, params)
     principais_exportadores = [
         {
             "nome": str(r.get("nome") or "N/A").strip() or "N/A",

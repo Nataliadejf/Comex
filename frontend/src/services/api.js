@@ -4,7 +4,7 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://comex-backend-gec
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 60000, // 60 segundos (aumentado de 30s)
+  timeout: 120000, // 2 min — Render cold start + BigQuery podem exceder 60s
   headers: {
     'Content-Type': 'application/json',
   },
@@ -98,9 +98,9 @@ export const sinergiasAPI = {
 export default api;
 
 // Função auxiliar para verificar se backend está acessível
-const checkBackendHealth = async () => {
+const checkBackendHealth = async (timeoutMs = 15000) => {
   try {
-    const healthResponse = await api.get('/health', { timeout: 5000 });
+    const healthResponse = await api.get('/health', { timeout: timeoutMs });
     return healthResponse.data?.status === 'healthy' || healthResponse.status === 200;
   } catch (error) {
     console.warn('⚠️ Backend health check falhou:', error.message);
@@ -115,13 +115,16 @@ const retryWithBackoff = async (fn, maxRetries = 3, baseDelay = 1000) => {
       return await fn();
     } catch (error) {
       // Se não for erro de conexão ou timeout, não fazer retry
-      const isConnectionError = 
-        error.code === 'ERR_NETWORK' || 
+      const msg = String(error.message || '').toLowerCase();
+      const isConnectionError =
+        error.code === 'ERR_NETWORK' ||
         error.code === 'ECONNREFUSED' ||
         error.code === 'ETIMEDOUT' ||
-        error.message?.includes('Network Error') ||
-        error.message?.includes('timeout') ||
-        error.message?.includes('Não foi possível conectar');
+        error.code === 'ECONNABORTED' || // timeout do axios no browser
+        msg.includes('network error') ||
+        msg.includes('timeout') ||
+        msg.includes('aborted') ||
+        msg.includes('não foi possível conectar');
       
       if (!isConnectionError || attempt === maxRetries) {
         throw error;
@@ -381,8 +384,10 @@ export const comexDashboardBqAPI = {
     const urlParams = buildComexDashboardBqQueryParams(paramsObj);
     const url = `/api/comex-dashboard/dashboard-stats?${urlParams.toString()}`;
     return await retryWithBackoff(async () => {
+      // Acorda instância free do Render antes da query pesada do BigQuery
+      await checkBackendHealth(120000);
       const response = await api.get(url, {
-        timeout: 90000,
+        timeout: 240000, // 4 min — várias queries BQ em sequência / paralelo
         validateStatus: (status) => status < 500,
       });
       if (response.status >= 400) {
@@ -402,7 +407,7 @@ export const comexDashboardBqAPI = {
         throw new Error('Servidor retornou HTML ao invés de JSON.');
       }
       return response;
-    }, 3, 1000);
+    }, 4, 2500);
   },
   getTabelaDetalhada: (paramsObj = {}) => {
     const urlParams = buildComexDashboardBqQueryParams(paramsObj);
@@ -411,7 +416,9 @@ export const comexDashboardBqAPI = {
       'page_size',
       String(Math.min(100, Math.max(1, parseInt(paramsObj.page_size, 10) || 10)))
     );
-    return api.get(`/api/comex-dashboard/tabela-detalhada?${urlParams.toString()}`, { timeout: 90000 });
+    return api.get(`/api/comex-dashboard/tabela-detalhada?${urlParams.toString()}`, {
+      timeout: 240000,
+    });
   },
 };
 
