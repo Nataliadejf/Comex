@@ -113,6 +113,49 @@ def _uf_ncm_fact_subquery_sql() -> str:
     """.strip()
 
 
+def _query_ufs_for_company_filter(
+    client,
+    empresa_imp: Optional[str],
+    empresa_exp: Optional[str],
+) -> List[str]:
+    """Resolve em uma só query as UFs (sigla) de empresas_base associadas ao filtro."""
+    from google.cloud import bigquery
+
+    likes: List[str] = []
+    if empresa_imp and empresa_imp.strip():
+        likes.append(empresa_imp.strip())
+    if empresa_exp and empresa_exp.strip():
+        likes.append(empresa_exp.strip())
+    if not likes:
+        return []
+
+    t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
+    where_parts: List[str] = []
+    params: List[object] = []
+    for i, lk in enumerate(likes):
+        p = f"like_{i}"
+        where_parts.append(
+            f"(LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@{p}) "
+            f"OR CAST(cnpj AS STRING) LIKE @{p})"
+        )
+        params.append(bigquery.ScalarQueryParameter(p, "STRING", f"%{lk}%"))
+
+    sql = f"""
+    SELECT DISTINCT UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf
+    FROM {t_base}
+    WHERE ({' OR '.join(where_parts)})
+      AND sigla_uf IS NOT NULL
+      AND CAST(sigla_uf AS STRING) != ''
+    ORDER BY uf
+    LIMIT 50
+    """
+    try:
+        rows = _run_query(client, sql, params)
+    except Exception:
+        return []
+    return [str(r.get("uf") or "").strip() for r in rows if r.get("uf")]
+
+
 def _sql_ufs_from_empresa_like(param_name: str) -> str:
     """Subconsulta: UFs onde existe empresa (apenas `empresas_base`) com LIKE em razão social ou CNPJ.
 
@@ -590,12 +633,21 @@ FROM (SELECT 1 AS _x)
         (empresa_importadora and empresa_importadora.strip())
         or (empresa_exportadora and empresa_exportadora.strip())
     )
+    ufs_filtradas: List[str] = []
     aviso_msg: Optional[str] = None
     if filtro_empresa_aplicado:
+        ufs_filtradas = _query_ufs_for_company_filter(
+            client, empresa_importadora, empresa_exportadora
+        )
+        ufs_txt = ", ".join(ufs_filtradas) if ufs_filtradas else "nenhuma UF encontrada"
         aviso_msg = (
-            "Filtro de empresa aplicado por UF (cruzamento com empresas_base). "
-            "Os totais somam todas as operações da UF onde a empresa está cadastrada, "
-            "pois as tabelas de fato (importacao_uf_ncm/exportacao_uf_ncm) são agregadas por UF×NCM e não contêm CNPJ."
+            f"Os valores abaixo NÃO são da empresa filtrada — são totais agregados "
+            f"da(s) UF(s) onde a empresa está cadastrada em empresas_base: {ufs_txt}. "
+            "As tabelas de fato (importacao_uf_ncm/exportacao_uf_ncm) são agregadas por "
+            "UF×NCM×mês e não contêm CNPJ, então não há como apurar o valor por empresa "
+            "nesta fonte. Para visão por CNPJ, é necessário ingerir uma tabela com fato "
+            "por operação (ex.: NCMImportacao_TB/NCMExportacao_TB com CNPJ ou base "
+            "desagregada do MDIC/Aliceweb)."
         )
 
     return {
@@ -616,6 +668,7 @@ FROM (SELECT 1 AS _x)
         "valores_por_mes": valores_por_mes,
         "pesos_por_mes": pesos_por_mes,
         "filtro_empresa_aplicado": filtro_empresa_aplicado,
+        "ufs_filtradas_por_empresa": ufs_filtradas,
         "aviso_dados_sem_empresa": aviso_msg,
         "fonte_dados": _fonte_dados(),
     }
@@ -1051,6 +1104,9 @@ def autocomplete_empresa_ncm_uf(
 
     params: List[object] = [
         bigquery.ScalarQueryParameter("q_like", "STRING", f"%{q_strip}%"),
+        bigquery.ScalarQueryParameter("q_prefix", "STRING", f"{q_strip}%"),
+        bigquery.ScalarQueryParameter("q_word", "STRING", f"% {q_strip}%"),
+        bigquery.ScalarQueryParameter("q_raw", "STRING", q_strip),
         bigquery.ScalarQueryParameter("limit_value", "INT64", limit),
     ]
     where_name = (
@@ -1058,20 +1114,32 @@ def autocomplete_empresa_ncm_uf(
         "OR CAST(cnpj AS STRING) LIKE @q_like)"
     )
 
+    # Score: 0=exato, 1=começa-com, 2=palavra contida, 3=substring qualquer.
+    # Garante que "VALE" digitado leve "VALE", "VALE S.A.", "VALE DO RIO DOCE" ao topo,
+    # mesmo havendo muitas empresas "... DO VALE ..." em ordem alfabética.
+    rank_case = (
+        "CASE "
+        "WHEN UPPER(CAST(razao_social AS STRING)) = UPPER(@q_raw) THEN 0 "
+        "WHEN UPPER(CAST(razao_social AS STRING)) LIKE UPPER(@q_prefix) THEN 1 "
+        "WHEN UPPER(CAST(razao_social AS STRING)) LIKE UPPER(@q_word) THEN 2 "
+        "ELSE 3 END"
+    )
+
     if _use_related_model():
         t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
-        # Sem fato por CNPJ neste modo: ordenamos só por razão social.
         sql = f"""
         SELECT
           CAST(cnpj AS STRING) AS cnpj,
           ANY_VALUE(CAST(razao_social AS STRING)) AS nome,
           CAST(0 AS FLOAT64) AS total_importacao_fob,
           CAST(0 AS FLOAT64) AS total_exportacao_fob,
-          COUNT(*) AS total_operacoes
+          COUNT(*) AS total_operacoes,
+          MIN({rank_case}) AS rank_score,
+          MIN(LENGTH(CAST(razao_social AS STRING))) AS rank_len
         FROM {t_base}
         WHERE {where_name}
         GROUP BY cnpj
-        ORDER BY nome ASC
+        ORDER BY rank_score ASC, rank_len ASC, nome ASC
         LIMIT @limit_value
         """
     else:
@@ -1088,11 +1156,12 @@ def autocomplete_empresa_ncm_uf(
           ANY_VALUE(razao_social) AS nome,
           SUM(total_importacao_fob) AS total_importacao_fob,
           SUM(total_exportacao_fob) AS total_exportacao_fob,
-          COUNT(*) AS total_operacoes
+          COUNT(*) AS total_operacoes,
+          MIN({rank_case}) AS rank_score
         FROM {tref}
         WHERE {where_name}
         GROUP BY cnpj
-        ORDER BY {order_by}
+        ORDER BY rank_score ASC, {order_by}
         LIMIT @limit_value
         """
 

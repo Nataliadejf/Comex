@@ -1475,9 +1475,13 @@ const Dashboard = () => {
 
       {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && (
         <Alert
-          message="Filtro de empresa aplicado por UF"
+          message={
+            Array.isArray(stats.ufs_filtradas_por_empresa) && stats.ufs_filtradas_por_empresa.length > 0
+              ? `Atenção: os valores abaixo são TOTAIS DA(S) UF(S) ${stats.ufs_filtradas_por_empresa.join(', ')}, não da empresa filtrada`
+              : 'Atenção: valores agregados por UF, não por empresa'
+          }
           description={stats.aviso_dados_sem_empresa}
-          type="info"
+          type="warning"
           showIcon
           style={{ marginBottom: '24px' }}
         />
