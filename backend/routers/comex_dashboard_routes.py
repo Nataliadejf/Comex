@@ -58,19 +58,19 @@ def _table_env(key: str, default_full_id: str) -> str:
 
 
 def _empresas_impex_autocomplete_sql(where_name: str) -> str:
-    """Lista empresas com cadastro em empresasimportexport (sem cruzar fatos UF×NCM — autocomplete rápido)."""
+    """Autocomplete a partir de empresas_base (LEFT JOIN com empresasimportexport para enriquecer).
+
+    Mantemos um LEFT JOIN para não excluir empresas ausentes em `empresasimportexport`
+    (cadastro pode estar vazio ou com CNPJ em formato divergente).
+    """
     t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
-    t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
     return f"""
     SELECT
-      b.cnpj,
-      b.razao_social,
+      CAST(b.cnpj AS STRING) AS cnpj,
+      CAST(b.razao_social AS STRING) AS razao_social,
       CAST(0 AS FLOAT64) AS total_importacao_fob,
       CAST(0 AS FLOAT64) AS total_exportacao_fob
     FROM {t_base} AS b
-    INNER JOIN {t_ie} AS x
-      ON REGEXP_REPLACE(CAST(b.cnpj AS STRING), r'[^0-9]', '')
-       = REGEXP_REPLACE(CAST(x.cnpj AS STRING), r'[^0-9]', '')
     WHERE {where_name}
     """
 
@@ -114,17 +114,18 @@ def _uf_ncm_fact_subquery_sql() -> str:
 
 
 def _sql_ufs_from_empresa_like(param_name: str) -> str:
-    """Subconsulta: UFs onde existe empresa (base∩impex) batendo com LIKE em razão social ou CNPJ."""
+    """Subconsulta: UFs onde existe empresa (apenas `empresas_base`) com LIKE em razão social ou CNPJ.
+
+    `empresasimportexport` pode estar vazia/divergente; usá-la como filtro obrigatório
+    zerava o resultado. Mantemos só `empresas_base` para que o filtro tenha efeito.
+    """
     t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
-    t_ie = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _DEFAULT_EMPRESAS_IMPEX_TABLE))
     return f"""
       SELECT DISTINCT UPPER(TRIM(CAST(b.sigla_uf AS STRING))) AS uf
       FROM {t_base} AS b
-      INNER JOIN {t_ie} AS x
-        ON REGEXP_REPLACE(CAST(b.cnpj AS STRING), r'[^0-9]', '')
-         = REGEXP_REPLACE(CAST(x.cnpj AS STRING), r'[^0-9]', '')
-      WHERE LOWER(CAST(b.razao_social AS STRING)) LIKE LOWER({param_name})
-         OR CAST(b.cnpj AS STRING) LIKE {param_name}
+      WHERE (LOWER(CAST(b.razao_social AS STRING)) LIKE LOWER({param_name})
+         OR CAST(b.cnpj AS STRING) LIKE {param_name})
+        AND b.sigla_uf IS NOT NULL
     """.strip()
 
 
@@ -447,6 +448,8 @@ def _dashboard_stats_payload_related_one_scan(
     where_clause: str,
     params: List[object],
     tipo_operacao: Optional[str],
+    empresa_importadora: Optional[str] = None,
+    empresa_exportadora: Optional[str] = None,
 ) -> Dict:
     """Um único job BigQuery no modo relacionado (evita 4–6 scans paralelos do mesmo fato)."""
     top_l = (tipo_operacao or "").strip().lower()
@@ -583,9 +586,22 @@ FROM (SELECT 1 AS _x)
     else:
         valor_total_usd = v_imp + v_exp
 
+    filtro_empresa_aplicado = bool(
+        (empresa_importadora and empresa_importadora.strip())
+        or (empresa_exportadora and empresa_exportadora.strip())
+    )
+    aviso_msg: Optional[str] = None
+    if filtro_empresa_aplicado:
+        aviso_msg = (
+            "Filtro de empresa aplicado por UF (cruzamento com empresas_base). "
+            "Os totais somam todas as operações da UF onde a empresa está cadastrada, "
+            "pois as tabelas de fato (importacao_uf_ncm/exportacao_uf_ncm) são agregadas por UF×NCM e não contêm CNPJ."
+        )
+
     return {
         "volume_importacoes": 0.0,
         "volume_exportacoes": 0.0,
+        "volume_disponivel": False,
         "valor_total_usd": valor_total_usd,
         "valor_total_importacoes": v_imp,
         "valor_total_exportacoes": v_exp,
@@ -599,9 +615,8 @@ FROM (SELECT 1 AS _x)
         "registros_por_mes": registros_por_mes,
         "valores_por_mes": valores_por_mes,
         "pesos_por_mes": pesos_por_mes,
-        "aviso_dados_sem_empresa": (
-            "Totais por UF×NCM (oficiais). Ranking por CNPJ não é calculado neste modo para evitar consultas muito pesadas no BigQuery."
-        ),
+        "filtro_empresa_aplicado": filtro_empresa_aplicado,
+        "aviso_dados_sem_empresa": aviso_msg,
         "fonte_dados": _fonte_dados(),
     }
 
@@ -631,7 +646,12 @@ def _dashboard_stats_payload_from_bq(
     )
     if rel:
         return _dashboard_stats_payload_related_one_scan(
-            client, where_clause, params, tipo_operacao
+            client,
+            where_clause,
+            params,
+            tipo_operacao,
+            empresa_importadora=empresa_importadora,
+            empresa_exportadora=empresa_exportadora,
         )
     cte = _base_filtered_cte(where_clause)
     top_l = (tipo_operacao or "").strip().lower()
@@ -1037,38 +1057,44 @@ def autocomplete_empresa_ncm_uf(
         "(LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@q_like) "
         "OR CAST(cnpj AS STRING) LIKE @q_like)"
     )
-    # Sem HAVING: empresas só exportadoras/importadoras ainda aparecem na sugestão (ordenamos por relevância ao campo).
-    if _use_related_model():
-        order_by = "ANY_VALUE(razao_social) ASC"
-    elif tipo_l == "importacao":
-        order_by = "SUM(total_importacao_fob) DESC, SUM(total_exportacao_fob) DESC"
-    elif tipo_l == "exportacao":
-        order_by = "SUM(total_exportacao_fob) DESC, SUM(total_importacao_fob) DESC"
-    else:
-        order_by = "(SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC"
 
     if _use_related_model():
-        from_sql = _empresas_impex_autocomplete_sql(where_name).strip()
+        t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
+        # Sem fato por CNPJ neste modo: ordenamos só por razão social.
+        sql = f"""
+        SELECT
+          CAST(cnpj AS STRING) AS cnpj,
+          ANY_VALUE(CAST(razao_social AS STRING)) AS nome,
+          CAST(0 AS FLOAT64) AS total_importacao_fob,
+          CAST(0 AS FLOAT64) AS total_exportacao_fob,
+          COUNT(*) AS total_operacoes
+        FROM {t_base}
+        WHERE {where_name}
+        GROUP BY cnpj
+        ORDER BY nome ASC
+        LIMIT @limit_value
+        """
     else:
         tref = _get_table_ref()
-        from_sql = f"""
-        SELECT cnpj, razao_social, total_importacao_fob, total_exportacao_fob
+        if tipo_l == "importacao":
+            order_by = "SUM(total_importacao_fob) DESC, SUM(total_exportacao_fob) DESC"
+        elif tipo_l == "exportacao":
+            order_by = "SUM(total_exportacao_fob) DESC, SUM(total_importacao_fob) DESC"
+        else:
+            order_by = "(SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC"
+        sql = f"""
+        SELECT
+          cnpj,
+          ANY_VALUE(razao_social) AS nome,
+          SUM(total_importacao_fob) AS total_importacao_fob,
+          SUM(total_exportacao_fob) AS total_exportacao_fob,
+          COUNT(*) AS total_operacoes
         FROM {tref}
         WHERE {where_name}
+        GROUP BY cnpj
+        ORDER BY {order_by}
+        LIMIT @limit_value
         """
-
-    sql = f"""
-    SELECT
-      cnpj,
-      ANY_VALUE(razao_social) AS nome,
-      SUM(total_importacao_fob) AS total_importacao_fob,
-      SUM(total_exportacao_fob) AS total_exportacao_fob,
-      COUNT(*) AS total_operacoes
-    FROM ({from_sql.strip()})
-    GROUP BY cnpj
-    ORDER BY {order_by}
-    LIMIT @limit_value
-    """
 
     try:
         client = _get_bigquery_client()

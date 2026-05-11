@@ -1473,11 +1473,11 @@ const Dashboard = () => {
           />
         )}
 
-      {stats && !error && stats.aviso_dados_sem_empresa && (
+      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && (
         <Alert
-          message="Filtro por empresa sem efeito nos dados atuais"
-          description="As operações no banco não têm importador/exportador (ou CNPJ) preenchidos. O Excel importado hoje é agregado por NCM, UF e país, sem nome de empresa por linha. Para ver atividade da Vale S.A, Hidrau Torque etc., é preciso importar uma base que tenha colunas de importador/exportador por operação (ex.: dados desagregados do MDIC/Aliceweb)."
-          type="warning"
+          message="Filtro de empresa aplicado por UF"
+          description={stats.aviso_dados_sem_empresa}
+          type="info"
           showIcon
           style={{ marginBottom: '24px' }}
         />
@@ -1664,6 +1664,7 @@ const Dashboard = () => {
           </Card>
         </Col>
         )}
+        {statsFinal.volume_disponivel !== false && (
         <Col xs={24} sm={12} lg={6}>
           <Card 
             className="dashboard-metric-card"
@@ -1705,6 +1706,7 @@ const Dashboard = () => {
             </div>
           </Card>
         </Col>
+        )}
       </Row>
 
       {/* Seção Principal: Importadores e Exportadores */}
