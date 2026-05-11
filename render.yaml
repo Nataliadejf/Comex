@@ -56,6 +56,10 @@ services:
       - key: COMEX_BQ_RELATED_MODEL
         value: "true"
 
+      # Postgres já inicializado: evita Alembic na startup (evita timeout / transação abortada no Render)
+      - key: SKIP_ALEMBIC_ON_STARTUP
+        value: "1"
+
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"
 # Veja DEPLOY_FRONTEND_RENDER.md para instruções detalhadas

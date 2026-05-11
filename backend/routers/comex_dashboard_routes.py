@@ -76,23 +76,40 @@ def _empresas_impex_autocomplete_sql(where_name: str) -> str:
 
 
 def _uf_ncm_fact_subquery_sql() -> str:
-    """Fato mensal UF × NCM (import + export), sem empresas."""
+    """Fato mensal UF × NCM (import + export), sem empresas.
+
+    UNION ALL + agregação evita FULL OUTER JOIN (shuffle pesado e limite de CPU no on-demand).
+    """
     t_imp = _bt(_table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_TABLE))
     t_exp = _bt(_table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_TABLE))
     return f"""
       SELECT
-        COALESCE(i.ano, e.ano) AS ano,
-        COALESCE(i.mes, e.mes) AS mes,
-        COALESCE(i.sigla_uf, e.sigla_uf) AS sigla_uf,
-        CAST(COALESCE(i.id_ncm, e.id_ncm) AS STRING) AS id_ncm,
-        COALESCE(i.total_importacao_fob, 0) AS total_importacao_fob,
-        COALESCE(e.total_exportacao_fob, 0) AS total_exportacao_fob
-      FROM {t_imp} AS i
-      FULL OUTER JOIN {t_exp} AS e
-        ON i.ano = e.ano
-       AND i.mes = e.mes
-       AND i.sigla_uf = e.sigla_uf
-       AND CAST(i.id_ncm AS STRING) = CAST(e.id_ncm AS STRING)
+        ano,
+        mes,
+        sigla_uf,
+        id_ncm,
+        SUM(imp_part) AS total_importacao_fob,
+        SUM(exp_part) AS total_exportacao_fob
+      FROM (
+        SELECT
+          ano,
+          mes,
+          sigla_uf,
+          CAST(id_ncm AS STRING) AS id_ncm,
+          COALESCE(total_importacao_fob, 0) AS imp_part,
+          CAST(0 AS FLOAT64) AS exp_part
+        FROM {t_imp}
+        UNION ALL
+        SELECT
+          ano,
+          mes,
+          sigla_uf,
+          CAST(id_ncm AS STRING) AS id_ncm,
+          CAST(0 AS FLOAT64),
+          COALESCE(total_exportacao_fob, 0)
+        FROM {t_exp}
+      )
+      GROUP BY ano, mes, sigla_uf, id_ncm
     """.strip()
 
 
@@ -240,6 +257,20 @@ def _run_query(client, query: str, params: List[object]) -> List[dict]:
 
     job_config = bigquery.QueryJobConfig(query_parameters=params)
     return [dict(row.items()) for row in client.query(query, job_config=job_config).result()]
+
+
+def _bq_cell(v):
+    """Normaliza STRUCT/ARRAY do BigQuery para dict/list aninhados."""
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        return [_bq_cell(x) for x in v]
+    if hasattr(v, "items"):
+        try:
+            return {k: _bq_cell(x) for k, x in dict(v.items()).items()}
+        except Exception:
+            pass
+    return v
 
 
 def _raise_http_for_bigquery(exc: Exception, log_message: str) -> None:
@@ -411,6 +442,170 @@ def _build_main_dashboard_where(
     return " AND ".join(conditions), params
 
 
+def _dashboard_stats_payload_related_one_scan(
+    client,
+    where_clause: str,
+    params: List[object],
+    tipo_operacao: Optional[str],
+) -> Dict:
+    """Um único job BigQuery no modo relacionado (evita 4–6 scans paralelos do mesmo fato)."""
+    top_l = (tipo_operacao or "").strip().lower()
+    if "export" in top_l and "import" not in top_l:
+        ncm_order_alias = "v_exp_ncm"
+    elif "import" in top_l and "export" not in top_l:
+        ncm_order_alias = "v_imp_ncm"
+    else:
+        ncm_order_alias = "(v_imp_ncm + v_exp_ncm)"
+
+    u_sql = _uf_ncm_fact_subquery_sql()
+    combined_sql = f"""
+WITH filtered AS (
+  SELECT
+    ano,
+    mes,
+    sigla_uf,
+    id_ncm,
+    COALESCE(total_importacao_fob, 0) AS total_importacao_fob,
+    COALESCE(total_exportacao_fob, 0) AS total_exportacao_fob
+  FROM ({u_sql}) AS u
+  WHERE {where_clause}
+)
+SELECT
+  (SELECT AS STRUCT
+      COALESCE(SUM(total_importacao_fob), 0) AS v_imp,
+      COALESCE(SUM(total_exportacao_fob), 0) AS v_exp,
+      COUNTIF(total_importacao_fob > 0) AS cnt_imp_rows,
+      COUNTIF(total_exportacao_fob > 0) AS cnt_exp_rows,
+      COUNT(*) AS cnt_all
+    FROM filtered) AS kpi,
+  ARRAY(
+    SELECT AS STRUCT
+      FORMAT('%04d-%02d', ano, mes) AS ym,
+      COUNT(*) AS registros,
+      COALESCE(SUM(total_importacao_fob + total_exportacao_fob), 0) AS valor_mes
+    FROM filtered
+    GROUP BY ano, mes
+    ORDER BY ano, mes
+  ) AS monthly,
+  ARRAY(
+    SELECT AS STRUCT ncm, v_imp_ncm, v_exp_ncm
+    FROM (
+      SELECT
+        REGEXP_REPLACE(CAST(id_ncm AS STRING), r'[^0-9]', '') AS ncm,
+        COALESCE(SUM(total_importacao_fob), 0) AS v_imp_ncm,
+        COALESCE(SUM(total_exportacao_fob), 0) AS v_exp_ncm
+      FROM filtered
+      GROUP BY id_ncm
+    )
+    ORDER BY {ncm_order_alias} DESC
+    LIMIT 15
+  ) AS ncms,
+  ARRAY(
+    SELECT AS STRUCT
+      sigla_uf AS uf_key,
+      COALESCE(SUM(total_importacao_fob + total_exportacao_fob), 0) AS valor_total,
+      COUNT(*) AS total_operacoes
+    FROM filtered
+    WHERE sigla_uf IS NOT NULL AND CAST(sigla_uf AS STRING) != ''
+    GROUP BY sigla_uf
+    ORDER BY valor_total DESC
+    LIMIT 20
+  ) AS ufs
+FROM (SELECT 1 AS _x)
+"""
+    rows = _run_query(client, combined_sql, params)
+    raw = rows[0] if rows else {}
+    row = {k: _bq_cell(v) for k, v in raw.items()} if raw else {}
+
+    kpi = row.get("kpi") or {}
+    monthly = row.get("monthly") or []
+    ncm_rows = row.get("ncms") or []
+    uf_rows = row.get("ufs") or []
+
+    v_imp = float(kpi.get("v_imp") or 0)
+    v_exp = float(kpi.get("v_exp") or 0)
+    cnt_imp = int(kpi.get("cnt_imp_rows") or 0)
+    cnt_exp = int(kpi.get("cnt_exp_rows") or 0)
+    cnt_all = int(kpi.get("cnt_all") or 0)
+
+    registros_por_mes: Dict[str, int] = {}
+    valores_por_mes: Dict[str, float] = {}
+    pesos_por_mes: Dict[str, float] = {}
+    for r in monthly:
+        ym = str(r.get("ym") or "")
+        if not ym:
+            continue
+        registros_por_mes[ym] = int(r.get("registros") or 0)
+        valores_por_mes[ym] = float(r.get("valor_mes") or 0)
+        pesos_por_mes[ym] = 0.0
+
+    principais_ncms: List[dict] = []
+    for r in ncm_rows:
+        ncm_s = str(r.get("ncm") or "").strip()
+        if not ncm_s:
+            continue
+        vi = float(r.get("v_imp_ncm") or 0)
+        ve = float(r.get("v_exp_ncm") or 0)
+        if "export" in top_l and "import" not in top_l:
+            vtot = ve
+        elif "import" in top_l and "export" not in top_l:
+            vtot = vi
+        else:
+            vtot = vi + ve
+        if vtot <= 0:
+            continue
+        principais_ncms.append(
+            {
+                "ncm": ncm_s,
+                "descricao": "",
+                "valor_total": vtot,
+                "total_operacoes": 0,
+            }
+        )
+
+    principais_paises: List[dict] = []
+    for r in uf_rows:
+        uf_k = str(r.get("uf_key") or "").strip()
+        if not uf_k:
+            continue
+        principais_paises.append(
+            {
+                "pais": f"UF: {uf_k}",
+                "valor_total": float(r.get("valor_total") or 0),
+                "total_operacoes": int(r.get("total_operacoes") or 0),
+            }
+        )
+
+    if "export" in top_l and "import" not in top_l:
+        valor_total_usd = v_exp
+    elif "import" in top_l and "export" not in top_l:
+        valor_total_usd = v_imp
+    else:
+        valor_total_usd = v_imp + v_exp
+
+    return {
+        "volume_importacoes": 0.0,
+        "volume_exportacoes": 0.0,
+        "valor_total_usd": valor_total_usd,
+        "valor_total_importacoes": v_imp,
+        "valor_total_exportacoes": v_exp,
+        "quantidade_estatistica_importacoes": float(cnt_imp),
+        "quantidade_estatistica_exportacoes": float(cnt_exp),
+        "quantidade_estatistica_total": float(cnt_all),
+        "principais_ncms": principais_ncms,
+        "principais_paises": principais_paises,
+        "principais_importadores": [],
+        "principais_exportadores": [],
+        "registros_por_mes": registros_por_mes,
+        "valores_por_mes": valores_por_mes,
+        "pesos_por_mes": pesos_por_mes,
+        "aviso_dados_sem_empresa": (
+            "Totais por UF×NCM (oficiais). Ranking por CNPJ não é calculado neste modo para evitar consultas muito pesadas no BigQuery."
+        ),
+        "fonte_dados": _fonte_dados(),
+    }
+
+
 def _dashboard_stats_payload_from_bq(
     client,
     ym_start: int,
@@ -434,6 +629,10 @@ def _dashboard_stats_payload_from_bq(
         exp_col="total_exportacao_fob",
         empresa_filter_as_uf_subquery=rel,
     )
+    if rel:
+        return _dashboard_stats_payload_related_one_scan(
+            client, where_clause, params, tipo_operacao
+        )
     cte = _base_filtered_cte(where_clause)
     top_l = (tipo_operacao or "").strip().lower()
     ncm_metric_imp = "COALESCE(SUM(total_importacao_fob), 0)"
@@ -513,20 +712,14 @@ def _dashboard_stats_payload_from_bq(
     LIMIT 10
     """
 
-    rel_stats = _use_related_model()
     _jobs: List[Tuple[str, str]] = [
         ("kpi", kpi_sql),
         ("monthly", monthly_sql),
         ("ncm", ncm_sql),
         ("uf", uf_sql),
+        ("imp_top", imp_top_sql),
+        ("exp_top", exp_top_sql),
     ]
-    if not rel_stats:
-        _jobs.extend(
-            [
-                ("imp_top", imp_top_sql),
-                ("exp_top", exp_top_sql),
-            ]
-        )
 
     def _run_job(name_sql: Tuple[str, str]) -> Tuple[str, List[dict]]:
         name, sql = name_sql
@@ -543,8 +736,8 @@ def _dashboard_stats_payload_from_bq(
     monthly = _agg.get("monthly", [])
     ncm_rows = _agg.get("ncm", [])
     uf_rows = _agg.get("uf", [])
-    imp_rows = [] if rel_stats else _agg.get("imp_top", [])
-    exp_rows = [] if rel_stats else _agg.get("exp_top", [])
+    imp_rows = _agg.get("imp_top", [])
+    exp_rows = _agg.get("exp_top", [])
 
     row0 = kpi[0] if kpi else {}
     v_imp = float(row0.get("v_imp") or 0)
@@ -645,11 +838,7 @@ def _dashboard_stats_payload_from_bq(
         "registros_por_mes": registros_por_mes,
         "valores_por_mes": valores_por_mes,
         "pesos_por_mes": pesos_por_mes,
-        "aviso_dados_sem_empresa": (
-            "Totais por UF×NCM (oficiais). Ranking por CNPJ não é calculado neste modo para evitar consultas muito pesadas no BigQuery."
-            if rel_stats
-            else None
-        ),
+        "aviso_dados_sem_empresa": None,
         "fonte_dados": _fonte_dados(),
     }
 
