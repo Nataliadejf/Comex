@@ -3,11 +3,9 @@ import {
   Alert, AutoComplete, Card, Col, Input, Row, Spin, Table, Tabs, Tag, Typography, message,
 } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-} from 'recharts';
 import { empresasApi } from '../api/empresasApi';
 import { comexDashboardBqAPI } from '../services/api';
+import EmpresaTimeline from '../components/empresas/EmpresaTimeline';
 
 const { Title, Text } = Typography;
 
@@ -35,7 +33,9 @@ export default function EmpresasDashboard() {
   const [perfil, setPerfil] = useState(null);
   const [ncms, setNcms] = useState([]);
   const [ufs, setUfs] = useState([]);
-  const [timeline, setTimeline] = useState([]);
+  const [serieBq, setSerieBq] = useState([]);
+  const [avisoSerie, setAvisoSerie] = useState(null);
+  const [projecao, setProjecao] = useState([]);
   const [douItems, setDouItems] = useState([]);
   const [ranking, setRanking] = useState([]);
   const [tipoNcm, setTipoNcm] = useState('IMP');
@@ -71,18 +71,21 @@ export default function EmpresasDashboard() {
     setCnpjSel(cnpj);
     setLoading(true);
     try {
-      const [pRes, nRes, eRes, tRes, dRes, rRes] = await Promise.all([
+      const [pRes, nRes, eRes, sRes, prRes, dRes, rRes] = await Promise.all([
         empresasApi.perfil(cnpj),
         empresasApi.ncms(cnpj, { tipo: tipoNcm, page: 1, size: 20 }),
         empresasApi.estados(cnpj, { tipo: tipoNcm }),
-        empresasApi.timeline(cnpj),
+        empresasApi.serieTemporal(cnpj, { meses: 36 }),
+        empresasApi.projecao(cnpj, { tipo: tipoNcm, n_meses: 6 }),
         empresasApi.douEmpresa(cnpj, { page: 1, size: 20 }),
         empresasApi.ranking({ tipo: tipoNcm, n: 10 }),
       ]);
       setPerfil(pRes.data);
       setNcms(nRes.data?.items || []);
       setUfs(eRes.data?.ufs || []);
-      setTimeline(tRes.data?.series || []);
+      setSerieBq(sRes.data?.serie || []);
+      setAvisoSerie(sRes.data?.aviso || null);
+      setProjecao(prRes.data?.projecao || []);
       setDouItems(dRes.data?.items || []);
       setRanking(rRes.data?.items || []);
     } catch (e) {
@@ -115,7 +118,9 @@ export default function EmpresasDashboard() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       <Title level={2}>Painel de Empresas — Importação &amp; Exportação</Title>
-      <Text type="secondary">Busque por CNPJ ou razão social. Dados de operacoes_empresa / operacoes_comex e feed DOU.</Text>
+      <Text type="secondary">
+        Série temporal via BigQuery (empresas_base + import/export UF×NCM). Use BQ_PIPELINE_SOURCE=unified se tiver tabela por CNPJ.
+      </Text>
 
       <Card style={{ marginTop: 16, marginBottom: 16 }}>
         <AutoComplete
@@ -198,18 +203,14 @@ export default function EmpresasDashboard() {
             </Col>
           </Row>
 
-          <Card title="Valores no tempo" style={{ marginTop: 16 }}>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={timeline}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="periodo" />
-                <YAxis tickFormatter={(v) => `${(v / 1e6).toFixed(0)}M`} />
-                <Tooltip formatter={(v) => fmtUsd(v)} />
-                <Legend />
-                <Line type="monotone" dataKey="importacao_usd" name="Importação" stroke="#667eea" />
-                <Line type="monotone" dataKey="exportacao_usd" name="Exportação" stroke="#38ef7d" />
-              </LineChart>
-            </ResponsiveContainer>
+          <Card title="Série temporal (BigQuery)" style={{ marginTop: 16 }}>
+            <EmpresaTimeline
+              serie={serieBq}
+              projecao={projecao}
+              aviso={avisoSerie}
+              loading={false}
+              height={300}
+            />
           </Card>
 
           <Row gutter={[16, 16]} style={{ marginTop: 16 }}>

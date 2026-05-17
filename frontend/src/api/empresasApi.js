@@ -10,4 +10,9 @@ export const empresasApi = {
   dou: (params) => api.get('/api/dou', { params }),
   douEmpresa: (cnpj, params) => api.get(`/api/dou/${encodeURIComponent(cnpj)}`, { params }),
   ncmDetalhe: (codigo) => api.get(`/api/ncm/${encodeURIComponent(codigo)}`),
+  serieTemporal: (cnpj, params) =>
+    api.get(`/api/empresas/${encodeURIComponent(cnpj)}/serie-temporal`, { params }),
+  projecao: (cnpj, params) =>
+    api.get(`/api/empresas/${encodeURIComponent(cnpj)}/projecao`, { params }),
+  rankingSerie: (params) => api.get('/api/empresas/ranking/serie', { params }),
 };

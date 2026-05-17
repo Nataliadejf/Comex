@@ -456,6 +456,15 @@ class OperacaoEmpresa(Base):
     empresa = relationship("Empresa", backref="operacoes_detalhe")
 
     __table_args__ = (
+        UniqueConstraint(
+            "empresa_id",
+            "tipo",
+            "ncm",
+            "uf_destino",
+            "ano",
+            "mes",
+            name="uq_operacao_empresa_periodo",
+        ),
         Index("idx_op_emp_empresa_tipo", "empresa_id", "tipo"),
         Index("idx_op_emp_ncm_ano", "ncm", "ano"),
     )

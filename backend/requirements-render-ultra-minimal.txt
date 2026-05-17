@@ -48,6 +48,8 @@ beautifulsoup4==4.12.3
 lxml==5.2.2
 apscheduler==3.10.4
 requests==2.31.0
+python-dateutil==2.9.0
+google-auth>=2.28.0
 
 # NOTA CRÍTICA: 
 # - Versões compatíveis com Python 3.11.8 (forçar no Render)

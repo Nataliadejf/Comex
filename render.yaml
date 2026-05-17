@@ -10,7 +10,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements-render-ultra-minimal.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: python startup_credentials.py && uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       # Database - Configure manualmente no Render Dashboard após criar PostgreSQL
@@ -68,6 +68,18 @@ services:
 
       - key: INTERNAL_SECRET
         sync: false
+
+      - key: BQ_PIPELINE_ENABLED
+        value: "false"
+
+      - key: BQ_PIPELINE_SOURCE
+        value: "related"
+
+      - key: BQ_PIPELINE_BATCH_SIZE
+        value: "5000"
+
+      - key: BQ_PIPELINE_FULL_REFRESH
+        value: "false"
 
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"

@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from database import get_db
 from loguru import logger
 from services import sync_bigquery as syncbq
+from services import bq_empresa_pipeline as bqpipe
 
 router = APIRouter(prefix="/admin", tags=["admin-sync"])
 
@@ -90,6 +91,22 @@ async def sinc_tudo(
         logger.exception(e)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sync-empresas-bq")
+async def sync_empresas_bq(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    full_refresh: bool = Query(False),
+):
+    """Dispara pipeline BigQuery → PostgreSQL (empresas_base + operações unificadas)."""
+    _require_sync_admin(request)
+
+    def _task():
+        bqpipe.run_pipeline(full_refresh=full_refresh)
+
+    background_tasks.add_task(_task)
+    return {"ok": True, "status": "pipeline iniciado em background", "full_refresh": full_refresh}
 
 
 @router.post("/run-migrations")
