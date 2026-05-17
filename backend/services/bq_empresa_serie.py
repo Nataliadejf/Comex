@@ -68,17 +68,37 @@ def fetch_serie_temporal(
 ) -> Dict[str, Any]:
     """
     Retorna série mensal IMP/EXP para um CNPJ.
-    Modo unified: valores reais por CNPJ na tabela empresas_ncm_import_export_uf.
-    Modo related: proxy por UF(s) da empresa (sem CNPJ nas tabelas de fato).
+    Sempre tenta primeiro empresas_ncm_import_export_uf (dados reais por CNPJ).
+    Só usa proxy por UF se unified falhar e COMEX_EMPRESA_SERIE_ALLOW_UF_PROXY=true.
     """
     c14 = normalize_cnpj(cnpj)
     if len(c14) != 14:
         return {"cnpj": cnpj, "serie": [], "fonte": "invalid_cnpj", "aviso": "CNPJ inválido"}
 
     client = bq.get_bigquery_client()
-    if _pipeline_uses_unified():
-        return _fetch_unified(client, c14, tipo=tipo, ano=ano, meses=meses)
-    return _fetch_uf_proxy(client, c14, tipo=tipo, ano=ano, meses=meses)
+    try:
+        out = _fetch_unified(client, c14, tipo=tipo, ano=ano, meses=meses)
+        if out.get("serie"):
+            return out
+    except Exception:
+        pass
+    allow_proxy = (os.getenv("COMEX_EMPRESA_SERIE_ALLOW_UF_PROXY") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if allow_proxy:
+        return _fetch_uf_proxy(client, c14, tipo=tipo, ano=ano, meses=meses)
+    return {
+        "cnpj": c14,
+        "serie": [],
+        "fonte": "indisponivel",
+        "aviso": (
+            "Sem dados por CNPJ na tabela unificada. Proxy por UF desativado "
+            "(não representa a empresa). Defina COMEX_EMPRESA_SERIE_ALLOW_UF_PROXY=true apenas para diagnóstico."
+        ),
+        "modo": "none",
+    }
 
 
 def _fetch_unified(

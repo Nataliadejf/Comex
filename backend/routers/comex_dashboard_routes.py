@@ -13,6 +13,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
+from services import comex_empresa_stats as emp_stats
+
 
 router = APIRouter(prefix="/api/comex-dashboard", tags=["comex-dashboard"])
 
@@ -685,6 +687,41 @@ def _dashboard_stats_payload_from_bq(
     empresa_exportadora: Optional[str],
 ) -> Dict:
     rel = _use_related_model()
+    fonte = _fonte_dados()
+
+    if emp_stats.empresa_filtro_ativo(empresa_importadora, empresa_exportadora):
+        unified = emp_stats.try_unified_empresa_stats(
+            client,
+            _run_query,
+            _bt,
+            _table_env,
+            _get_table_ref,
+            _build_main_dashboard_where,
+            {
+                **fonte,
+                "nome_logico": "empresas_ncm_import_export_uf_por_cnpj",
+                "tabela_id": _strip_bt(os.getenv("COMEX_BQ_TABLE_EMPRESAS_NCM") or _DEFAULT_BQ_TABLE),
+            },
+            ym_start,
+            ym_end,
+            tipo_operacao,
+            ncm,
+            ncms,
+            empresa_importadora,
+            empresa_exportadora,
+        )
+        if unified:
+            return unified
+        cnpjs = emp_stats.resolve_cnpjs_empresa_base(
+            client, _run_query, _bt, _table_env, empresa_importadora, empresa_exportadora
+        )
+        return emp_stats.stats_payload_empresa_indisponivel(
+            fonte,
+            empresa_importadora,
+            empresa_exportadora,
+            cnpjs_tentados=cnpjs,
+        )
+
     where_clause, params = _build_main_dashboard_where(
         ym_start,
         ym_end,
@@ -1272,11 +1309,22 @@ def get_dashboard_data(
 ):
     client = _get_bigquery_client()
     rel_data = _use_related_model()
-    if rel_data:
+    use_unified_empresa = rel_data and (empresa or "").strip()
+    if use_unified_empresa:
+        cnpjs = emp_stats.resolve_cnpjs_empresa_base(
+            client, _run_query, _bt, _table_env, empresa, empresa
+        )
+        where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
+        if cnpjs:
+            where_clause, params = emp_stats.append_cnpj_filter(where_clause, params, cnpjs)
+        cte = emp_stats.unified_filtered_cte(_get_table_ref, where_clause)
+        rel_data = False
+    elif rel_data:
         where_clause, params = _build_fact_filters_comex_data(empresa, ano, mes, uf, ncm)
+        cte = _base_filtered_cte(where_clause)
     else:
         where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
-    cte = _base_filtered_cte(where_clause)
+        cte = _base_filtered_cte(where_clause)
 
     direction = "DESC" if sort_order.lower() == "desc" else "ASC"
     safe_sort_col = SORTABLE_COLUMNS.get(sort_by, "total_importacao_fob")
@@ -1437,11 +1485,21 @@ def export_csv(
 ):
     client = _get_bigquery_client()
     rel_csv = _use_related_model()
-    if rel_csv:
+    if rel_csv and (empresa or "").strip():
+        cnpjs = emp_stats.resolve_cnpjs_empresa_base(
+            client, _run_query, _bt, _table_env, empresa, empresa
+        )
+        where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
+        if cnpjs:
+            where_clause, params = emp_stats.append_cnpj_filter(where_clause, params, cnpjs)
+        cte = emp_stats.unified_filtered_cte(_get_table_ref, where_clause)
+        rel_csv = False
+    elif rel_csv:
         where_clause, params = _build_fact_filters_comex_data(empresa, ano, mes, uf, ncm)
+        cte = _base_filtered_cte(where_clause)
     else:
         where_clause, params = _build_filters(empresa, ano, mes, uf, ncm)
-    cte = _base_filtered_cte(where_clause)
+        cte = _base_filtered_cte(where_clause)
     from google.cloud import bigquery
 
     params_with_limit = [*params, bigquery.ScalarQueryParameter("limit_value", "INT64", 50000)]

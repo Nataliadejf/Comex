@@ -1473,7 +1473,17 @@ const Dashboard = () => {
           />
         )}
 
-      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && (
+      {stats && !error && stats.kpis_empresa_indisponiveis && stats.filtro_empresa_aplicado && (
+        <Alert
+          message="Valores por empresa indisponíveis nesta fonte"
+          description={stats.aviso_dados_sem_empresa}
+          type="warning"
+          showIcon
+          style={{ marginBottom: '24px' }}
+        />
+      )}
+
+      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && !stats.kpis_empresa_indisponiveis && !stats.dados_empresa_reais && (
         <Alert
           message={
             Array.isArray(stats.ufs_filtradas_por_empresa) && stats.ufs_filtradas_por_empresa.length > 0
@@ -1487,9 +1497,32 @@ const Dashboard = () => {
         />
       )}
 
+      {stats && !error && stats.dados_empresa_reais && stats.filtro_empresa_aplicado && (
+        <Alert
+          message="Dados filtrados por CNPJ da empresa"
+          description={
+            Array.isArray(stats.cnpjs_resolvidos) && stats.cnpjs_resolvidos.length > 0
+              ? `CNPJ: ${stats.cnpjs_resolvidos.join(', ')} — fonte empresas_ncm_import_export_uf (valores FOB da empresa, não totais da UF).`
+              : 'Valores agregados por CNPJ na tabela unificada do BigQuery.'
+          }
+          type="success"
+          showIcon
+          style={{ marginBottom: '24px' }}
+        />
+      )}
+
       {/* Cards de Métricas Principais */}
       {/* Usar key única baseada nos filtros para forçar re-render quando filtros mudarem */}
-      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)' }} key={`cards-${empresaImportadora || ''}-${empresaExportadora || ''}-${stats?._timestamp || 0}`}>
+      {stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Cards de importação/exportação ocultos"
+          description="Não exibimos totais por UF inteira para não distorcer o valor da empresa (ex.: US$ 125 bi). Ajuste COMEX_BQ_TABLE_EMPRESAS_NCM ou sincronize dados com CNPJ."
+        />
+      ) : null}
+      <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)', display: stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? 'none' : undefined }} key={`cards-${empresaImportadora || ''}-${empresaExportadora || ''}-${stats?._timestamp || 0}`}>
         <Col xs={24} sm={12} lg={6}>
           <Card 
             className="dashboard-metric-card"
