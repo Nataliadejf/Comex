@@ -42,6 +42,13 @@ google-cloud-bigquery==3.13.0
 # Database migrations (opcional, mas recomendado)
 alembic==1.13.1
 
+# DOU scraper, NCM API, HTTP
+httpx==0.27.0
+beautifulsoup4==4.12.3
+lxml==5.2.2
+apscheduler==3.10.4
+requests==2.31.0
+
 # NOTA CRÍTICA: 
 # - Versões compatíveis com Python 3.11.8 (forçar no Render)
 # - Nenhuma dependência transitiva deve requerer Rust

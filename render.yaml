@@ -60,6 +60,15 @@ services:
       - key: SKIP_ALEMBIC_ON_STARTUP
         value: "1"
 
+      - key: DOU_SCRAPING_ENABLED
+        value: "false"
+
+      - key: DOU_SCRAPE_BATCH_SIZE
+        value: "50"
+
+      - key: INTERNAL_SECRET
+        sync: false
+
 # NOTA: Static Sites não são suportados no render.yaml Blueprint
 # Crie o frontend manualmente no Render Dashboard como "Static Site"
 # Veja DEPLOY_FRONTEND_RENDER.md para instruções detalhadas

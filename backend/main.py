@@ -199,6 +199,27 @@ try:
 except ImportError as e:
     logger.warning(f"Router Comex Dashboard não disponível: {e}")
 
+try:
+    from routers.empresas_painel_routes import router as empresas_painel_router
+    app.include_router(empresas_painel_router)
+    logger.info("✅ Router painel empresas (/api/empresas) incluído")
+except ImportError as e:
+    logger.warning(f"Router painel empresas não disponível: {e}")
+
+try:
+    from routers.dou_routes import router as dou_router
+    app.include_router(dou_router)
+    logger.info("✅ Router DOU (/api/dou) incluído")
+except ImportError as e:
+    logger.warning(f"Router DOU não disponível: {e}")
+
+try:
+    from routers.ncm_routes import router as ncm_router
+    app.include_router(ncm_router)
+    logger.info("✅ Router NCM (/api/ncm) incluído")
+except ImportError as e:
+    logger.warning(f"Router NCM não disponível: {e}")
+
 
 def _env_truthy(name: str) -> bool:
     v = (os.getenv(name) or "").strip().lower()
@@ -255,6 +276,27 @@ async def startup_event():
         # Não interrompe a aplicação, mas loga o erro
 
     _start_auto_import_excel_if_configured()
+
+    if _env_truthy("DOU_SCRAPING_ENABLED"):
+        try:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            from database import SessionLocal
+            from services import dou_scraper
+
+            _dou_scheduler = AsyncIOScheduler()
+
+            async def _job_dou_scrape():
+                db = SessionLocal()
+                try:
+                    await dou_scraper.scrape_todas_empresas(db)
+                finally:
+                    db.close()
+
+            _dou_scheduler.add_job(_job_dou_scrape, "cron", hour=9, minute=0)
+            _dou_scheduler.start()
+            logger.info("✅ Agendamento DOU (06:00 BRT) ativo")
+        except Exception as e:
+            logger.warning(f"DOU scheduler não iniciado: {e}")
     
     # Iniciar scheduler para atualização diária
     try:

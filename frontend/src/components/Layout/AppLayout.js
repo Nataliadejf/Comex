@@ -4,6 +4,7 @@ import {
   DashboardOutlined,
   LineChartOutlined,
   SearchOutlined,
+  BankOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuFoldOutlined,
@@ -52,6 +53,11 @@ const AppLayout = ({ children }) => {
       key: '/busca',
       icon: <SearchOutlined />,
       label: 'Busca Avançada',
+    },
+    {
+      key: '/empresas',
+      icon: <BankOutlined />,
+      label: 'Empresas',
     },
   ];
 

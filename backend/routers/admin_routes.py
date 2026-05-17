@@ -90,3 +90,27 @@ async def sinc_tudo(
         logger.exception(e)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/run-migrations")
+def run_migrations(request: Request):
+    """Aplica Alembic upgrade head (protegido por INTERNAL_SECRET ou ADMIN_SYNC_TOKEN)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    _require_sync_admin(request)
+    backend_dir = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=str(backend_dir),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=(result.stderr or result.stdout or "migration failed")[:4000],
+        )
+    return {"ok": True, "stdout": (result.stdout or "")[-2000:]}

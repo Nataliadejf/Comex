@@ -4,7 +4,7 @@ Modelos do banco de dados.
 from datetime import date, datetime
 from typing import Optional
 from sqlalchemy import (
-    Column, Integer, String, Float, Date, DateTime,
+    Column, Integer, String, Float, Date, DateTime, Boolean, Numeric,
     Index, Text, ForeignKey, Enum as SQLEnum, UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -431,4 +431,61 @@ class OperacaoNCMEstado(Base):
 
     def __repr__(self):
         return f"<OperacaoNCMEstado(ano={self.ano}, ncm={self.ncm}, uf={self.uf}, tipo={self.tipo_operacao})>"
+
+
+class OperacaoEmpresa(Base):
+    """Operação de importação/exportação por empresa × NCM (painel empresas)."""
+
+    __tablename__ = "operacoes_empresa"
+
+    id = Column(Integer, primary_key=True, index=True)
+    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False, index=True)
+    tipo = Column(String(3), nullable=False, index=True, comment="IMP ou EXP")
+    ncm = Column(String(8), nullable=False, index=True)
+    ncm_descricao = Column(Text, nullable=True)
+    uf_origem = Column(String(2), nullable=True, index=True)
+    uf_destino = Column(String(2), nullable=True, index=True)
+    pais = Column(String(60), nullable=True)
+    ano = Column(Integer, nullable=True, index=True)
+    mes = Column(Integer, nullable=True, index=True)
+    valor_usd = Column(Numeric(18, 2), nullable=True)
+    peso_kg = Column(Numeric(18, 3), nullable=True)
+    quantidade = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    empresa = relationship("Empresa", backref="operacoes_detalhe")
+
+    __table_args__ = (
+        Index("idx_op_emp_empresa_tipo", "empresa_id", "tipo"),
+        Index("idx_op_emp_ncm_ano", "ncm", "ano"),
+    )
+
+
+class DOURegistro(Base):
+    """Registros do Diário Oficial relacionados a empresas."""
+
+    __tablename__ = "dou_registros"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cnpj = Column(String(18), nullable=True, index=True)
+    razao_social = Column(String(255), nullable=True)
+    data_pub = Column(Date, nullable=True, index=True)
+    secao = Column(String(10), nullable=True)
+    tipo_ato = Column(String(100), nullable=True, index=True)
+    resumo = Column(Text, nullable=True)
+    url = Column(Text, nullable=True)
+    scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_dou_cnpj_data", "cnpj", "data_pub"),)
+
+
+class NCMDescricao(Base):
+    """Cache de descrição oficial TEC e sugestão IA por NCM."""
+
+    __tablename__ = "ncm_descricao"
+
+    ncm = Column(String(8), primary_key=True)
+    descricao_tec = Column(Text, nullable=True)
+    sugestao_produto = Column(Text, nullable=True)
+    atualizado_em = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
