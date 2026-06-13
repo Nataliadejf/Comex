@@ -573,6 +573,31 @@ async def listar_empresas_contatos(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/diagnostico/colunas")
+async def diagnostico_colunas(tabela: str = Query("empresas_base")):
+    """Retorna as colunas reais de uma tabela BQ (diagnóstico)."""
+    nomes_permitidos = {
+        "empresas_base": TBL_EMPRESAS_BASE,
+        "estabelecimentos": TBL_ESTAB,
+        "empresas_ncm": TBL_EMPRESAS_NCM,
+        "empresasimportexport": _tbl("empresasimportexport"),
+    }
+    tbl_ref = nomes_permitidos.get(tabela)
+    if not tbl_ref:
+        raise HTTPException(status_code=400, detail=f"Tabela inválida. Use: {list(nomes_permitidos)}")
+    try:
+        client = get_bigquery_client()
+        from google.cloud import bigquery as bq_lib
+        sql = f"SELECT * FROM {tbl_ref} LIMIT 1"
+        job = client.query(sql)
+        result = job.result()
+        schema = [{"nome": f.name, "tipo": f.field_type} for f in result.schema]
+        row_sample = [dict(row.items()) for row in result]
+        return {"tabela": tabela, "colunas": schema, "amostra": row_sample}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/setores")
 def listar_setores():
     """Retorna os setores disponíveis na tabela CNAE proprietária."""
