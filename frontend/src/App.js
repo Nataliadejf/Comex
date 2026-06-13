@@ -7,6 +7,7 @@ import DashboardComexBigQuery from './pages/DashboardComexBigQuery';
 import BuscaAvancada from './pages/BuscaAvancada';
 import AnaliseNCM from './pages/AnaliseNCM';
 import EmpresasDashboard from './pages/EmpresasDashboard';
+import EmpresaContatos from './pages/EmpresaContatos';
 import Login from './pages/Login';
 import './App.css';
 
@@ -38,6 +39,7 @@ function App() {
                     <Route path="/busca" element={<BuscaAvancada />} />
                     <Route path="/ncm/:ncm" element={<AnaliseNCM />} />
                     <Route path="/empresas" element={<EmpresasDashboard />} />
+                    <Route path="/contatos" element={<EmpresaContatos />} />
                   </Routes>
                 </Content>
               </AppLayout>
