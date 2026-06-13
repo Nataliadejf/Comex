@@ -220,6 +220,13 @@ try:
 except ImportError as e:
     logger.warning(f"Router NCM não disponível: {e}")
 
+try:
+    from routers.contatos_routes import router as contatos_router
+    app.include_router(contatos_router)
+    logger.info("✅ Router Contatos (/api/contatos) incluído")
+except ImportError as e:
+    logger.warning(f"Router Contatos não disponível: {e}")
+
 
 def _env_truthy(name: str) -> bool:
     v = (os.getenv(name) or "").strip().lower()
@@ -276,6 +283,17 @@ async def startup_event():
         # Não interrompe a aplicação, mas loga o erro
 
     _start_auto_import_excel_if_configured()
+
+    # Carregar tabela CNAE proprietária em memória
+    try:
+        from services import cnae_service
+        total_cnae = cnae_service.carregar_cnae()
+        if total_cnae:
+            logger.info(f"✅ CNAE proprietário: {total_cnae} códigos carregados em memória")
+        else:
+            logger.warning("⚠️  CNAE proprietário não carregado (arquivo não encontrado em backend/data/NOVO_CNAE.xlsx)")
+    except Exception as _exc_cnae:
+        logger.warning(f"CNAE: erro no carregamento ({_exc_cnae})")
 
     if _env_truthy("DOU_SCRAPING_ENABLED"):
         try:
