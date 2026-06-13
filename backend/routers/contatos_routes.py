@@ -573,6 +573,16 @@ async def listar_empresas_contatos(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/diagnostico/teste-autocomplete")
+async def teste_autocomplete(q: str = Query("Vale")):
+    """Teste do autocomplete retornando erro como 200 para diagnóstico."""
+    try:
+        items = await asyncio.to_thread(_query_autocomplete, q, 2)
+        return {"ok": True, "items": items}
+    except Exception as exc:
+        return {"ok": False, "erro": str(exc), "tipo": type(exc).__name__}
+
+
 @router.get("/diagnostico/colunas")
 async def diagnostico_colunas(tabela: str = Query("empresas_base")):
     """Retorna as colunas reais de uma tabela BQ (diagnóstico)."""
