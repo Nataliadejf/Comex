@@ -9,6 +9,9 @@ import {
   DownloadOutlined,
   SearchOutlined,
   ReloadOutlined,
+  BulbOutlined,
+  ImportOutlined,
+  ExportOutlined,
 } from '@ant-design/icons';
 import {
   LineChart,
@@ -25,6 +28,7 @@ import {
   Cell,
 } from 'recharts';
 import { sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI, comexDashboardBqAPI } from '../services/api';
+import api from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
 
@@ -131,6 +135,141 @@ const obterNomeEstado = (uf) => {
   return UF_PARA_ESTADO[ufUpper] || ufUpper;
 };
 
+// ─── Formatação numérica para sugestão ────────────────────────────────────────
+const fmtRange = (v) => {
+  if (!v) return 'Sem dados';
+  if (v >= 1e9) return `US$ ${(v / 1e9).toFixed(1)} Bi`;
+  if (v >= 1e6) return `US$ ${(v / 1e6).toFixed(1)} Mi`;
+  if (v >= 1e3) return `US$ ${(v / 1e3).toFixed(0)} Mil`;
+  return `US$ ${v.toFixed(0)}`;
+};
+
+// ─── Painel de sugestão estatística no Dashboard ──────────────────────────────
+const SugestaoComexPanel = ({ stats, sugestao, loading, onBuscar }) => {
+  const nomeEmpresa = (stats?._filtro_empresa || 'empresa filtrada');
+  const cnpjs = stats?.cnpjs_resolvidos || [];
+
+  return (
+    <Card
+      style={{ marginBottom: 24, borderLeft: '4px solid #667eea', borderRadius: 8 }}
+      bodyStyle={{ padding: '16px 20px' }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <BulbOutlined style={{ color: '#667eea', fontSize: 18 }} />
+            <span style={{ fontWeight: 700, fontSize: 15 }}>
+              Potencial Estimado — {nomeEmpresa}
+            </span>
+            {cnpjs.length > 0 && (
+              <Tag color="geekblue" style={{ fontSize: 10 }}>
+                CNPJ: {cnpjs[0]}
+              </Tag>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>
+            Empresa encontrada na base cadastral mas sem histórico de comex disponível.
+            Calculamos o potencial com base em empresas do mesmo segmento (CNAE) que já operam no comércio exterior.
+          </div>
+
+          {loading && (
+            <div style={{ padding: '12px 0' }}>
+              <Spin size="small" /> <span style={{ marginLeft: 8, fontSize: 12, color: '#888' }}>Calculando potencial do segmento...</span>
+            </div>
+          )}
+
+          {!loading && !sugestao && (
+            <Button
+              type="primary"
+              icon={<BulbOutlined />}
+              onClick={onBuscar}
+              size="small"
+              style={{ background: '#667eea', borderColor: '#667eea' }}
+            >
+              Calcular Potencial do Segmento
+            </Button>
+          )}
+
+          {!loading && sugestao && !sugestao.tem_sugestao && (
+            <Alert
+              message={sugestao.motivo || sugestao.metodologia}
+              type="info"
+              showIcon
+              style={{ fontSize: 12 }}
+            />
+          )}
+
+          {!loading && sugestao?.tem_sugestao && (
+            <div>
+              <Row gutter={[12, 8]}>
+                <Col xs={24} sm={12} md={6}>
+                  <div style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: 8, padding: '10px 14px' }}>
+                    <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 10, marginBottom: 2 }}>
+                      <ImportOutlined style={{ marginRight: 4 }} />Importação Estimada
+                    </div>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>
+                      {fmtRange(sugestao.mediana_imp || sugestao.valor_imp_sugerido)}
+                    </div>
+                    <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10 }}>mediana/ano do segmento</div>
+                  </div>
+                </Col>
+                <Col xs={24} sm={12} md={6}>
+                  <div style={{ background: 'linear-gradient(135deg,#43e97b,#38f9d7)', borderRadius: 8, padding: '10px 14px' }}>
+                    <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 10, marginBottom: 2 }}>
+                      <ExportOutlined style={{ marginRight: 4 }} />Exportação Estimada
+                    </div>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>
+                      {fmtRange(sugestao.mediana_exp || sugestao.valor_exp_sugerido)}
+                    </div>
+                    <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10 }}>mediana/ano do segmento</div>
+                  </div>
+                </Col>
+                <Col xs={24} sm={12} md={6}>
+                  <div style={{ background: '#f6f8ff', borderRadius: 8, padding: '10px 14px', border: '1px solid #e8ecff' }}>
+                    <div style={{ color: '#888', fontSize: 10, marginBottom: 2 }}>Empresas de Referência</div>
+                    <div style={{ color: '#667eea', fontWeight: 700, fontSize: 18 }}>{sugestao.num_empresas_referencia}</div>
+                    <div style={{ color: '#aaa', fontSize: 10 }}>mesmo CNAE com comex ativo</div>
+                  </div>
+                </Col>
+                {sugestao.cnae_info && (
+                  <Col xs={24} sm={12} md={6}>
+                    <div style={{ background: '#f6f8ff', borderRadius: 8, padding: '10px 14px', border: '1px solid #e8ecff' }}>
+                      <div style={{ color: '#888', fontSize: 10, marginBottom: 4 }}>Segmento</div>
+                      {sugestao.cnae_info.setor && (
+                        <Tag color="blue" style={{ fontSize: 10, margin: '2px 0' }}>{sugestao.cnae_info.setor}</Tag>
+                      )}
+                      {sugestao.cnae_info.segmento && (
+                        <Tag color="geekblue" style={{ fontSize: 10, margin: '2px 0' }}>{sugestao.cnae_info.segmento}</Tag>
+                      )}
+                    </div>
+                  </Col>
+                )}
+              </Row>
+              {sugestao.ncms_tipicos?.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                    NCMs mais frequentes no segmento:
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {sugestao.ncms_tipicos.slice(0, 8).map((n, i) => (
+                      <Tag key={i} color="purple" style={{ fontSize: 10 }}>
+                        {n.ncm}{n.descricao ? ` — ${n.descricao.slice(0, 30)}` : ''}
+                      </Tag>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={{ marginTop: 8, fontSize: 10, color: '#bbb', fontStyle: 'italic' }}>
+                {sugestao.metodologia}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+};
+
 const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState(null);
@@ -153,6 +292,8 @@ const Dashboard = () => {
   const [paginacaoTabela, setPaginacaoTabela] = useState({ current: 1, pageSize: 10, total: 0 });
   const [empresaImportadora, setEmpresaImportadora] = useState(null);
   const [empresaExportadora, setEmpresaExportadora] = useState(null);
+  const [sugestaoComex, setSugestaoComex] = useState(null);
+  const [loadingSugestao, setLoadingSugestao] = useState(false);
   const [empresaImportadoraInput, setEmpresaImportadoraInput] = useState('');
   const [empresaExportadoraInput, setEmpresaExportadoraInput] = useState('');
   const [importadorasOptions, setImportadorasOptions] = useState([]);
@@ -592,9 +733,11 @@ const Dashboard = () => {
           // Criar um novo objeto para forçar re-render do React
           const novosStats = {
             ...response.data,
-            _timestamp: Date.now(), // Adicionar timestamp para forçar atualização
-            _filtro_empresa: filtroImportador || filtroExportador || null // Adicionar filtro aplicado
+            _timestamp: Date.now(),
+            _filtro_empresa: filtroImportador || filtroExportador || null
           };
+          // Resetar sugestão ao receber novos dados
+          setSugestaoComex(null);
           console.log('🔄 Atualizando stats com novos dados:', {
             valor_total_importacoes: novosStats.valor_total_importacoes,
             valor_total_exportacoes: novosStats.valor_total_exportacoes,
@@ -1517,17 +1660,34 @@ const Dashboard = () => {
         />
       )}
 
-      {/* Cards de Métricas Principais */}
-      {/* Usar key única baseada nos filtros para forçar re-render quando filtros mudarem */}
-      {stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="Cards de importação/exportação ocultos"
-          description="Não exibimos totais por UF inteira para não distorcer o valor da empresa (ex.: US$ 125 bi). Ajuste COMEX_BQ_TABLE_EMPRESAS_NCM ou sincronize dados com CNPJ."
+      {/* Painel de Sugestão Estatística — visível quando empresa sem dados CNPJ */}
+      {stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) && (
+        <SugestaoComexPanel
+          stats={stats}
+          sugestao={sugestaoComex}
+          loading={loadingSugestao}
+          onBuscar={async () => {
+            const cnpjHint = stats.cnpj_hint;
+            if (!cnpjHint && !stats.cnae_hint) return;
+            setLoadingSugestao(true);
+            setSugestaoComex(null);
+            try {
+              // Se temos CNPJ, buscar sugestão por CNPJ (usa CNAE da empresa)
+              if (cnpjHint) {
+                const res = await api.get(`/api/contatos/empresa/${encodeURIComponent(cnpjHint)}/sugestao`);
+                setSugestaoComex(res.data);
+              }
+            } catch (e) {
+              message.error('Erro ao carregar sugestão de potencial.');
+            } finally {
+              setLoadingSugestao(false);
+            }
+          }}
         />
-      ) : null}
+      )}
+
+      {/* Cards de Métricas Principais */}
+      {stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? null : null}
       <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)', display: stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? 'none' : undefined }} key={`cards-${empresaImportadora || ''}-${empresaExportadora || ''}-${stats?._timestamp || 0}`}>
         <Col xs={24} sm={12} lg={6}>
           <Card 

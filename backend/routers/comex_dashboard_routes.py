@@ -715,12 +715,20 @@ def _dashboard_stats_payload_from_bq(
         cnpjs = emp_stats.resolve_cnpjs_empresa_base(
             client, _run_query, _bt, _table_env, empresa_importadora, empresa_exportadora
         )
-        return emp_stats.stats_payload_empresa_indisponivel(
+        # Buscar CNAE e UF para sugestão estatística no frontend
+        cnae_hint, uf_hint = emp_stats.resolve_cnae_empresa(
+            client, _run_query, _bt, _table_env, cnpjs
+        )
+        payload = emp_stats.stats_payload_empresa_indisponivel(
             fonte,
             empresa_importadora,
             empresa_exportadora,
             cnpjs_tentados=cnpjs,
         )
+        payload["cnae_hint"] = cnae_hint
+        payload["uf_hint"] = uf_hint
+        payload["cnpj_hint"] = cnpjs[0] if cnpjs else None
+        return payload
 
     where_clause, params = _build_main_dashboard_where(
         ym_start,

@@ -259,6 +259,34 @@ def stats_payload_empresa_indisponivel(
     }
 
 
+def resolve_cnae_empresa(
+    client, run_query, bt, table_env, cnpjs: List[str]
+) -> tuple:
+    """Retorna (cnae, uf) da empresa para uso em sugestão estatística."""
+    if not cnpjs:
+        return None, None
+    from google.cloud import bigquery
+
+    _DEFAULT_ESTAB = "liquid-receiver-483923-n6.Projeto_Comex.Estabelecimentos_Ativos_UltimoMes"
+    t_estab = bt(table_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
+    cnpj_raiz = cnpjs[0][:8]
+    sql = f"""
+    SELECT
+        CAST(cnae_fiscal_principal AS STRING) AS cnae,
+        UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf
+    FROM {t_estab}
+    WHERE SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', ''), 1, 8) = @cnpj_raiz
+    LIMIT 1
+    """
+    try:
+        rows = run_query(client, sql, [bigquery.ScalarQueryParameter("cnpj_raiz", "STRING", cnpj_raiz)])
+        if rows:
+            return str(rows[0].get("cnae") or "").strip() or None, str(rows[0].get("uf") or "").strip() or None
+    except Exception as exc:
+        logger.warning(f"resolve_cnae_empresa erro: {exc}")
+    return None, None
+
+
 def try_unified_empresa_stats(
     client,
     run_query,

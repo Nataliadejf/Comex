@@ -43,18 +43,23 @@ export default function EmpresasDashboard() {
   const buscarSugestoes = useCallback(async (q) => {
     const termo = (q || '').trim();
     setSearch(termo);
-    if (termo.length < 2) {
-      setOptions([]);
-      return;
-    }
+    if (termo.length < 2) { setOptions([]); return; }
     setLoadingSearch(true);
     try {
+      // Usar API BQ de contatos (tem dados reais da Receita Federal)
       const res = await comexDashboardBqAPI.autocompleteEmpresa(termo, '', 25);
       const items = res?.data?.items || [];
       setOptions(
         items.map((e) => ({
           value: e.cnpj || e.nome,
-          label: `${e.nome}${e.cnpj ? ` — ${e.cnpj}` : ''}`,
+          label: (
+            <div style={{ lineHeight: 1.4 }}>
+              <div style={{ fontWeight: 600 }}>{e.nome}</div>
+              <div style={{ fontSize: 11, color: '#888' }}>
+                {e.cnpj || ''}{e.uf ? ` · ${e.uf}` : ''}{e.setor ? ` · ${e.setor}` : ''}
+              </div>
+            </div>
+          ),
           nome: e.nome,
           cnpj: e.cnpj,
         }))
@@ -68,28 +73,57 @@ export default function EmpresasDashboard() {
 
   const carregarEmpresa = useCallback(async (cnpj) => {
     if (!cnpj) return;
-    setCnpjSel(cnpj);
+    const digitos = cnpj.replace(/\D/g, '');
+    setCnpjSel(digitos || cnpj);
     setLoading(true);
+    setPerfil(null);
+    setNcms([]); setUfs([]); setSerieBq([]); setDouItems([]); setRanking([]);
     try {
-      const [pRes, nRes, eRes, sRes, prRes, dRes, rRes] = await Promise.all([
-        empresasApi.perfil(cnpj),
-        empresasApi.ncms(cnpj, { tipo: tipoNcm, page: 1, size: 20 }),
-        empresasApi.estados(cnpj, { tipo: tipoNcm }),
-        empresasApi.serieTemporal(cnpj, { meses: 36 }),
-        empresasApi.projecao(cnpj, { tipo: tipoNcm, n_meses: 6 }),
-        empresasApi.douEmpresa(cnpj, { page: 1, size: 20 }),
-        empresasApi.ranking({ tipo: tipoNcm, n: 10 }),
-      ]);
-      setPerfil(pRes.data);
-      setNcms(nRes.data?.items || []);
-      setUfs(eRes.data?.ufs || []);
-      setSerieBq(sRes.data?.serie || []);
-      setAvisoSerie(sRes.data?.aviso || null);
-      setProjecao(prRes.data?.projecao || []);
-      setDouItems(dRes.data?.items || []);
-      setRanking(rRes.data?.items || []);
+      // Perfil via BQ contatos (não depende de Postgres)
+      const pRes = await import('../services/api').then(m => m.default.get(`/api/contatos/empresa/${encodeURIComponent(digitos || cnpj)}`));
+      const dadosBq = pRes.data;
+
+      // Montar perfil no formato esperado pelo componente
+      const perfilMapeado = {
+        razao_social: dadosBq.perfil?.razao_social || '—',
+        cnpj: dadosBq.perfil?.cnpj || cnpj,
+        uf_sede: dadosBq.perfil?.uf_sede || dadosBq.contato_rf?.uf || '—',
+        kpis: dadosBq.kpis || {},
+        fonte: 'BigQuery (Receita Federal)',
+        cnae_info: dadosBq.cnae_info,
+        estabelecimentos: dadosBq.estabelecimentos?.length || 0,
+      };
+      setPerfil(perfilMapeado);
+      // NCMs da empresa via comex
+      const ncmsBq = (dadosBq.ncms || []).filter(n =>
+        tipoNcm === 'IMP'
+          ? ['IMP', 'IMPORTAÇÃO', 'IMPORTACAO'].includes(String(n.tipo || '').toUpperCase())
+          : !['IMP', 'IMPORTAÇÃO', 'IMPORTACAO'].includes(String(n.tipo || '').toUpperCase())
+      );
+      setNcms(ncmsBq);
+      // UFs dos estabelecimentos
+      const ufMap = {};
+      (dadosBq.estabelecimentos || []).forEach(e => {
+        if (e.uf) ufMap[e.uf] = (ufMap[e.uf] || 0) + 1;
+      });
+      setUfs(Object.entries(ufMap).map(([uf, cnt]) => ({ uf, valor_usd: 0, percentual: 0, estabelecimentos: cnt })));
+      // Série temporal via comex_por_ano
+      const serie = (dadosBq.comex_por_ano || []).map(r => ({
+        ym: `${r.ano}-06`,
+        total_importacao_fob: r.valor_importacao || 0,
+        total_exportacao_fob: r.valor_exportacao || 0,
+      }));
+      setSerieBq(serie);
+      setAvisoSerie(dadosBq.aviso || null);
+
+      // DOU via endpoint específico (tentativa, ignora erros)
+      try {
+        const dRes = await import('../services/api').then(m => m.default.get(`/api/contatos/empresa/${encodeURIComponent(digitos || cnpj)}/dou`));
+        setDouItems(dRes.data?.publicacoes || []);
+      } catch { setDouItems([]); }
+
     } catch (e) {
-      message.error(e?.response?.data?.detail || 'Erro ao carregar empresa');
+      message.error(e?.response?.data?.detail || 'Empresa não encontrada ou erro ao carregar dados.');
       setPerfil(null);
     } finally {
       setLoading(false);
@@ -119,7 +153,8 @@ export default function EmpresasDashboard() {
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       <Title level={2}>Painel de Empresas — Importação &amp; Exportação</Title>
       <Text type="secondary">
-        Série temporal via BigQuery (empresas_base + import/export UF×NCM). Use BQ_PIPELINE_SOURCE=unified se tiver tabela por CNPJ.
+        Busque uma empresa por nome ou CNPJ para ver NCMs, evolução anual, estabelecimentos e publicações no DOU.
+        Dados via BigQuery (Receita Federal + comex).
       </Text>
 
       <Card style={{ marginTop: 16, marginBottom: 16 }}>
@@ -144,11 +179,15 @@ export default function EmpresasDashboard() {
       {perfil && !loading && (
         <>
           <Alert
-            type="info"
+            type="success"
             showIcon
             style={{ marginBottom: 16 }}
-            message={`${perfil.razao_social} (${perfil.cnpj})`}
-            description={`UF sede: ${perfil.uf_sede || '—'} · Fonte: ${perfil.fonte}`}
+            message={`${perfil.razao_social}`}
+            description={
+              `CNPJ: ${perfil.cnpj} · UF Sede: ${perfil.uf_sede || '—'} · Estabelecimentos: ${perfil.estabelecimentos || 0}` +
+              (perfil.cnae_info?.setor ? ` · Setor: ${perfil.cnae_info.setor}` : '') +
+              (perfil.cnae_info?.segmento ? ` · Segmento: ${perfil.cnae_info.segmento}` : '')
+            }
           />
 
           <Row gutter={[16, 16]}>
