@@ -14,6 +14,8 @@ from loguru import logger
 
 from services.bq_client import get_bigquery_client, run_query
 from services import cnae_service
+from services import sugestao_comex
+from services import dou_scraper as _dou
 
 router = APIRouter(prefix="/api/contatos", tags=["contatos"])
 
@@ -430,6 +432,38 @@ def _query_comex_por_ano(cnpj14: str) -> List[dict]:
     return sorted(pivot.values(), key=lambda x: x["ano"])
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _extrair_contato_matriz(estabelecimentos: List[dict], cnpj_raiz: str) -> Optional[dict]:
+    """
+    Retorna o contato da matriz (CNPJ terminado em 0001 ou o primeiro da lista).
+    Prioriza estabelecimento com CNPJ XX.XXX.XXX/0001-XX.
+    """
+    if not estabelecimentos:
+        return None
+    # Tentar encontrar a matriz (ordem 0001)
+    for e in estabelecimentos:
+        cnpj_full = str(e.get("cnpj_completo") or "").replace(".", "").replace("/", "").replace("-", "")
+        if len(cnpj_full) == 14 and cnpj_full[8:12] == "0001":
+            return _montar_contato(e)
+    # Fallback: primeiro estabelecimento
+    return _montar_contato(estabelecimentos[0])
+
+
+def _montar_contato(e: dict) -> dict:
+    return {
+        "cnpj_completo": e.get("cnpj_completo"),
+        "uf": e.get("uf"),
+        "municipio": e.get("municipio"),
+        "cnae_fiscal": e.get("cnae_fiscal"),
+        "telefone1": e.get("telefone1"),
+        "telefone2": e.get("telefone2"),
+        "email": e.get("email"),
+        "situacao_cadastral": e.get("situacao_cadastral"),
+        "cnae_info": e.get("cnae_info"),
+    }
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/autocomplete")
@@ -483,20 +517,27 @@ async def perfil_empresa(cnpj: str):
         logger.error(f"Perfil empresa erro: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
-    if not perfil:
+    if not perfil and not estabelecimentos:
         raise HTTPException(
             status_code=404,
-            detail=f"Empresa com CNPJ raiz {cnpj_raiz} não encontrada em empresas_base."
+            detail=f"Empresa com CNPJ raiz {cnpj_raiz} não encontrada."
         )
 
     # ── Enriquecimento CNAE ──────────────────────────────────────────────────
-    cnae_principal = str(perfil.get("cnae_fiscal") or "").strip()
-    cnae_info = cnae_service.enriquecer(cnae_principal)
+    cnae_principal = str((perfil or {}).get("cnae_fiscal") or "").strip()
+    # Complementar CNAE a partir do estabelecimento matriz se não veio do perfil
+    if not cnae_principal and estabelecimentos:
+        cnae_principal = str(estabelecimentos[0].get("cnae_fiscal") or "").strip()
+
+    cnae_info = cnae_service.enriquecer(cnae_principal) if cnae_principal else None
 
     # Enriquecer CNAE de cada estabelecimento
     for estab in estabelecimentos:
         if not estab.get("cnae_info"):
             estab["cnae_info"] = cnae_service.enriquecer(estab.get("cnae_fiscal"))
+
+    # ── Contato Receita Federal — extrair da matriz (estabelecimento 0001) ───
+    contato_rf = _extrair_contato_matriz(estabelecimentos, cnpj_raiz)
 
     # ── Descrições NCM ───────────────────────────────────────────────────────
     ncm_codigos = [str(r.get("ncm") or "") for r in ncms_raw if r.get("ncm")]
@@ -507,26 +548,35 @@ async def perfil_empresa(cnpj: str):
     # ── KPIs ─────────────────────────────────────────────────────────────────
     total_imp = sum(r["valor_usd"] for r in ncms_raw if str(r.get("tipo") or "").upper() in ("IMP", "IMPORTAÇÃO", "IMPORTACAO"))
     total_exp = sum(r["valor_usd"] for r in ncms_raw if str(r.get("tipo") or "").upper() not in ("IMP", "IMPORTAÇÃO", "IMPORTACAO"))
-    paises_set = set()  # número de países — indisponível sem tabela específica
     ncms_distintos = len({str(r.get("ncm")) for r in ncms_raw if r.get("ncm")})
+    ufs_atuacao = sorted({str(e.get("uf") or "") for e in estabelecimentos if e.get("uf")})
 
     # Aviso se não há dados comex
     aviso = None
     aviso_tipo = "info"
-    if not ncms_raw:
+    tem_comex = bool(ncms_raw)
+    if not tem_comex:
         aviso = (
             "Nenhuma operação de comércio exterior encontrada para este CNPJ "
-            "na tabela empresas_ncm_import_export_uf. "
-            "Configure BQ_TABLE_EMPRESAS_NCM ou verifique se o CNPJ está na tabela."
+            "na base disponível. Você pode verificar a potencial viabilidade "
+            "na aba Sugestão Comex."
         )
         aviso_tipo = "warning"
 
+    perfil_out = {**(perfil or {})}
+    perfil_out["cnae_descricao"] = cnae_info.get("descricao") if cnae_info else None
+    # Complementar dados do perfil a partir dos estabelecimentos quando empresas_base não os tem
+    if not perfil_out.get("uf_sede") and estabelecimentos:
+        perfil_out["uf_sede"] = estabelecimentos[0].get("uf")
+    if not perfil_out.get("municipio_sede") and estabelecimentos:
+        perfil_out["municipio_sede"] = estabelecimentos[0].get("municipio")
+    if not perfil_out.get("situacao") and estabelecimentos:
+        perfil_out["situacao"] = estabelecimentos[0].get("situacao_cadastral")
+
     return {
-        "perfil": {
-            **perfil,
-            "cnae_descricao": cnae_info.get("descricao") if cnae_info else None,
-        },
+        "perfil": perfil_out,
         "cnae_info": cnae_info,
+        "contato_rf": contato_rf,
         "estabelecimentos": estabelecimentos,
         "ncms": ncms_raw,
         "comex_por_ano": comex_por_ano,
@@ -534,8 +584,11 @@ async def perfil_empresa(cnpj: str):
             "valor_importacao_usd": total_imp,
             "valor_exportacao_usd": total_exp,
             "num_ncms": ncms_distintos,
-            "num_paises": len(paises_set) or None,
+            "num_paises": None,
+            "num_estabelecimentos": len(estabelecimentos),
+            "ufs_atuacao": ufs_atuacao,
         },
+        "tem_comex": tem_comex,
         "aviso": aviso,
         "aviso_tipo": aviso_tipo,
         "fonte": "bigquery",
@@ -631,6 +684,149 @@ async def listar_empresas_contatos(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/empresa/{cnpj}/sugestao")
+async def sugestao_comex_empresa(cnpj: str):
+    """
+    Sugestão estatística de potencial comex para uma empresa.
+    Baseado em empresas do mesmo CNAE/segmento que já operam no comércio exterior.
+    Útil para empresas sem histórico na base, como análise de viabilidade.
+    """
+    digitos = _apenas_digitos(cnpj)
+    if len(digitos) < 8:
+        raise HTTPException(status_code=400, detail="CNPJ deve ter ao menos 8 dígitos.")
+
+    cnpj_raiz = digitos[:8]
+
+    # Buscar CNAE e UF da empresa
+    try:
+        perfil = await asyncio.to_thread(_query_perfil, cnpj_raiz)
+        estabelecimentos = await asyncio.to_thread(_query_estabelecimentos, cnpj_raiz)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    cnae = None
+    uf = None
+    if perfil:
+        cnae = str(perfil.get("cnae_fiscal") or "").strip()
+        uf = str(perfil.get("uf_sede") or "").strip() or None
+    if not cnae and estabelecimentos:
+        cnae = str(estabelecimentos[0].get("cnae_fiscal") or "").strip()
+        uf = str(estabelecimentos[0].get("uf") or "").strip() or None
+
+    if not cnae:
+        return {"tem_sugestao": False, "motivo": "CNAE não encontrado para esta empresa."}
+
+    cnae_info = cnae_service.enriquecer(cnae)
+    try:
+        client = get_bigquery_client()
+        sugestao = await asyncio.to_thread(
+            sugestao_comex.sugerir_por_cnae,
+            client, run_query, cnae, uf, 3, 50
+        )
+    except Exception as exc:
+        logger.warning(f"Sugestão comex erro: {exc}")
+        sugestao = {"tem_sugestao": False, "motivo": str(exc)}
+
+    # Enriquecer NCMs típicos com descrição
+    ncms_tipicos = sugestao.get("ncms_tipicos", [])
+    if ncms_tipicos:
+        codigos = [r["ncm"] for r in ncms_tipicos if r.get("ncm")]
+        desc_map = await asyncio.to_thread(_query_ncm_descricoes, codigos)
+        for r in ncms_tipicos:
+            r["descricao"] = desc_map.get(str(r.get("ncm") or ""), None)
+
+    return {
+        **sugestao,
+        "cnpj_raiz": cnpj_raiz,
+        "cnae": cnae,
+        "cnae_info": cnae_info,
+        "uf_referencia": uf,
+    }
+
+
+@router.get("/empresa/{cnpj}/dou")
+async def publicacoes_dou_empresa(
+    cnpj: str,
+    dias: int = Query(365, ge=7, le=1825, description="Período em dias para busca no DOU"),
+):
+    """
+    Busca publicações do Diário Oficial da União (DOU) mencionando este CNPJ.
+    Usa a API pública do Querido Diário.
+    """
+    digitos = _apenas_digitos(cnpj)
+    if len(digitos) < 8:
+        raise HTTPException(status_code=400, detail="CNPJ inválido.")
+
+    cnpj14 = digitos.zfill(14)[:14]
+    cnpj_raiz = digitos[:8]
+
+    # Buscar razão social para enriquecer a busca
+    try:
+        perfil = await asyncio.to_thread(_query_perfil, cnpj_raiz)
+        razao = str((perfil or {}).get("razao_social") or "").strip()
+    except Exception:
+        razao = ""
+
+    try:
+        resultados = await _dou.scrape_empresa(cnpj14, razao)
+        return {
+            "cnpj": cnpj14,
+            "razao_social": razao,
+            "total": len(resultados),
+            "publicacoes": resultados[:50],
+            "fonte": "Querido Diário / DOU",
+            "periodo_dias": dias,
+        }
+    except Exception as exc:
+        logger.warning(f"DOU scraper empresa erro: {exc}")
+        return {
+            "cnpj": cnpj14,
+            "razao_social": razao,
+            "total": 0,
+            "publicacoes": [],
+            "erro": str(exc),
+            "fonte": "Querido Diário / DOU",
+        }
+
+
+@router.get("/dou/novas-habilitacoes")
+async def novas_habilitacoes_dou(
+    dias: int = Query(30, ge=1, le=365, description="Período em dias"),
+):
+    """
+    Lista empresas recentemente habilitadas para importação/exportação
+    conforme publicações no DOU (RADAR Receita Federal).
+    """
+    try:
+        termo = "RADAR habilitado importação exportação CNPJ"
+        resultados = await _dou.scrape_empresa("", termo)
+        return {
+            "total": len(resultados),
+            "periodo_dias": dias,
+            "publicacoes": resultados[:50],
+            "fonte": "Querido Diário / DOU",
+            "nota": (
+                "Resultados extraídos do Diário Oficial via Querido Diário (queridodiario.ok.org.br). "
+                "CNPJs e razões sociais são extraídos automaticamente do texto e podem conter imprecisões."
+            ),
+        }
+    except Exception as exc:
+        logger.warning(f"Novas habilitações DOU erro: {exc}")
+        return {"total": 0, "publicacoes": [], "erro": str(exc)}
+
+
+@router.get("/setores")
+async def listar_setores():
+    """Lista os setores CNAE disponíveis."""
+    return {"setores": cnae_service.listar_setores()}
+
+
+@router.get("/segmentos")
+async def listar_segmentos(setor: Optional[str] = Query(None)):
+    """Lista os segmentos CNAE, opcionalmente filtrados por setor."""
+    return {"segmentos": cnae_service.listar_segmentos(setor)}
+
+
 @router.get("/diagnostico/teste-autocomplete")
 async def teste_autocomplete(q: str = Query("Vale")):
     """Teste do autocomplete retornando erro como 200 para diagnóstico."""
@@ -665,14 +861,3 @@ async def diagnostico_colunas(tabela: str = Query("empresas_base")):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-
-@router.get("/setores")
-def listar_setores():
-    """Retorna os setores disponíveis na tabela CNAE proprietária."""
-    return {"setores": cnae_service.listar_setores()}
-
-
-@router.get("/segmentos")
-def listar_segmentos(setor: Optional[str] = Query(None)):
-    """Retorna segmentos, opcionalmente filtrados por setor."""
-    return {"segmentos": cnae_service.listar_segmentos(setor=setor)}

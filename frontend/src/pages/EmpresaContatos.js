@@ -2,17 +2,24 @@ import React, { useState, useCallback } from 'react';
 import {
   Alert, AutoComplete, Badge, Button, Card, Col, Descriptions, Divider,
   Empty, Input, Row, Spin, Table, Tag, Tabs, Tooltip, Typography, message,
+  Statistic, Timeline,
 } from 'antd';
 import {
   ApartmentOutlined,
   BankOutlined,
+  BulbOutlined,
+  CalendarOutlined,
   EnvironmentOutlined,
   ExportOutlined,
+  FileTextOutlined,
+  GlobalOutlined,
   ImportOutlined,
+  MailOutlined,
   PhoneOutlined,
   SearchOutlined,
   ShopOutlined,
   TagsOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import {
   Bar, BarChart, CartesianGrid, Cell, Legend,
@@ -20,20 +27,9 @@ import {
 } from 'recharts';
 import api from '../services/api';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 const COLORS = ['#667eea', '#4facfe', '#f093fb', '#43e97b', '#fa709a', '#fee140'];
-
-const fmtUsd = (v) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v || 0);
-
-const fmtNum = (v) =>
-  new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).format(v || 0);
-
-const fmtCnpj = (v) => {
-  const s = String(v || '').replace(/\D/g, '').padStart(14, '0');
-  return `${s.slice(0, 2)}.${s.slice(2, 5)}.${s.slice(5, 8)}/${s.slice(8, 12)}-${s.slice(12, 14)}`;
-};
 
 const SETOR_COLORS = {
   INDÚSTRIA: 'blue',
@@ -43,30 +39,46 @@ const SETOR_COLORS = {
   PRIMÁRIO: 'green',
 };
 
-const BadgeTipo = ({ t }) => (
-  <Tag color={t === 'IMP' || t === 'Importação' ? 'blue' : 'green'} style={{ fontSize: 11 }}>
-    {t === 'IMP' || t === 'Importação' ? 'Importação' : 'Exportação'}
-  </Tag>
-);
+// ─── Formatação ───────────────────────────────────────────────────────────────
+const fmtUsd = (v) =>
+  v == null ? '—'
+  : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
-// ─── KPI Card ────────────────────────────────────────────────────────────────
-const KpiCard = ({ title, value, icon, gradient, subtitle }) => (
+const fmtNum = (v) =>
+  v == null ? '—'
+  : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).format(v);
+
+const fmtCnpj = (v) => {
+  const s = String(v || '').replace(/\D/g, '').padStart(14, '0');
+  return `${s.slice(0, 2)}.${s.slice(2, 5)}.${s.slice(5, 8)}/${s.slice(8, 12)}-${s.slice(12, 14)}`;
+};
+
+const fmtRange = (v) => {
+  if (!v) return '—';
+  if (v >= 1e9) return `US$ ${(v / 1e9).toFixed(1)} Bi`;
+  if (v >= 1e6) return `US$ ${(v / 1e6).toFixed(1)} Mi`;
+  if (v >= 1e3) return `US$ ${(v / 1e3).toFixed(0)} Mil`;
+  return fmtUsd(v);
+};
+
+// ─── Componentes reutilizáveis ────────────────────────────────────────────────
+
+const KpiCard = ({ title, value, icon, gradient, subtitle, small }) => (
   <Card
     style={{ borderRadius: 10, background: gradient, border: 'none', height: '100%' }}
-    bodyStyle={{ padding: '18px 20px' }}
+    bodyStyle={{ padding: small ? '12px 16px' : '18px 20px' }}
   >
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
       <div>
-        <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12, marginBottom: 4 }}>{title}</div>
-        <div style={{ color: '#fff', fontSize: 20, fontWeight: 700, lineHeight: 1.2 }}>{value}</div>
+        <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: small ? 11 : 12, marginBottom: 4 }}>{title}</div>
+        <div style={{ color: '#fff', fontSize: small ? 16 : 20, fontWeight: 700, lineHeight: 1.2 }}>{value}</div>
         {subtitle && <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 4 }}>{subtitle}</div>}
       </div>
-      <div style={{ fontSize: 32, color: 'rgba(255,255,255,0.25)' }}>{icon}</div>
+      <div style={{ fontSize: small ? 24 : 32, color: 'rgba(255,255,255,0.25)' }}>{icon}</div>
     </div>
   </Card>
 );
 
-// ─── Hierarquia CNAE Badge ────────────────────────────────────────────────────
 const CnaeBreadcrumb = ({ cnae }) => {
   if (!cnae) return null;
   const partes = [
@@ -75,12 +87,68 @@ const CnaeBreadcrumb = ({ cnae }) => {
     cnae.ramo && { label: cnae.ramo, color: 'volcano' },
     cnae.categoria && { label: cnae.categoria, color: 'gold' },
   ].filter(Boolean);
+  if (!partes.length) return null;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-      {partes.map((p, i) => (
-        <Tag key={i} color={p.color} style={{ margin: 0 }}>{p.label}</Tag>
-      ))}
+      {partes.map((p, i) => <Tag key={i} color={p.color} style={{ margin: 0 }}>{p.label}</Tag>)}
     </div>
+  );
+};
+
+const ContatoCard = ({ contato }) => {
+  if (!contato) return null;
+  const temContato = contato.telefone1 || contato.telefone2 || contato.email;
+  return (
+    <Card
+      title={<span><PhoneOutlined style={{ color: '#52c41a', marginRight: 8 }} />Contato Receita Federal</span>}
+      size="small"
+      style={{ marginTop: 16, borderLeft: '4px solid #52c41a' }}
+    >
+      <Descriptions column={1} size="small">
+        {contato.cnpj_completo && (
+          <Descriptions.Item label="CNPJ Matriz">
+            <Text copyable={{ text: contato.cnpj_completo }}>{fmtCnpj(contato.cnpj_completo)}</Text>
+          </Descriptions.Item>
+        )}
+        {contato.uf && (
+          <Descriptions.Item label="Localização">
+            <Tag color="geekblue">{contato.uf}</Tag>
+            {contato.municipio && <span style={{ marginLeft: 4 }}>{contato.municipio}</span>}
+          </Descriptions.Item>
+        )}
+        {contato.telefone1 && (
+          <Descriptions.Item label="Telefone 1">
+            <PhoneOutlined style={{ color: '#52c41a', marginRight: 6 }} />
+            <Text copyable={{ text: contato.telefone1 }}>{contato.telefone1}</Text>
+          </Descriptions.Item>
+        )}
+        {contato.telefone2 && (
+          <Descriptions.Item label="Telefone 2">
+            <PhoneOutlined style={{ color: '#52c41a', marginRight: 6 }} />
+            <Text copyable={{ text: contato.telefone2 }}>{contato.telefone2}</Text>
+          </Descriptions.Item>
+        )}
+        {contato.email && (
+          <Descriptions.Item label="E-mail">
+            <MailOutlined style={{ color: '#1890ff', marginRight: 6 }} />
+            <Text copyable={{ text: contato.email }}>{contato.email}</Text>
+          </Descriptions.Item>
+        )}
+        {contato.situacao_cadastral && (
+          <Descriptions.Item label="Situação">
+            <Badge
+              status={contato.situacao_cadastral === 'ATIVA' ? 'success' : 'error'}
+              text={contato.situacao_cadastral}
+            />
+          </Descriptions.Item>
+        )}
+      </Descriptions>
+      {!temContato && (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Sem telefone ou e-mail cadastrado na Receita Federal para esta empresa.
+        </Text>
+      )}
+    </Card>
   );
 };
 
@@ -89,22 +157,29 @@ const colsEstabelecimentos = [
   {
     title: 'UF / Município',
     key: 'local',
-    width: 160,
+    width: 170,
     render: (_, r) => (
       <div>
-        <Tag color="default">{r.uf || '—'}</Tag>
+        <Tag color="geekblue">{r.uf || '—'}</Tag>
         <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{r.municipio || '—'}</div>
       </div>
     ),
   },
   {
+    title: 'CNPJ',
+    dataIndex: 'cnpj_completo',
+    key: 'cnpj',
+    width: 160,
+    render: (v) => v ? <Text copyable={{ text: v }} style={{ fontSize: 11 }}>{fmtCnpj(v)}</Text> : '—',
+  },
+  {
     title: 'CNAE',
     key: 'cnae',
-    width: 100,
+    width: 90,
     render: (_, r) => <Text code style={{ fontSize: 11 }}>{r.cnae_fiscal || '—'}</Text>,
   },
   {
-    title: 'Classificação',
+    title: 'Setor / Segmento',
     key: 'classif',
     render: (_, r) => <CnaeBreadcrumb cnae={r.cnae_info} />,
   },
@@ -116,16 +191,25 @@ const colsEstabelecimentos = [
       <div style={{ fontSize: 12 }}>
         {r.email && (
           <div style={{ marginBottom: 2 }}>
+            <MailOutlined style={{ color: '#1890ff', marginRight: 4 }} />
             <Text copyable={{ text: r.email }} style={{ fontSize: 11 }}>{r.email}</Text>
           </div>
         )}
         {r.telefone1 && (
           <div>
             <PhoneOutlined style={{ marginRight: 4, color: '#52c41a' }} />
-            <Text style={{ fontSize: 11 }}>{r.telefone1}</Text>
+            <Text copyable={{ text: r.telefone1 }} style={{ fontSize: 11 }}>{r.telefone1}</Text>
           </div>
         )}
-        {!r.email && !r.telefone1 && <Text type="secondary" style={{ fontSize: 11 }}>Sem contato cadastrado</Text>}
+        {r.telefone2 && r.telefone2 !== r.telefone1 && (
+          <div>
+            <PhoneOutlined style={{ marginRight: 4, color: '#52c41a' }} />
+            <Text style={{ fontSize: 11 }}>{r.telefone2}</Text>
+          </div>
+        )}
+        {!r.email && !r.telefone1 && (
+          <Text type="secondary" style={{ fontSize: 11 }}>Sem contato</Text>
+        )}
       </div>
     ),
   },
@@ -133,7 +217,7 @@ const colsEstabelecimentos = [
     title: 'Situação',
     dataIndex: 'situacao_cadastral',
     key: 'situacao',
-    width: 100,
+    width: 90,
     render: (v) => (
       <Badge
         status={v === 'ATIVA' ? 'success' : v === 'BAIXADA' ? 'error' : 'warning'}
@@ -146,9 +230,20 @@ const colsEstabelecimentos = [
 // ─── Tabela NCMs ──────────────────────────────────────────────────────────────
 const colsNcm = [
   { title: 'NCM', dataIndex: 'ncm', key: 'ncm', width: 100, render: (v) => <Text code>{v}</Text> },
-  { title: 'Descrição', dataIndex: 'descricao', key: 'desc', ellipsis: true },
-  { title: 'Tipo', dataIndex: 'tipo', key: 'tipo', width: 110, render: (v) => <BadgeTipo t={v} /> },
-  { title: 'Valor USD', dataIndex: 'valor_usd', key: 'fob', width: 130, render: fmtUsd, sorter: (a, b) => (a.valor_usd || 0) - (b.valor_usd || 0) },
+  { title: 'Descrição', dataIndex: 'descricao', key: 'desc', ellipsis: true, render: (v) => v || <Text type="secondary">—</Text> },
+  {
+    title: 'Tipo', dataIndex: 'tipo', key: 'tipo', width: 110,
+    render: (v) => {
+      const isImp = ['IMP', 'IMPORTAÇÃO', 'IMPORTACAO'].includes(String(v || '').toUpperCase());
+      return <Tag color={isImp ? 'blue' : 'green'}>{isImp ? 'Importação' : 'Exportação'}</Tag>;
+    }
+  },
+  {
+    title: 'Valor USD', dataIndex: 'valor_usd', key: 'fob', width: 130,
+    render: fmtUsd,
+    sorter: (a, b) => (a.valor_usd || 0) - (b.valor_usd || 0),
+    defaultSortOrder: 'descend',
+  },
   { title: 'Peso KG', dataIndex: 'peso_kg', key: 'peso', width: 110, render: fmtNum },
 ];
 
@@ -160,15 +255,18 @@ export default function EmpresaContatos() {
   const [loading, setLoading] = useState(false);
   const [dados, setDados] = useState(null);
   const [activeTab, setActiveTab] = useState('perfil');
+  const [sugestao, setSugestao] = useState(null);
+  const [loadingSugestao, setLoadingSugestao] = useState(false);
+  const [dou, setDou] = useState(null);
+  const [loadingDou, setLoadingDou] = useState(false);
+  const [selectedCnpj, setSelectedCnpj] = useState(null);
 
-  // Autocomplete: busca por nome ou CNPJ
   const buscarSugestoes = useCallback(async (q) => {
     const termo = (q || '').trim();
     setQuery(termo);
     if (termo.length < 2) { setOptions([]); return; }
     setLoadingSearch(true);
     try {
-      // Tenta autocomplete unificado (nome + CNPJ)
       const res = await api.get('/api/contatos/autocomplete', { params: { q: termo, limit: 20 } });
       const items = res?.data?.items || [];
       setOptions(
@@ -178,7 +276,10 @@ export default function EmpresaContatos() {
             <div style={{ lineHeight: 1.4 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>{e.razao_social || e.nome}</div>
               <div style={{ fontSize: 11, color: '#888' }}>
-                {e.cnpj ? fmtCnpj(e.cnpj) : ''}{e.uf ? ` · ${e.uf}` : ''}{e.cnae_descricao ? ` · ${e.cnae_descricao}` : ''}
+                {e.cnpj ? fmtCnpj(e.cnpj) : ''}
+                {e.uf ? ` · ${e.uf}` : ''}
+                {e.setor ? ` · ${e.setor}` : ''}
+                {e.cnae_descricao ? ` · ${e.cnae_descricao}` : ''}
               </div>
             </div>
           ),
@@ -193,12 +294,14 @@ export default function EmpresaContatos() {
     }
   }, []);
 
-  // Carregar perfil completo da empresa
   const carregarEmpresa = useCallback(async (cnpj) => {
     if (!cnpj) return;
     setLoading(true);
     setDados(null);
+    setSugestao(null);
+    setDou(null);
     setActiveTab('perfil');
+    setSelectedCnpj(cnpj);
     try {
       const res = await api.get(`/api/contatos/empresa/${encodeURIComponent(cnpj)}`);
       setDados(res.data);
@@ -208,6 +311,38 @@ export default function EmpresaContatos() {
       setLoading(false);
     }
   }, []);
+
+  const carregarSugestao = useCallback(async () => {
+    if (!selectedCnpj) return;
+    setLoadingSugestao(true);
+    try {
+      const res = await api.get(`/api/contatos/empresa/${encodeURIComponent(selectedCnpj)}/sugestao`);
+      setSugestao(res.data);
+    } catch (e) {
+      message.error('Erro ao carregar sugestão comex.');
+    } finally {
+      setLoadingSugestao(false);
+    }
+  }, [selectedCnpj]);
+
+  const carregarDou = useCallback(async () => {
+    if (!selectedCnpj) return;
+    setLoadingDou(true);
+    try {
+      const res = await api.get(`/api/contatos/empresa/${encodeURIComponent(selectedCnpj)}/dou`);
+      setDou(res.data);
+    } catch (e) {
+      message.error('Erro ao buscar publicações no DOU.');
+    } finally {
+      setLoadingDou(false);
+    }
+  }, [selectedCnpj]);
+
+  const onTabChange = (key) => {
+    setActiveTab(key);
+    if (key === 'sugestao' && !sugestao && !loadingSugestao) carregarSugestao();
+    if (key === 'dou' && !dou && !loadingDou) carregarDou();
+  };
 
   const onSelect = (_, opt) => {
     const cnpj = opt.cnpj || opt.value;
@@ -224,114 +359,133 @@ export default function EmpresaContatos() {
     }
   };
 
-  // ─── Render ─────────────────────────────────────────────────────────────────
+  // ─── Dados extraídos ─────────────────────────────────────────────────────────
   const kpis = dados?.kpis || {};
   const perfil = dados?.perfil || {};
   const estabelecimentos = dados?.estabelecimentos || [];
   const ncms = dados?.ncms || [];
   const comexPorAno = dados?.comex_por_ano || [];
   const cnaeInfo = dados?.cnae_info || null;
+  const contato_rf = dados?.contato_rf || null;
   const totalEstab = estabelecimentos.length;
-  const ufsUnicas = [...new Set(estabelecimentos.map((e) => e.uf).filter(Boolean))];
+  const ufsUnicas = kpis.ufs_atuacao || [...new Set(estabelecimentos.map((e) => e.uf).filter(Boolean))];
+  const temComex = dados?.tem_comex;
 
-  // Dados para gráfico comex por ano
   const comexChartData = comexPorAno.map((r) => ({
     ano: String(r.ano),
     Importação: Number(r.valor_importacao) || 0,
     Exportação: Number(r.valor_exportacao) || 0,
   }));
 
-  const tabItems = [
+  // ─── Abas ────────────────────────────────────────────────────────────────────
+  const tabItems = dados ? [
     {
       key: 'perfil',
       label: <span><BankOutlined /> Perfil</span>,
       children: (
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={16}>
-            <Card title="Dados Cadastrais" size="small" style={{ marginBottom: 16 }}>
+            <Card title={<span><UserOutlined /> Dados Cadastrais</span>} size="small" style={{ marginBottom: 16 }}>
               <Descriptions column={{ xs: 1, sm: 2 }} size="small">
-                <Descriptions.Item label="Razão Social">
-                  <strong>{perfil.razao_social || '—'}</strong>
+                <Descriptions.Item label="Razão Social" span={2}>
+                  <strong style={{ fontSize: 14 }}>{perfil.razao_social || '—'}</strong>
                 </Descriptions.Item>
                 <Descriptions.Item label="CNPJ">
                   <Text copyable>{perfil.cnpj ? fmtCnpj(perfil.cnpj) : '—'}</Text>
                 </Descriptions.Item>
-                <Descriptions.Item label="Natureza Jurídica">{perfil.natureza_juridica || '—'}</Descriptions.Item>
                 <Descriptions.Item label="Porte">{perfil.porte || '—'}</Descriptions.Item>
-                <Descriptions.Item label="UF Sede">{perfil.uf_sede || '—'}</Descriptions.Item>
+                <Descriptions.Item label="Natureza Jurídica">{perfil.natureza_juridica || '—'}</Descriptions.Item>
+                <Descriptions.Item label="Data Abertura">{perfil.data_abertura || '—'}</Descriptions.Item>
+                <Descriptions.Item label="UF Sede">
+                  {perfil.uf_sede ? <Tag color="geekblue">{perfil.uf_sede}</Tag> : '—'}
+                </Descriptions.Item>
                 <Descriptions.Item label="Município Sede">{perfil.municipio_sede || '—'}</Descriptions.Item>
                 <Descriptions.Item label="Situação">
                   <Badge
-                    status={perfil.situacao === 'ATIVA' ? 'success' : 'error'}
+                    status={perfil.situacao === 'ATIVA' ? 'success' : perfil.situacao ? 'error' : 'default'}
                     text={perfil.situacao || '—'}
                   />
                 </Descriptions.Item>
-                <Descriptions.Item label="Data Abertura">{perfil.data_abertura || '—'}</Descriptions.Item>
+                <Descriptions.Item label="Estabelecimentos">{totalEstab || '—'}</Descriptions.Item>
               </Descriptions>
             </Card>
 
             <Card
-              title={<span><TagsOutlined /> CNAE Principal</span>}
+              title={<span><TagsOutlined /> Classificação CNAE</span>}
               size="small"
-              extra={cnaeInfo && <Tag color={SETOR_COLORS[cnaeInfo.setor] || 'default'}>{cnaeInfo.setor}</Tag>}
+              extra={cnaeInfo?.setor && <Tag color={SETOR_COLORS[cnaeInfo.setor] || 'default'}>{cnaeInfo.setor}</Tag>}
             >
               <div style={{ marginBottom: 8 }}>
                 <Text code style={{ fontSize: 13 }}>{perfil.cnae_fiscal || '—'}</Text>
-                <Text style={{ marginLeft: 12 }}>{perfil.cnae_descricao || cnaeInfo?.descricao || '—'}</Text>
+                <Text style={{ marginLeft: 12, color: '#555' }}>{perfil.cnae_descricao || cnaeInfo?.descricao || '—'}</Text>
               </div>
               <CnaeBreadcrumb cnae={cnaeInfo} />
               {cnaeInfo?.produto && (
                 <div style={{ marginTop: 8 }}>
-                  <Text type="secondary" style={{ fontSize: 11 }}>Produto: </Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Produto/Subproduto: </Text>
                   <Tag color="lime">{cnaeInfo.produto}</Tag>
+                </div>
+              )}
+              {cnaeInfo && (
+                <div style={{ marginTop: 14 }}>
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Row gutter={8}>
+                    {[
+                      { label: 'Setor', value: cnaeInfo.setor, color: SETOR_COLORS[cnaeInfo.setor] },
+                      { label: 'Segmento', value: cnaeInfo.segmento, color: 'geekblue' },
+                      { label: 'Ramo', value: cnaeInfo.ramo, color: 'volcano' },
+                      { label: 'Categoria', value: cnaeInfo.categoria, color: 'gold' },
+                    ].filter((r) => r.value).map((r) => (
+                      <Col key={r.label} xs={24} sm={12} style={{ marginBottom: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Text type="secondary" style={{ fontSize: 11, width: 70, flexShrink: 0 }}>{r.label}:</Text>
+                          <Tag color={r.color} style={{ margin: 0 }}>{r.value}</Tag>
+                        </div>
+                      </Col>
+                    ))}
+                  </Row>
                 </div>
               )}
             </Card>
           </Col>
 
           <Col xs={24} lg={8}>
-            <Card title="Presença Nacional" size="small">
-              <div style={{ marginBottom: 12 }}>
-                <Text type="secondary">Estados com estabelecimentos:</Text>
-                <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {ufsUnicas.length > 0
-                    ? ufsUnicas.map((uf) => <Tag key={uf} color="geekblue">{uf}</Tag>)
-                    : <Text type="secondary">—</Text>}
-                </div>
-              </div>
-              <Divider style={{ margin: '12px 0' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ fontSize: 11, color: '#888' }}>Estabelecimentos</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#667eea' }}>{totalEstab}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: '#888' }}>Estados</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#4facfe' }}>{ufsUnicas.length}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: '#888' }}>NCMs ativos</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#f093fb' }}>{kpis.num_ncms ?? '—'}</div>
-                </div>
+            <Card title={<span><EnvironmentOutlined /> Presença Nacional</span>} size="small">
+              <Row gutter={8} style={{ marginBottom: 12 }}>
+                <Col span={8}>
+                  <Statistic title="Unidades" value={totalEstab || 0} valueStyle={{ fontSize: 20, color: '#667eea' }} />
+                </Col>
+                <Col span={8}>
+                  <Statistic title="Estados" value={ufsUnicas.length} valueStyle={{ fontSize: 20, color: '#4facfe' }} />
+                </Col>
+                <Col span={8}>
+                  <Statistic title="NCMs" value={kpis.num_ncms ?? '—'} valueStyle={{ fontSize: 20, color: '#f093fb' }} />
+                </Col>
+              </Row>
+              <Divider style={{ margin: '8px 0' }} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {ufsUnicas.length > 0
+                  ? ufsUnicas.map((uf) => <Tag key={uf} color="geekblue">{uf}</Tag>)
+                  : <Text type="secondary" style={{ fontSize: 12 }}>Nenhuma UF identificada</Text>}
               </div>
             </Card>
 
-            {cnaeInfo && (
-              <Card title="Segmento de Mercado" size="small" style={{ marginTop: 16 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {[
-                    { label: 'Setor', value: cnaeInfo.setor, color: SETOR_COLORS[cnaeInfo.setor] },
-                    { label: 'Segmento', value: cnaeInfo.segmento, color: 'geekblue' },
-                    { label: 'Ramo', value: cnaeInfo.ramo, color: 'volcano' },
-                    { label: 'Categoria', value: cnaeInfo.categoria, color: 'gold' },
-                  ].filter((r) => r.value).map((r) => (
-                    <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 11, width: 70, flexShrink: 0 }}>{r.label}:</Text>
-                      <Tag color={r.color} style={{ margin: 0 }}>{r.value}</Tag>
-                    </div>
-                  ))}
-                </div>
-              </Card>
+            <ContatoCard contato={contato_rf} />
+
+            {dados?.aviso && (
+              <Alert
+                message={dados.aviso}
+                type={dados.aviso_tipo || 'info'}
+                showIcon
+                style={{ marginTop: 16 }}
+                action={
+                  !temComex && (
+                    <Button size="small" onClick={() => onTabChange('sugestao')}>
+                      Ver Sugestão
+                    </Button>
+                  )
+                }
+              />
             )}
           </Col>
         </Row>
@@ -339,20 +493,31 @@ export default function EmpresaContatos() {
     },
     {
       key: 'estabelecimentos',
-      label: <span><ShopOutlined /> Estabelecimentos <Tag>{totalEstab}</Tag></span>,
+      label: (
+        <span>
+          <ShopOutlined /> Estabelecimentos
+          {totalEstab > 0 && <Tag style={{ marginLeft: 4 }}>{totalEstab}</Tag>}
+        </span>
+      ),
       children: (
         <Card size="small">
           {estabelecimentos.length === 0 ? (
             <Empty description="Nenhum estabelecimento encontrado" />
           ) : (
-            <Table
-              rowKey={(r, i) => `${r.cnpj_completo || i}`}
-              columns={colsEstabelecimentos}
-              dataSource={estabelecimentos}
-              pagination={{ pageSize: 10, showSizeChanger: false }}
-              size="small"
-              scroll={{ x: 700 }}
-            />
+            <>
+              <div style={{ marginBottom: 10, fontSize: 12, color: '#666' }}>
+                Dados de contato extraídos do cadastro da Receita Federal.
+                Telefone e e-mail são os informados no momento do cadastro/última atualização.
+              </div>
+              <Table
+                rowKey={(r, i) => `${r.cnpj_completo || i}`}
+                columns={colsEstabelecimentos}
+                dataSource={estabelecimentos}
+                pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
+                size="small"
+                scroll={{ x: 800 }}
+              />
+            </>
           )}
         </Card>
       ),
@@ -362,95 +527,333 @@ export default function EmpresaContatos() {
       label: <span><ExportOutlined /> Comex</span>,
       children: (
         <Row gutter={[16, 16]}>
-          <Col xs={24}>
-            <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-              <Col xs={24} sm={12} md={6}>
-                <KpiCard
-                  title="Total Importado"
-                  value={fmtUsd(kpis.valor_importacao_usd)}
-                  icon={<ImportOutlined />}
-                  gradient="linear-gradient(135deg,#667eea,#764ba2)"
-                  subtitle="Valor FOB USD"
-                />
-              </Col>
-              <Col xs={24} sm={12} md={6}>
-                <KpiCard
-                  title="Total Exportado"
-                  value={fmtUsd(kpis.valor_exportacao_usd)}
-                  icon={<ExportOutlined />}
-                  gradient="linear-gradient(135deg,#4facfe,#00f2fe)"
-                  subtitle="Valor FOB USD"
-                />
-              </Col>
-              <Col xs={24} sm={12} md={6}>
-                <KpiCard
-                  title="Saldo Comercial"
-                  value={fmtUsd((kpis.valor_exportacao_usd || 0) - (kpis.valor_importacao_usd || 0))}
-                  icon={<ApartmentOutlined />}
-                  gradient={
-                    (kpis.valor_exportacao_usd || 0) >= (kpis.valor_importacao_usd || 0)
-                      ? 'linear-gradient(135deg,#43e97b,#38f9d7)'
-                      : 'linear-gradient(135deg,#f093fb,#f5576c)'
-                  }
-                  subtitle="Exportação − Importação"
-                />
-              </Col>
-              <Col xs={24} sm={12} md={6}>
-                <KpiCard
-                  title="Países Parceiros"
-                  value={kpis.num_paises ?? '—'}
-                  icon={<EnvironmentOutlined />}
-                  gradient="linear-gradient(135deg,#fa709a,#fee140)"
-                  subtitle="Destinos/origens distintos"
-                />
-              </Col>
-            </Row>
-          </Col>
-
-          {comexChartData.length > 0 && (
-            <Col xs={24} lg={14}>
-              <Card title="Evolução Anual — Importação vs Exportação (USD FOB)" size="small">
-                <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={comexChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="ano" tick={{ fontSize: 12 }} />
-                    <YAxis
-                      tick={{ fontSize: 11 }}
-                      tickFormatter={(v) =>
-                        v >= 1e9 ? `US$${(v / 1e9).toFixed(1)}B`
-                        : v >= 1e6 ? `US$${(v / 1e6).toFixed(1)}M`
-                        : `US$${(v / 1e3).toFixed(0)}K`
-                      }
-                    />
-                    <RTooltip
-                      formatter={(v, name) => [fmtUsd(v), name]}
-                      contentStyle={{ fontSize: 12 }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="Importação" fill="#667eea" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="Exportação" fill="#43e97b" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </Card>
+          {!temComex && (
+            <Col xs={24}>
+              <Alert
+                message="Sem histórico de comércio exterior"
+                description={
+                  dados?.aviso ||
+                  'Esta empresa não possui operações registradas na base disponível. ' +
+                  'Consulte a aba "Sugestão Comex" para ver o potencial estimado com base no segmento.'
+                }
+                type="warning"
+                showIcon
+                action={
+                  <Button size="small" onClick={() => onTabChange('sugestao')}>
+                    Ver Sugestão
+                  </Button>
+                }
+              />
             </Col>
           )}
 
-          <Col xs={24} lg={comexChartData.length > 0 ? 10 : 24}>
-            <Card title="Operações por NCM" size="small">
-              <Table
-                rowKey={(r, i) => `${r.ncm}-${i}`}
-                columns={colsNcm}
-                dataSource={ncms}
-                pagination={{ pageSize: 8, showSizeChanger: false }}
-                size="small"
-                scroll={{ x: 500 }}
-              />
-            </Card>
-          </Col>
+          {temComex && (
+            <>
+              <Col xs={24}>
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} sm={12} md={6}>
+                    <KpiCard
+                      title="Total Importado"
+                      value={fmtUsd(kpis.valor_importacao_usd)}
+                      icon={<ImportOutlined />}
+                      gradient="linear-gradient(135deg,#667eea,#764ba2)"
+                      subtitle="Valor FOB USD"
+                    />
+                  </Col>
+                  <Col xs={24} sm={12} md={6}>
+                    <KpiCard
+                      title="Total Exportado"
+                      value={fmtUsd(kpis.valor_exportacao_usd)}
+                      icon={<ExportOutlined />}
+                      gradient="linear-gradient(135deg,#4facfe,#00f2fe)"
+                      subtitle="Valor FOB USD"
+                    />
+                  </Col>
+                  <Col xs={24} sm={12} md={6}>
+                    <KpiCard
+                      title="Saldo"
+                      value={fmtUsd((kpis.valor_exportacao_usd || 0) - (kpis.valor_importacao_usd || 0))}
+                      icon={<ApartmentOutlined />}
+                      gradient={
+                        (kpis.valor_exportacao_usd || 0) >= (kpis.valor_importacao_usd || 0)
+                          ? 'linear-gradient(135deg,#43e97b,#38f9d7)'
+                          : 'linear-gradient(135deg,#f093fb,#f5576c)'
+                      }
+                      subtitle="Exportação − Importação"
+                    />
+                  </Col>
+                  <Col xs={24} sm={12} md={6}>
+                    <KpiCard
+                      title="NCMs Distintos"
+                      value={kpis.num_ncms ?? '—'}
+                      icon={<TagsOutlined />}
+                      gradient="linear-gradient(135deg,#fa709a,#fee140)"
+                      subtitle="Produtos negociados"
+                    />
+                  </Col>
+                </Row>
+              </Col>
+
+              {comexChartData.length > 0 && (
+                <Col xs={24} lg={14}>
+                  <Card title="Evolução Anual — Importação vs Exportação (USD FOB)" size="small">
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={comexChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="ano" tick={{ fontSize: 12 }} />
+                        <YAxis
+                          tick={{ fontSize: 11 }}
+                          tickFormatter={(v) =>
+                            v >= 1e9 ? `US$${(v / 1e9).toFixed(1)}B`
+                            : v >= 1e6 ? `US$${(v / 1e6).toFixed(1)}M`
+                            : `US$${(v / 1e3).toFixed(0)}K`
+                          }
+                        />
+                        <RTooltip formatter={(v, name) => [fmtUsd(v), name]} contentStyle={{ fontSize: 12 }} />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Bar dataKey="Importação" fill="#667eea" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="Exportação" fill="#43e97b" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </Card>
+                </Col>
+              )}
+
+              <Col xs={24} lg={comexChartData.length > 0 ? 10 : 24}>
+                <Card title="Operações por NCM" size="small">
+                  <Table
+                    rowKey={(r, i) => `${r.ncm}-${i}`}
+                    columns={colsNcm}
+                    dataSource={ncms}
+                    pagination={{ pageSize: 8, showSizeChanger: false }}
+                    size="small"
+                    scroll={{ x: 500 }}
+                  />
+                </Card>
+              </Col>
+            </>
+          )}
         </Row>
       ),
     },
-  ];
+    {
+      key: 'sugestao',
+      label: <span><BulbOutlined /> Sugestão Comex</span>,
+      children: (
+        <div>
+          {loadingSugestao ? (
+            <div style={{ textAlign: 'center', padding: 60 }}>
+              <Spin tip="Calculando sugestão com base no segmento..." />
+            </div>
+          ) : !sugestao ? (
+            <div style={{ textAlign: 'center', padding: 40 }}>
+              <Button type="primary" icon={<BulbOutlined />} onClick={carregarSugestao}>
+                Calcular Sugestão de Potencial Comex
+              </Button>
+              <Paragraph type="secondary" style={{ marginTop: 12, fontSize: 12 }}>
+                Baseado em empresas do mesmo CNAE/segmento que já operam no comércio exterior.
+                Similar à análise de viabilidade da Logcomex.
+              </Paragraph>
+            </div>
+          ) : !sugestao.tem_sugestao ? (
+            <Alert
+              message="Sugestão não disponível"
+              description={sugestao.motivo || sugestao.metodologia}
+              type="info"
+              showIcon
+            />
+          ) : (
+            <Row gutter={[16, 16]}>
+              <Col xs={24}>
+                <Alert
+                  message="Análise de Potencial — Dados Estimados"
+                  description={sugestao.metodologia}
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 8 }}
+                />
+              </Col>
+
+              {/* CNAE da empresa */}
+              {sugestao.cnae_info && (
+                <Col xs={24}>
+                  <Card size="small" title="Segmento de Referência">
+                    <CnaeBreadcrumb cnae={sugestao.cnae_info} />
+                    <Text style={{ marginLeft: 0, marginTop: 6, display: 'block', fontSize: 12, color: '#888' }}>
+                      CNAE {sugestao.cnae} · {sugestao.num_empresas_referencia} empresa(s) analisada(s) · últimos {sugestao.anos_base} anos
+                    </Text>
+                  </Card>
+                </Col>
+              )}
+
+              {/* KPIs sugeridos */}
+              <Col xs={24} sm={12} md={6}>
+                <KpiCard
+                  title="Import. Potencial (mediana)"
+                  value={fmtRange(sugestao.mediana_imp)}
+                  icon={<ImportOutlined />}
+                  gradient="linear-gradient(135deg,#667eea,#764ba2)"
+                  subtitle={`Média: ${fmtRange(sugestao.media_imp)}`}
+                  small
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6}>
+                <KpiCard
+                  title="Export. Potencial (mediana)"
+                  value={fmtRange(sugestao.mediana_exp)}
+                  icon={<ExportOutlined />}
+                  gradient="linear-gradient(135deg,#43e97b,#38f9d7)"
+                  subtitle={`Média: ${fmtRange(sugestao.media_exp)}`}
+                  small
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6}>
+                <KpiCard
+                  title="Empresas de Referência"
+                  value={sugestao.num_empresas_referencia ?? '—'}
+                  icon={<GlobalOutlined />}
+                  gradient="linear-gradient(135deg,#4facfe,#00f2fe)"
+                  subtitle="Mesmo CNAE com comex ativo"
+                  small
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6}>
+                <KpiCard
+                  title="NCMs Típicos"
+                  value={sugestao.ncms_tipicos?.length ?? 0}
+                  icon={<TagsOutlined />}
+                  gradient="linear-gradient(135deg,#fa709a,#fee140)"
+                  subtitle="Produtos do segmento"
+                  small
+                />
+              </Col>
+
+              {/* NCMs típicos do segmento */}
+              {sugestao.ncms_tipicos?.length > 0 && (
+                <Col xs={24}>
+                  <Card title="NCMs Mais Usados no Segmento" size="small">
+                    <Table
+                      rowKey={(r, i) => `${r.ncm}-${i}`}
+                      size="small"
+                      pagination={{ pageSize: 10, showSizeChanger: false }}
+                      dataSource={sugestao.ncms_tipicos}
+                      columns={[
+                        { title: 'NCM', dataIndex: 'ncm', key: 'ncm', width: 100, render: (v) => <Text code>{v}</Text> },
+                        { title: 'Descrição', dataIndex: 'descricao', key: 'desc', ellipsis: true, render: (v) => v || <Text type="secondary">—</Text> },
+                        {
+                          title: 'Empresas', dataIndex: 'freq_empresas', key: 'freq', width: 90,
+                          render: (v) => <Tag color="blue">{v}</Tag>,
+                          sorter: (a, b) => (a.freq_empresas || 0) - (b.freq_empresas || 0),
+                          defaultSortOrder: 'descend',
+                        },
+                        { title: 'Total IMP (US$)', dataIndex: 'total_imp', key: 'imp', width: 140, render: (v) => fmtRange(v) },
+                        { title: 'Total EXP (US$)', dataIndex: 'total_exp', key: 'exp', width: 140, render: (v) => fmtRange(v) },
+                      ]}
+                      scroll={{ x: 600 }}
+                    />
+                  </Card>
+                </Col>
+              )}
+            </Row>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'dou',
+      label: <span><FileTextOutlined /> Diário Oficial</span>,
+      children: (
+        <div>
+          {loadingDou ? (
+            <div style={{ textAlign: 'center', padding: 60 }}>
+              <Spin tip="Buscando publicações no DOU..." />
+            </div>
+          ) : !dou ? (
+            <div style={{ textAlign: 'center', padding: 40 }}>
+              <Button type="primary" icon={<FileTextOutlined />} onClick={carregarDou}>
+                Buscar no Diário Oficial
+              </Button>
+              <Paragraph type="secondary" style={{ marginTop: 12, fontSize: 12 }}>
+                Verifica publicações do DOU que mencionam este CNPJ ou razão social
+                (habilitações RADAR, portarias, atos normativos, etc.).
+              </Paragraph>
+            </div>
+          ) : (
+            <Row gutter={[16, 16]}>
+              <Col xs={24}>
+                <Alert
+                  message={`${dou.total} publicação(ões) encontrada(s) para ${dou.razao_social || dou.cnpj}`}
+                  description={`Fonte: ${dou.fonte}`}
+                  type={dou.total > 0 ? 'success' : 'info'}
+                  showIcon
+                  action={
+                    <Button size="small" onClick={carregarDou} loading={loadingDou}>
+                      Atualizar
+                    </Button>
+                  }
+                />
+              </Col>
+              {dou.publicacoes?.length > 0 ? (
+                <Col xs={24}>
+                  <Card size="small" title="Publicações no DOU">
+                    <Timeline
+                      items={dou.publicacoes.map((pub, i) => ({
+                        key: i,
+                        color: pub.tipo_ato === 'Habilitação' ? 'green'
+                             : pub.tipo_ato === 'Penalidade' ? 'red'
+                             : 'blue',
+                        children: (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+                              <Tag color={pub.tipo_ato === 'Habilitação' ? 'green' : pub.tipo_ato === 'Penalidade' ? 'red' : 'blue'}>
+                                {pub.tipo_ato || 'Outros'}
+                              </Tag>
+                              {pub.data_pub && (
+                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                  <CalendarOutlined style={{ marginRight: 4 }} />
+                                  {typeof pub.data_pub === 'string' ? pub.data_pub : pub.data_pub}
+                                </Text>
+                              )}
+                              {pub.secao && <Tag>{`Seção ${pub.secao}`}</Tag>}
+                            </div>
+                            {pub.resumo && (
+                              <Paragraph style={{ fontSize: 12, marginBottom: 4, color: '#555' }} ellipsis={{ rows: 3, expandable: true }}>
+                                {pub.resumo}
+                              </Paragraph>
+                            )}
+                            {pub.cnpjs_encontrados?.length > 0 && (
+                              <div style={{ marginTop: 4 }}>
+                                <Text type="secondary" style={{ fontSize: 11 }}>CNPJs: </Text>
+                                {pub.cnpjs_encontrados.map((c) => (
+                                  <Tag key={c} style={{ fontSize: 10 }}>{fmtCnpj(c)}</Tag>
+                                ))}
+                              </div>
+                            )}
+                            {pub.url && (
+                              <a href={pub.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
+                                Ver publicação completa →
+                              </a>
+                            )}
+                          </div>
+                        ),
+                      }))}
+                    />
+                  </Card>
+                </Col>
+              ) : (
+                <Col xs={24}>
+                  <Empty
+                    description="Nenhuma publicação encontrada para este CNPJ no Diário Oficial."
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  />
+                </Col>
+              )}
+            </Row>
+          )}
+        </div>
+      ),
+    },
+  ] : [];
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -461,7 +864,8 @@ export default function EmpresaContatos() {
           Empresas & Contatos
         </Title>
         <Text type="secondary">
-          Busque por razão social ou CNPJ — visualize perfil, estabelecimentos, contatos, CNAE e desempenho no comércio exterior.
+          Busque por razão social ou CNPJ — visualize perfil cadastral, contatos da Receita Federal,
+          CNAE, desempenho no comércio exterior, sugestão de potencial e publicações no DOU.
         </Text>
       </div>
 
@@ -476,17 +880,14 @@ export default function EmpresaContatos() {
               onSelect={onSelect}
               value={query}
               notFoundContent={
-                loadingSearch ? <Spin size="small" /> :
-                query.length >= 2 ? 'Nenhuma empresa encontrada' :
-                'Digite ao menos 2 caracteres ou o CNPJ completo'
+                loadingSearch ? <Spin size="small" /> : query.length >= 2 ? 'Nenhuma empresa encontrada' : null
               }
             >
               <Input
                 size="large"
-                placeholder="Razão social, nome fantasia ou CNPJ (ex.: Vale, Embraer, 33.000.167/0001-01)"
-                prefix={<SearchOutlined style={{ color: '#667eea' }} />}
+                placeholder="Buscar por razão social ou CNPJ (ex.: VALE S.A. ou 33.000.167/0001-01)"
+                prefix={<SearchOutlined style={{ color: '#aaa' }} />}
                 onPressEnter={onSearch}
-                allowClear
               />
             </AutoComplete>
           </Col>
@@ -496,108 +897,46 @@ export default function EmpresaContatos() {
               type="primary"
               icon={<SearchOutlined />}
               onClick={onSearch}
+              loading={loading}
               style={{ background: '#667eea', borderColor: '#667eea' }}
             >
               Buscar
             </Button>
           </Col>
         </Row>
-        <div style={{ marginTop: 10, fontSize: 12, color: '#aaa' }}>
-          <Text type="secondary">
-            Fonte: Receita Federal (Estabelecimentos) + BigQuery (empresas_base + comex UF×NCM) + tabela CNAE proprietária.
-          </Text>
-        </div>
+        {dados && (
+          <div style={{ marginTop: 10, fontSize: 12, color: '#888' }}>
+            Exibindo: <strong>{perfil.razao_social || '—'}</strong>
+            {perfil.cnpj && <> · CNPJ: <Text copyable={{ text: perfil.cnpj }}>{fmtCnpj(perfil.cnpj)}</Text></>}
+          </div>
+        )}
       </Card>
 
-      {/* ── Estado de carregamento ── */}
+      {/* ── Conteúdo ── */}
       {loading && (
-        <div style={{ textAlign: 'center', padding: 60 }}>
-          <Spin size="large" />
-          <div style={{ marginTop: 12, color: '#888' }}>Carregando dados da empresa…</div>
+        <div style={{ textAlign: 'center', padding: 80 }}>
+          <Spin size="large" tip="Carregando dados da empresa..." />
         </div>
       )}
 
-      {/* ── Resultado ── */}
-      {dados && !loading && (
-        <>
-          {/* Alerta de fonte */}
-          {dados.aviso && (
-            <Alert
-              type={dados.aviso_tipo || 'info'}
-              showIcon
-              message={dados.aviso}
-              style={{ marginBottom: 16 }}
-              closable
-            />
-          )}
-
-          {/* Cabeçalho da empresa */}
-          <Card
-            style={{ marginBottom: 16, borderRadius: 10, borderLeft: '4px solid #667eea' }}
-            bodyStyle={{ padding: '16px 20px' }}
-          >
-            <Row align="middle" gutter={16}>
-              <Col flex="auto">
-                <Title level={4} style={{ margin: 0 }}>
-                  {perfil.razao_social || '—'}
-                </Title>
-                <Text type="secondary" style={{ fontSize: 13 }}>
-                  CNPJ: {perfil.cnpj ? fmtCnpj(perfil.cnpj) : '—'}
-                  {perfil.uf_sede ? ` · ${perfil.uf_sede}` : ''}
-                  {perfil.municipio_sede ? ` · ${perfil.municipio_sede}` : ''}
-                </Text>
-              </Col>
-              <Col>
-                {cnaeInfo?.setor && (
-                  <Tag color={SETOR_COLORS[cnaeInfo.setor] || 'default'} style={{ fontSize: 13, padding: '4px 10px' }}>
-                    {cnaeInfo.setor}
-                  </Tag>
-                )}
-                <Badge
-                  status={perfil.situacao === 'ATIVA' ? 'success' : 'error'}
-                  text={
-                    <span style={{ fontSize: 13, fontWeight: 600, color: perfil.situacao === 'ATIVA' ? '#52c41a' : '#ff4d4f' }}>
-                      {perfil.situacao || '—'}
-                    </span>
-                  }
-                />
-              </Col>
-            </Row>
-          </Card>
-
-          {/* Tabs com conteúdo */}
-          <Tabs
-            activeKey={activeTab}
-            onChange={setActiveTab}
-            items={tabItems}
-            tabBarStyle={{ marginBottom: 0 }}
-          />
-        </>
-      )}
-
-      {/* ── Estado vazio inicial ── */}
-      {!dados && !loading && (
+      {!loading && !dados && (
         <Card style={{ borderRadius: 10, textAlign: 'center', padding: '40px 20px' }}>
           <BankOutlined style={{ fontSize: 48, color: '#d9d9d9', marginBottom: 16 }} />
-          <Title level={5} type="secondary">Pesquise uma empresa para começar</Title>
-          <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-            Digite a razão social ou CNPJ na barra acima. Os resultados incluem perfil cadastral,
-            contatos por estabelecimento, classificação CNAE e dados de importação/exportação.
-          </Text>
-          <Divider />
-          <Row gutter={24} justify="center">
-            {[
-              { icon: <ShopOutlined />, texto: 'Todos os estabelecimentos ativos com contatos' },
-              { icon: <TagsOutlined />, texto: 'Classificação CNAE: Setor → Segmento → Ramo → Categoria' },
-              { icon: <ExportOutlined />, texto: 'Comex: importações e exportações por NCM e ano' },
-            ].map((item, i) => (
-              <Col key={i} xs={24} sm={8} style={{ textAlign: 'center', padding: '12px 16px' }}>
-                <div style={{ fontSize: 28, color: COLORS[i], marginBottom: 8 }}>{item.icon}</div>
-                <Text type="secondary" style={{ fontSize: 12 }}>{item.texto}</Text>
-              </Col>
-            ))}
-          </Row>
+          <div style={{ fontSize: 14, color: '#999' }}>
+            Busque uma empresa pelo nome ou CNPJ para ver perfil, contatos, CNAE,
+            histórico de comércio exterior e potencial estimado.
+          </div>
         </Card>
+      )}
+
+      {!loading && dados && (
+        <Tabs
+          activeKey={activeTab}
+          onChange={onTabChange}
+          type="card"
+          items={tabItems}
+          style={{ background: 'transparent' }}
+        />
       )}
     </div>
   );
