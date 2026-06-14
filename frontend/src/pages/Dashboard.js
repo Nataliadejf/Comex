@@ -564,7 +564,13 @@ const Dashboard = () => {
           (!response.data.principais_paises || response.data.principais_paises.length === 0)
         );
         
-        if (dadosVazios) {
+        const respostaComAvisoEmpresa = Boolean(
+          response.data.kpis_empresa_indisponiveis ||
+          response.data.aviso_dados_sem_empresa ||
+          response.data.filtro_empresa_aplicado
+        );
+
+        if (dadosVazios && !respostaComAvisoEmpresa) {
           console.log('⚠️ Dados vazios recebidos do backend');
           // Definir stats vazio mas válido
           const emptyStats = {
@@ -1459,7 +1465,7 @@ const Dashboard = () => {
         />
       )}
 
-      {stats && !error && (empresaImportadora || empresaExportadora || ncmFiltro || (ncmsFiltro && ncmsFiltro.length > 0)) &&
+      {stats && !error && !stats.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora || ncmFiltro || (ncmsFiltro && ncmsFiltro.length > 0)) &&
         (stats.valor_total_importacoes ?? 0) === 0 && (stats.valor_total_exportacoes ?? 0) === 0 && (stats.valor_total_usd ?? 0) === 0 && (
           <Alert
             message="Nenhuma operação encontrada para os filtros aplicados."
