@@ -406,6 +406,41 @@ def _get_heatmap_uf(client, ano_inicio: int, ano_fim: int) -> List[Dict]:
         return []
 
 
+def _get_top_ncms_uf(client, uf: str, ano_inicio: int, ano_fim: int, limit: int = 15) -> List[Dict]:
+    """Top NCMs movimentados na UF (dados reais das tabelas UF×NCM)."""
+    if not uf:
+        return []
+    from google.cloud import bigquery
+    t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+    sql = f"""
+    WITH facts AS (
+      SELECT CAST(id_ncm AS STRING) AS ncm,
+             COALESCE(CAST(total_importacao_fob AS FLOAT64), 0) AS v_imp, 0.0 AS v_exp
+      FROM {t_imp}
+      WHERE CAST(ano AS INT64) BETWEEN @ano_ini AND @ano_fim
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf
+      UNION ALL
+      SELECT CAST(id_ncm AS STRING), 0.0, COALESCE(CAST(total_exportacao_fob AS FLOAT64), 0)
+      FROM {t_exp}
+      WHERE CAST(ano AS INT64) BETWEEN @ano_ini AND @ano_fim
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf
+    )
+    SELECT ncm, SUM(v_imp) AS v_imp, SUM(v_exp) AS v_exp
+    FROM facts GROUP BY ncm ORDER BY SUM(v_imp+v_exp) DESC LIMIT {int(limit)}
+    """
+    params = [
+        bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()),
+        bigquery.ScalarQueryParameter("ano_ini", "INT64", ano_inicio),
+        bigquery.ScalarQueryParameter("ano_fim", "INT64", ano_fim),
+    ]
+    try:
+        return _run_query(client, sql, params)
+    except Exception as e:
+        logger.warning(f"_get_top_ncms_uf error: {e}")
+        return []
+
+
 @router.get("/mercado")
 async def mercado_overview(
     ano_inicio: int = Query(2022, ge=2000, le=2030),
@@ -521,15 +556,43 @@ async def empresa_inteligencia(
         except Exception as e:
             logger.warning(f"market_uf error: {e}")
 
-    # 4. Sugestão CNAE (se não tem dados)
-    sugestao = None
-    cnae = str(perfil.get("cnae") or "").strip() or None
-    if not tem_dados and cnae and uf:
+    cnae = str(perfil.get("cnae") or razao_base.get("cnae") or "").strip() or None
+
+    # 3b. Enriquecer CNAE com hierarquia proprietária (Setor→Segmento→Ramo→Categoria)
+    cnae_hierarquia = None
+    if cnae:
         try:
-            from services import sugestao_comex
-            sugestao = sugestao_comex.sugerir_por_cnae(client, _run_query, cnae, uf)
+            from services import cnae_service
+            cnae_hierarquia = cnae_service.enriquecer(cnae)
         except Exception as e:
-            logger.warning(f"sugestao_comex error: {e}")
+            logger.warning(f"cnae_service error: {e}")
+
+    # 4. Potencial via mercado UF+NCM (quando não há dados por CNPJ).
+    #    A tabela CNPJ→comex está vazia; usamos os NCMs reais movimentados na
+    #    UF da empresa como proxy do mercado endereçável do segmento/estado.
+    potencial = None
+    if not tem_dados and uf:
+        try:
+            top_ncms_uf = _get_top_ncms_uf(client, uf, ano_inicio, ano_fim, limit=15)
+            potencial = {
+                "tipo": "mercado_uf_ncm",
+                "uf": uf,
+                "mercado_imp_uf": float(market_uf.get("total_imp_uf") or 0),
+                "mercado_exp_uf": float(market_uf.get("total_exp_uf") or 0),
+                "top_ncms_uf": [
+                    {"ncm": r.get("ncm"), "v_imp": float(r.get("v_imp") or 0), "v_exp": float(r.get("v_exp") or 0)}
+                    for r in top_ncms_uf if r.get("ncm")
+                ],
+                "cnae_hierarquia": cnae_hierarquia,
+                "metodologia": (
+                    "Sem registros de importação/exportação por CNPJ na base disponível. "
+                    f"O potencial é estimado pelo mercado de comércio exterior da UF {uf} "
+                    "(valores FOB reais por NCM), contextualizado pelo segmento CNAE da empresa. "
+                    "Representa o mercado endereçável do estado — não o histórico real da empresa."
+                ),
+            }
+        except Exception as e:
+            logger.warning(f"potencial UF+NCM error: {e}")
 
     # 5. Montar timeline
     timeline_empresa = [
@@ -562,6 +625,7 @@ async def empresa_inteligencia(
         "uf_sede": uf,
         "municipio": str(perfil.get("municipio") or razao_base.get("municipio") or "").strip() or None,
         "cnae": cnae,
+        "cnae_hierarquia": cnae_hierarquia,
         "num_estabelecimentos": int(perfil.get("num_estab") or 0),
         "tem_dados_comex": tem_dados,
         "kpis": {
@@ -580,9 +644,10 @@ async def empresa_inteligencia(
             "total_exp": float(market_uf.get("total_exp_uf") or 0),
             "timeline": timeline_uf,
         },
-        "sugestao": sugestao,
+        "potencial": potencial,
         "aviso": None if tem_dados else (
-            f"Não foram encontrados dados de importação/exportação por CNPJ para {razao}. "
-            "Exibindo dados de mercado da UF e estimativa por segmento CNAE."
+            f"Não há registros de importação/exportação por CNPJ para {razao} na base disponível. "
+            f"Exibindo o mercado de comércio exterior da UF {uf or '—'} e os NCMs mais movimentados "
+            "no estado como estimativa do mercado endereçável do segmento."
         ),
     }

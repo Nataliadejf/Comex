@@ -1,15 +1,15 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Card, Col, Input, Row, Spin, Statistic, Table, Tag, Timeline,
+  Alert, AutoComplete, Button, Card, Col, Input, Row, Spin, Statistic, Table, Tag,
   Typography, message,
 } from "antd";
 import {
   ArrowDownOutlined, ArrowUpOutlined, BulbOutlined, GlobalOutlined,
-  RiseOutlined, SearchOutlined, ShopOutlined,
+  RiseOutlined, SearchOutlined,
 } from "@ant-design/icons";
 import {
-  BarChart, Bar, CartesianGrid, Cell, ComposedChart, Legend,
-  Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, CartesianGrid, ComposedChart, Legend,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import api from "../services/api";
 
@@ -39,16 +39,29 @@ interface Mercado {
   total_br_imp: number; total_br_exp: number;
 }
 
+interface CnaeHierarquia {
+  descricao?: string | null; setor?: string | null; segmento?: string | null;
+  ramo?: string | null; categoria?: string | null; produto?: string | null;
+}
+interface NcmUfItem { ncm: string; v_imp: number; v_exp: number }
+interface Potencial {
+  tipo: string; uf: string;
+  mercado_imp_uf: number; mercado_exp_uf: number;
+  top_ncms_uf: NcmUfItem[];
+  cnae_hierarquia: CnaeHierarquia | null;
+  metodologia: string;
+}
+
 interface EmpresaIntel {
   razao_social: string; uf_sede: string | null; municipio: string | null;
-  cnae: string | null; num_estabelecimentos: number;
+  cnae: string | null; cnae_hierarquia: CnaeHierarquia | null; num_estabelecimentos: number;
   tem_dados_comex: boolean; aviso: string | null;
   kpis: { total_imp: number; total_exp: number; saldo: number; num_ncms: number; num_ufs: number };
   timeline: TimelineItem[];
   ncms: NcmItem[];
   ufs: UfItem[];
   mercado_uf: { uf: string | null; total_imp: number; total_exp: number; timeline: TimelineItem[] };
-  sugestao: any | null;
+  potencial: Potencial | null;
 }
 
 // ─── Autocomplete helper ───────────────────────────────────────────────────
@@ -130,48 +143,64 @@ const TopBar: React.FC<{ data: TopItem[]; color: string; label: string }> = ({ d
   );
 };
 
-// ─── Sugestão Panel ───────────────────────────────────────────────────────
-const SugestaoPanel: React.FC<{ sugestao: any; razao: string }> = ({ sugestao, razao }) => {
-  if (!sugestao?.tem_sugestao) return (
-    <Alert type="warning" showIcon message="Sugestão não disponível" description="Não há empresas do mesmo segmento CNAE com dados suficientes para gerar estimativa." />
-  );
+// ─── Potencial Panel (mercado UF+NCM) ──────────────────────────────────────
+const PotencialPanel: React.FC<{ potencial: Potencial; razao: string }> = ({ potencial, razao }) => {
+  const h = potencial.cnae_hierarquia;
+  const topNcms = potencial.top_ncms_uf || [];
+  const ncmColumns = [
+    { title: "NCM", dataIndex: "ncm", key: "ncm", width: 110 },
+    { title: `Importação ${potencial.uf}`, dataIndex: "v_imp", key: "v_imp", render: (v: number) => fmtUsd(v), sorter: (a: NcmUfItem, b: NcmUfItem) => a.v_imp - b.v_imp },
+    { title: `Exportação ${potencial.uf}`, dataIndex: "v_exp", key: "v_exp", render: (v: number) => fmtUsd(v), sorter: (a: NcmUfItem, b: NcmUfItem) => a.v_exp - b.v_exp },
+    { title: "Total", key: "total", render: (_: any, r: NcmUfItem) => fmtUsd(r.v_imp + r.v_exp), defaultSortOrder: "descend" as const, sorter: (a: NcmUfItem, b: NcmUfItem) => (a.v_imp + a.v_exp) - (b.v_imp + b.v_exp) },
+  ];
   return (
     <div>
       <Alert
         type="info" showIcon icon={<BulbOutlined />}
-        message={`Estimativa de potencial para ${razao}`}
-        description={`Baseado em ${sugestao.num_empresas_referencia || 0} empresas do mesmo segmento CNAE. Metodologia: ${sugestao.metodologia || "mediana"}.`}
+        message={`Potencial de mercado para ${razao}`}
+        description={potencial.metodologia}
         style={{ marginBottom: 16 }}
       />
+      {/* Hierarquia CNAE */}
+      {h && (h.setor || h.segmento || h.ramo) && (
+        <Card size="small" style={{ marginBottom: 16 }} title="Segmento de Atuação (CNAE)">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {h.setor && <Tag color="blue">Setor: {h.setor}</Tag>}
+            {h.segmento && <Tag color="geekblue">Segmento: {h.segmento}</Tag>}
+            {h.ramo && <Tag color="purple">Ramo: {h.ramo}</Tag>}
+            {h.categoria && <Tag color="magenta">Categoria: {h.categoria}</Tag>}
+            {h.produto && <Tag>Produto: {h.produto}</Tag>}
+          </div>
+        </Card>
+      )}
+      {/* Mercado da UF */}
       <Row gutter={[16, 16]}>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card style={{ background: "linear-gradient(135deg, #1890ff20, #1890ff05)", border: "1px solid #1890ff40" }}>
-            <Statistic title="Potencial Importação" value={sugestao.mediana_imp || 0} formatter={(v) => fmtM(Number(v))} prefix={<ArrowDownOutlined style={{ color: "#1890ff" }} />} />
+            <Statistic title={`Mercado Importação — ${potencial.uf}`} value={potencial.mercado_imp_uf} formatter={(v) => fmtM(Number(v))} prefix={<ArrowDownOutlined style={{ color: "#1890ff" }} />} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card style={{ background: "linear-gradient(135deg, #52c41a20, #52c41a05)", border: "1px solid #52c41a40" }}>
-            <Statistic title="Potencial Exportação" value={sugestao.mediana_exp || 0} formatter={(v) => fmtM(Number(v))} prefix={<ArrowUpOutlined style={{ color: "#52c41a" }} />} />
+            <Statistic title={`Mercado Exportação — ${potencial.uf}`} value={potencial.mercado_exp_uf} formatter={(v) => fmtM(Number(v))} prefix={<ArrowUpOutlined style={{ color: "#52c41a" }} />} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={24} md={8}>
           <Card>
-            <Statistic title="Empresas Referência" value={sugestao.num_empresas_referencia || 0} prefix={<ShopOutlined />} />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="NCMs Típicos" value={sugestao.ncms_tipicos?.length || 0} prefix={<GlobalOutlined />} />
+            <Statistic title="NCMs no Estado" value={topNcms.length} prefix={<GlobalOutlined />} suffix="principais" />
           </Card>
         </Col>
       </Row>
-      {sugestao.ncms_tipicos?.length > 0 && (
-        <Card title="NCMs Mais Utilizados no Segmento" style={{ marginTop: 16 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {sugestao.ncms_tipicos.map((n: any) => (
-              <Tag key={n.ncm} color="blue">{n.ncm}{n.descricao ? ` — ${n.descricao.slice(0, 40)}` : ""}</Tag>
-            ))}
-          </div>
+      {/* Top NCMs movimentados na UF */}
+      {topNcms.length > 0 && (
+        <Card title={`NCMs Mais Movimentados em ${potencial.uf} (valores FOB reais)`} style={{ marginTop: 16 }}>
+          <Table
+            rowKey={(r: NcmUfItem) => r.ncm}
+            columns={ncmColumns}
+            dataSource={topNcms}
+            pagination={false}
+            size="small"
+          />
         </Card>
       )}
     </div>
@@ -427,13 +456,13 @@ const DashboardComexBigQuery: React.FC = () => {
             </Card>
           )}
 
-          {/* Sugestão CNAE */}
+          {/* Potencial de mercado (UF+NCM) quando sem dados por CNPJ */}
           {!empresa.tem_dados_comex && (
-            <Card title={`🔮 Potencial Estimado por Segmento CNAE`} style={{ marginBottom: 16 }}>
-              {empresa.sugestao ? (
-                <SugestaoPanel sugestao={empresa.sugestao} razao={empresa.razao_social} />
+            <Card title="🔮 Potencial de Mercado por Segmento e UF" style={{ marginBottom: 16 }}>
+              {empresa.potencial ? (
+                <PotencialPanel potencial={empresa.potencial} razao={empresa.razao_social} />
               ) : (
-                <Alert type="info" showIcon message="Carregue a sugestão pelo botão na aba Contatos ou aguarde estimativa automática." />
+                <Alert type="info" showIcon message="Estimativa de mercado indisponível para esta UF." />
               )}
             </Card>
           )}
