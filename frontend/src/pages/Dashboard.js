@@ -1039,10 +1039,10 @@ const Dashboard = () => {
   // Top Importadores (quando há filtro por empresa, mostrar a empresa filtrada; senão lista geral)
   const topImportadores = (() => {
     if (!statsFinal) return [];
-    
+
     const temFiltroImp = (empresaImportadora && String(empresaImportadora).trim()) || (empresaImportadoraInput && String(empresaImportadoraInput).trim());
     const nomeFiltroImp = (empresaImportadora || empresaImportadoraInput || '').toString().trim();
-    if (temFiltroImp && nomeFiltroImp) {
+    if (temFiltroImp && nomeFiltroImp && !statsFinal.kpis_empresa_indisponiveis) {
       const valorImp = statsFinal.valor_total_importacoes ?? statsFinal.valor_total_usd ?? 0;
       const pesoImp = statsFinal.volume_importacoes ?? 0;
       return [{
@@ -1115,7 +1115,7 @@ const Dashboard = () => {
     
     const temFiltroExp = (empresaExportadora && String(empresaExportadora).trim()) || (empresaExportadoraInput && String(empresaExportadoraInput).trim());
     const nomeFiltroExp = (empresaExportadora || empresaExportadoraInput || '').toString().trim();
-    if (temFiltroExp && nomeFiltroExp) {
+    if (temFiltroExp && nomeFiltroExp && !statsFinal.kpis_empresa_indisponiveis) {
       const valorExp = statsFinal.valor_total_exportacoes ?? statsFinal.valor_total_usd ?? 0;
       const pesoExp = statsFinal.volume_exportacoes ?? 0;
       return [{
