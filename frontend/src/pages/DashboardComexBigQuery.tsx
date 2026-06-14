@@ -1,183 +1,516 @@
-import React, { useEffect, useMemo, useState } from "react";
-import Filters from "../components/Filters";
-import KpiCards from "../components/KpiCards";
-import MonthlyChart from "../components/LineChart";
-import BarChartImport from "../components/BarChartImport";
-import BarChartExport from "../components/BarChartExport";
-import HeatMapUF from "../components/HeatMapUF";
-import DataTable from "../components/DataTable";
-import { DashboardDataResponse, DashboardFilters, comexDashboardAPI } from "../services/bigquery";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  Alert, AutoComplete, Button, Card, Col, Input, Row, Spin, Statistic, Table, Tag, Timeline,
+  Typography, message,
+} from "antd";
+import {
+  ArrowDownOutlined, ArrowUpOutlined, BulbOutlined, GlobalOutlined,
+  RiseOutlined, SearchOutlined, ShopOutlined,
+} from "@ant-design/icons";
+import {
+  BarChart, Bar, CartesianGrid, Cell, ComposedChart, Legend,
+  Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+import api from "../services/api";
 
-type SortOrder = "asc" | "desc";
-type HeatMode = "importacao" | "exportacao";
+const { Title, Text } = Typography;
 
-const initialData: DashboardDataResponse = {
-  kpis: {
-    total_importado: 0,
-    total_exportado: 0,
-    saldo_comercial: 0,
-    empresas_unicas: 0,
-  },
-  timeline: [],
-  top_import: [],
-  top_export: [],
-  heatmap: [],
-  table: [],
-  pagination: { page: 1, page_size: 25, total: 0, total_pages: 1 },
+const COLORS = ["#1890ff", "#52c41a", "#faad14", "#f5222d", "#722ed1", "#13c2c2", "#eb2f96", "#fa8c16"];
+
+const fmtUsd = (v: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v || 0);
+
+const fmtM = (v: number) => {
+  if (v >= 1e9) return `US$ ${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `US$ ${(v / 1e6).toFixed(1)}M`;
+  return fmtUsd(v);
 };
 
-/** Dashboard focado na tabela BigQuery empresas_ncm_import_export_uf (rota separada). */
-const DashboardComexBigQuery: React.FC = () => {
-  const [filters, setFilters] = useState<DashboardFilters>({
-    page: 1,
-    pageSize: 25,
-    sortBy: "total_importacao_fob",
-    sortOrder: "desc",
-  });
-  const [draftFilters, setDraftFilters] = useState<DashboardFilters>(filters);
-  const [data, setData] = useState<DashboardDataResponse>(initialData);
+interface TimelineItem { ym: string; v_imp: number; v_exp: number }
+interface HeatItem { uf: string; v_imp: number; v_exp: number }
+interface TopItem { nome: string; valor: number }
+interface NcmItem { ncm: string; v_imp: number; v_exp: number }
+interface UfItem { uf: string; v_imp: number; v_exp: number }
+
+interface Mercado {
+  total_imp: number; total_exp: number; saldo: number;
+  timeline: TimelineItem[]; heatmap: HeatItem[];
+  top_importadores: TopItem[]; top_exportadores: TopItem[];
+  total_br_imp: number; total_br_exp: number;
+}
+
+interface EmpresaIntel {
+  razao_social: string; uf_sede: string | null; municipio: string | null;
+  cnae: string | null; num_estabelecimentos: number;
+  tem_dados_comex: boolean; aviso: string | null;
+  kpis: { total_imp: number; total_exp: number; saldo: number; num_ncms: number; num_ufs: number };
+  timeline: TimelineItem[];
+  ncms: NcmItem[];
+  ufs: UfItem[];
+  mercado_uf: { uf: string | null; total_imp: number; total_exp: number; timeline: TimelineItem[] };
+  sugestao: any | null;
+}
+
+// ─── Autocomplete helper ───────────────────────────────────────────────────
+const useAutocomplete = () => {
+  const [opts, setOpts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [anos, setAnos] = useState<number[]>([]);
-  const [meses, setMeses] = useState<number[]>([]);
-  const [ufs, setUfs] = useState<string[]>([]);
-  const [heatMode, setHeatMode] = useState<HeatMode>("importacao");
-
-  const loadOptions = async () => {
-    try {
-      const options = await comexDashboardAPI.getFilterOptions();
-      setAnos(options.anos || []);
-      setMeses(options.meses || []);
-      setUfs(options.ufs || []);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const loadDashboard = async (activeFilters: DashboardFilters) => {
+  const search = useCallback(async (q: string) => {
+    if (!q || q.length < 2) { setOpts([]); return; }
     setLoading(true);
-    setError(null);
     try {
-      const response = await comexDashboardAPI.getDashboardData(activeFilters);
-      setData(response);
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Não foi possível carregar os dados do dashboard.";
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadOptions();
+      const res = await api.get("/api/contatos/autocomplete", { params: { q, limit: 20 } });
+      const items: any[] = res.data?.items || res.data || [];
+      setOpts(items.map((e: any) => ({
+        value: e.cnpj || e.nome,
+        label: (
+          <div>
+            <div style={{ fontWeight: 600 }}>{e.nome}</div>
+            <div style={{ fontSize: 11, color: "#888" }}>{e.cnpj || ""}{e.uf ? ` · ${e.uf}` : ""}</div>
+          </div>
+        ),
+        cnpj: e.cnpj,
+        nome: e.nome,
+      })));
+    } catch { setOpts([]); } finally { setLoading(false); }
   }, []);
+  return { opts, loading, search };
+};
 
-  useEffect(() => {
-    loadDashboard(filters);
-  }, [filters]);
+// ─── Charts ───────────────────────────────────────────────────────────────
+const TimelineChart: React.FC<{ data: TimelineItem[]; height?: number }> = ({ data, height = 260 }) => (
+  <ResponsiveContainer width="100%" height={height}>
+    <ComposedChart data={data} margin={{ top: 5, right: 20, bottom: 5, left: 20 }}>
+      <CartesianGrid strokeDasharray="3 3" />
+      <XAxis dataKey="ym" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.slice(0, 7)} />
+      <YAxis tickFormatter={(v) => fmtM(v)} tick={{ fontSize: 10 }} width={80} />
+      <Tooltip formatter={(v: number) => fmtUsd(v)} />
+      <Legend />
+      <Bar dataKey="v_imp" name="Importação" fill="#1890ff" opacity={0.8} />
+      <Bar dataKey="v_exp" name="Exportação" fill="#52c41a" opacity={0.8} />
+    </ComposedChart>
+  </ResponsiveContainer>
+);
 
-  const hasNoData = useMemo(() => !loading && data.table.length === 0, [loading, data.table.length]);
+const HeatmapTable: React.FC<{ data: HeatItem[] }> = ({ data }) => {
+  const maxV = Math.max(...data.map((d) => d.v_imp + d.v_exp), 1);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 8 }}>
+      {data.slice(0, 27).map((d) => {
+        const pct = ((d.v_imp + d.v_exp) / maxV) * 100;
+        const bg = `rgba(24, 144, 255, ${Math.max(0.05, pct / 100)})`;
+        return (
+          <div key={d.uf} style={{ background: bg, borderRadius: 6, padding: "8px 12px", border: "1px solid #e8f4ff" }}>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>{d.uf}</div>
+            <div style={{ fontSize: 11, color: "#555" }}>Imp: {fmtM(d.v_imp)}</div>
+            <div style={{ fontSize: 11, color: "#389e0d" }}>Exp: {fmtM(d.v_exp)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
-  const handleDraftChange = (field: string, value: string | number | undefined) => {
-    setDraftFilters((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+const TopBar: React.FC<{ data: TopItem[]; color: string; label: string }> = ({ data, color, label }) => {
+  const max = Math.max(...data.map((d) => d.valor), 1);
+  return (
+    <div>
+      {data.slice(0, 10).map((d, i) => (
+        <div key={i} style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+            <Text style={{ fontSize: 12 }} ellipsis>{d.nome}</Text>
+            <Text style={{ fontSize: 12, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtM(d.valor)}</Text>
+          </div>
+          <div style={{ background: "#f0f0f0", borderRadius: 4, height: 6 }}>
+            <div style={{ background: color, width: `${(d.valor / max) * 100}%`, height: 6, borderRadius: 4 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─── Sugestão Panel ───────────────────────────────────────────────────────
+const SugestaoPanel: React.FC<{ sugestao: any; razao: string }> = ({ sugestao, razao }) => {
+  if (!sugestao?.tem_sugestao) return (
+    <Alert type="warning" showIcon message="Sugestão não disponível" description="Não há empresas do mesmo segmento CNAE com dados suficientes para gerar estimativa." />
+  );
+  return (
+    <div>
+      <Alert
+        type="info" showIcon icon={<BulbOutlined />}
+        message={`Estimativa de potencial para ${razao}`}
+        description={`Baseado em ${sugestao.num_empresas_referencia || 0} empresas do mesmo segmento CNAE. Metodologia: ${sugestao.metodologia || "mediana"}.`}
+        style={{ marginBottom: 16 }}
+      />
+      <Row gutter={[16, 16]}>
+        <Col xs={12} md={6}>
+          <Card style={{ background: "linear-gradient(135deg, #1890ff20, #1890ff05)", border: "1px solid #1890ff40" }}>
+            <Statistic title="Potencial Importação" value={sugestao.mediana_imp || 0} formatter={(v) => fmtM(Number(v))} prefix={<ArrowDownOutlined style={{ color: "#1890ff" }} />} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card style={{ background: "linear-gradient(135deg, #52c41a20, #52c41a05)", border: "1px solid #52c41a40" }}>
+            <Statistic title="Potencial Exportação" value={sugestao.mediana_exp || 0} formatter={(v) => fmtM(Number(v))} prefix={<ArrowUpOutlined style={{ color: "#52c41a" }} />} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card>
+            <Statistic title="Empresas Referência" value={sugestao.num_empresas_referencia || 0} prefix={<ShopOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card>
+            <Statistic title="NCMs Típicos" value={sugestao.ncms_tipicos?.length || 0} prefix={<GlobalOutlined />} />
+          </Card>
+        </Col>
+      </Row>
+      {sugestao.ncms_tipicos?.length > 0 && (
+        <Card title="NCMs Mais Utilizados no Segmento" style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {sugestao.ncms_tipicos.map((n: any) => (
+              <Tag key={n.ncm} color="blue">{n.ncm}{n.descricao ? ` — ${n.descricao.slice(0, 40)}` : ""}</Tag>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ─── Main Component ───────────────────────────────────────────────────────
+const DashboardComexBigQuery: React.FC = () => {
+  const [mercado, setMercado] = useState<Mercado | null>(null);
+  const [empresa, setEmpresa] = useState<EmpresaIntel | null>(null);
+  const [loadingMercado, setLoadingMercado] = useState(true);
+  const [loadingEmpresa, setLoadingEmpresa] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [anoInicio, setAnoInicio] = useState(2022);
+  const [anoFim, setAnoFim] = useState(2024);
+  const { opts, loading: loadingAuto, search: doAutoComplete } = useAutocomplete();
+
+  // Carregar visão geral do mercado
+  const loadMercado = useCallback(async () => {
+    setLoadingMercado(true);
+    try {
+      const res = await api.get("/api/empresa-intel/mercado", { params: { ano_inicio: anoInicio, ano_fim: anoFim } });
+      setMercado(res.data);
+    } catch (e: any) {
+      message.error("Erro ao carregar dados de mercado: " + (e?.message || ""));
+    } finally {
+      setLoadingMercado(false);
+    }
+  }, [anoInicio, anoFim]);
+
+  const buscarEmpresa = useCallback(async (q: string) => {
+    if (!q || q.length < 2) return;
+    setLoadingEmpresa(true);
+    setEmpresa(null);
+    try {
+      const res = await api.get("/api/empresa-intel/empresa", { params: { q, ano_inicio: anoInicio, ano_fim: anoFim } });
+      setEmpresa(res.data);
+    } catch (e: any) {
+      message.error("Empresa não encontrada: " + (e?.response?.data?.detail || e?.message || ""));
+    } finally {
+      setLoadingEmpresa(false);
+    }
+  }, [anoInicio, anoFim]);
+
+  useEffect(() => { loadMercado(); }, [loadMercado]);
+
+  const onSelect = (_: string, opt: any) => {
+    const q = opt.cnpj || opt.nome || opt.value;
+    setSearchText(opt.nome || opt.value);
+    buscarEmpresa(q);
   };
 
-  const handleApplyFilters = () => {
-    setFilters((prev) => ({
-      ...prev,
-      ...draftFilters,
-      page: 1,
-    }));
-  };
+  const onSearch = () => buscarEmpresa(searchText);
 
-  const handleClear = () => {
-    const cleared: DashboardFilters = {
-      page: 1,
-      pageSize: 25,
-      sortBy: "total_importacao_fob",
-      sortOrder: "desc",
-    };
-    setDraftFilters(cleared);
-    setFilters(cleared);
-  };
+  const ncmColumns = [
+    { title: "NCM", dataIndex: "ncm", key: "ncm", width: 110 },
+    { title: "Importação", dataIndex: "v_imp", key: "v_imp", render: (v: number) => fmtUsd(v), sorter: (a: NcmItem, b: NcmItem) => a.v_imp - b.v_imp },
+    { title: "Exportação", dataIndex: "v_exp", key: "v_exp", render: (v: number) => fmtUsd(v), sorter: (a: NcmItem, b: NcmItem) => a.v_exp - b.v_exp },
+    {
+      title: "Total", key: "total",
+      render: (_: any, r: NcmItem) => fmtUsd(r.v_imp + r.v_exp),
+      sorter: (a: NcmItem, b: NcmItem) => (a.v_imp + a.v_exp) - (b.v_imp + b.v_exp),
+      defaultSortOrder: "descend" as const,
+    },
+  ];
 
-  const handleSort = (column: string) => {
-    setFilters((prev) => {
-      const same = prev.sortBy === column;
-      const nextOrder: SortOrder = same && prev.sortOrder === "desc" ? "asc" : "desc";
-      return { ...prev, sortBy: column, sortOrder: nextOrder, page: 1 };
-    });
-  };
-
-  const handleExportCsv = () => {
-    const url = comexDashboardAPI.getCsvExportUrl(filters);
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
+  const anos = [2020, 2021, 2022, 2023, 2024, 2025];
 
   return (
-    <div className="space-y-4 bg-slate-100 p-4">
-      <h1 className="text-2xl font-bold text-slate-900">Dashboard Comex (BigQuery)</h1>
+    <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+      {/* ── Cabeçalho ── */}
+      <div style={{ background: "linear-gradient(135deg, #001529, #003a8c)", borderRadius: 12, padding: "32px 40px", marginBottom: 24, color: "#fff" }}>
+        <Title level={2} style={{ color: "#fff", margin: 0 }}>🌐 Inteligência de Comércio Exterior</Title>
+        <Text style={{ color: "#afc6e9", fontSize: 15 }}>
+          Análise de importação, exportação e potencial de mercado por empresa, NCM e UF
+        </Text>
+        <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <AutoComplete
+            options={opts}
+            onSearch={doAutoComplete}
+            onSelect={onSelect}
+            value={searchText}
+            onChange={(v) => setSearchText(v)}
+            style={{ width: 380 }}
+            notFoundContent={loadingAuto ? <Spin size="small" /> : "Digite ao menos 2 caracteres"}
+          >
+            <Input
+              size="large"
+              placeholder="Buscar empresa por nome ou CNPJ..."
+              prefix={<SearchOutlined />}
+              style={{ borderRadius: 8 }}
+            />
+          </AutoComplete>
+          <select
+            value={anoInicio}
+            onChange={(e) => setAnoInicio(Number(e.target.value))}
+            style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #d9d9d9", fontSize: 14 }}
+          >
+            {anos.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <Text style={{ color: "#aaa" }}>até</Text>
+          <select
+            value={anoFim}
+            onChange={(e) => setAnoFim(Number(e.target.value))}
+            style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #d9d9d9", fontSize: 14 }}
+          >
+            {anos.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <Button type="primary" size="large" icon={<SearchOutlined />} onClick={onSearch} loading={loadingEmpresa}>
+            Buscar
+          </Button>
+          {empresa && (
+            <Button size="large" onClick={() => { setEmpresa(null); setSearchText(""); }}>
+              Limpar
+            </Button>
+          )}
+        </div>
+      </div>
 
-      {data.fonte_dados && (
-        <div
-          className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950"
-          role="status"
-        >
-          <strong>Fonte dos dados:</strong> {data.fonte_dados.motor} — tabela{" "}
-          <code className="rounded bg-white px-1.5 py-0.5 text-xs font-mono">
-            {data.fonte_dados.tabela_id}
-          </code>
-          . Todas as consultas desta página leem exclusivamente{" "}
-          <span className="font-semibold">{data.fonte_dados.nome_logico}</span> (valores FOB em USD).
+      {/* ── Loading empresa ── */}
+      {loadingEmpresa && (
+        <div style={{ textAlign: "center", padding: 48 }}>
+          <Spin size="large" tip="Buscando inteligência da empresa..." />
         </div>
       )}
 
-      <Filters
-        empresa={String(draftFilters.empresa || "")}
-        ano={draftFilters.ano}
-        mes={draftFilters.mes}
-        uf={draftFilters.uf}
-        ncm={String(draftFilters.ncm || "")}
-        anos={anos}
-        meses={meses}
-        ufs={ufs}
-        onChange={handleDraftChange}
-        onApply={handleApplyFilters}
-        onClear={handleClear}
-      />
-
-      {error && <div className="rounded-lg bg-red-100 p-3 text-sm text-red-700">{error}</div>}
-      {loading && <div className="rounded-lg bg-white p-3 text-sm text-slate-600">Carregando dados...</div>}
-
-      {!loading && (
+      {/* ══ MODO EMPRESA ══════════════════════════════════════════════════ */}
+      {empresa && !loadingEmpresa && (
         <>
-          <KpiCards kpis={data.kpis} />
-          {hasNoData ? (
-            <div className="rounded-xl bg-white p-6 text-center text-slate-600">Nenhum dado encontrado</div>
-          ) : (
+          {/* Cabeçalho empresa */}
+          <Card style={{ marginBottom: 16, borderLeft: "4px solid #1890ff" }}>
+            <Row gutter={16} align="middle">
+              <Col flex="auto">
+                <Title level={3} style={{ margin: 0 }}>{empresa.razao_social}</Title>
+                <div style={{ marginTop: 4 }}>
+                  {empresa.uf_sede && <Tag color="blue">UF: {empresa.uf_sede}</Tag>}
+                  {empresa.municipio && <Tag>{empresa.municipio}</Tag>}
+                  {empresa.cnae && <Tag color="purple">CNAE: {empresa.cnae}</Tag>}
+                  {empresa.num_estabelecimentos > 0 && <Tag color="geekblue">{empresa.num_estabelecimentos} estabelecimentos</Tag>}
+                </div>
+              </Col>
+            </Row>
+          </Card>
+
+          {/* Aviso se sem dados CNPJ */}
+          {empresa.aviso && (
+            <Alert type="warning" showIcon message="Dados de Comércio por CNPJ Indisponíveis" description={empresa.aviso} style={{ marginBottom: 16 }} />
+          )}
+
+          {/* KPIs empresa */}
+          {empresa.tem_dados_comex && (
             <>
-              <MonthlyChart data={data.timeline} />
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                <BarChartImport data={data.top_import} />
-                <BarChartExport data={data.top_export} />
-              </div>
-              <HeatMapUF data={data.heatmap} mode={heatMode} onModeChange={setHeatMode} />
-              <DataTable
-                rows={data.table}
-                page={data.pagination.page}
-                pageSize={data.pagination.page_size}
-                total={data.pagination.total}
-                sortBy={String(filters.sortBy || "total_importacao_fob")}
-                sortOrder={(filters.sortOrder as SortOrder) || "desc"}
-                onSort={handleSort}
-                onPageChange={(page) => setFilters((prev) => ({ ...prev, page }))}
-                onExportCsv={handleExportCsv}
+              <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={12} md={6}>
+                  <Card style={{ background: "linear-gradient(135deg, #1890ff, #096dd9)", color: "#fff" }}>
+                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>Importações Totais</div>
+                    <div style={{ color: "#fff", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{fmtM(empresa.kpis.total_imp)}</div>
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card style={{ background: "linear-gradient(135deg, #52c41a, #389e0d)", color: "#fff" }}>
+                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>Exportações Totais</div>
+                    <div style={{ color: "#fff", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{fmtM(empresa.kpis.total_exp)}</div>
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card>
+                    <Statistic title="Saldo Comercial" value={empresa.kpis.saldo}
+                      formatter={(v) => fmtM(Number(v))}
+                      valueStyle={{ color: empresa.kpis.saldo >= 0 ? "#52c41a" : "#f5222d" }}
+                      prefix={empresa.kpis.saldo >= 0 ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card>
+                    <Statistic title="NCMs Operados" value={empresa.kpis.num_ncms} />
+                  </Card>
+                </Col>
+              </Row>
+
+              {/* Timeline empresa */}
+              {empresa.timeline.length > 0 && (
+                <Card title="Evolução Mensal" style={{ marginBottom: 16 }}>
+                  <TimelineChart data={empresa.timeline} />
+                </Card>
+              )}
+
+              {/* NCMs + UFs */}
+              <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={24} lg={14}>
+                  <Card title="Principais NCMs Operados">
+                    <Table
+                      rowKey={(r: NcmItem) => r.ncm}
+                      columns={ncmColumns}
+                      dataSource={empresa.ncms}
+                      pagination={false}
+                      size="small"
+                    />
+                  </Card>
+                </Col>
+                <Col xs={24} lg={10}>
+                  <Card title="Distribuição por UF">
+                    {empresa.ufs.map((u, i) => {
+                      const total = u.v_imp + u.v_exp;
+                      const maxTotal = Math.max(...empresa.ufs.map((x) => x.v_imp + x.v_exp), 1);
+                      return (
+                        <div key={u.uf} style={{ marginBottom: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <Text strong>{u.uf}</Text>
+                            <Text style={{ fontSize: 12 }}>{fmtM(total)}</Text>
+                          </div>
+                          <div style={{ background: "#f0f0f0", borderRadius: 4, height: 8, marginTop: 2 }}>
+                            <div style={{ background: COLORS[i % COLORS.length], width: `${(total / maxTotal) * 100}%`, height: 8, borderRadius: 4 }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </Card>
+                </Col>
+              </Row>
+            </>
+          )}
+
+          {/* Contexto de Mercado (UF da empresa) */}
+          {empresa.mercado_uf?.uf && (
+            <Card
+              title={`📊 Mercado — ${empresa.mercado_uf.uf} (${anoInicio}–${anoFim})`}
+              style={{ marginBottom: 16 }}
+              extra={<Tag color="blue">Contexto do Estado</Tag>}
+            >
+              <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={12} md={8}>
+                  <Statistic title={`Total Importado ${empresa.mercado_uf.uf}`} value={empresa.mercado_uf.total_imp} formatter={(v) => fmtM(Number(v))} prefix={<ArrowDownOutlined style={{ color: "#1890ff" }} />} />
+                </Col>
+                <Col xs={12} md={8}>
+                  <Statistic title={`Total Exportado ${empresa.mercado_uf.uf}`} value={empresa.mercado_uf.total_exp} formatter={(v) => fmtM(Number(v))} prefix={<ArrowUpOutlined style={{ color: "#52c41a" }} />} />
+                </Col>
+                <Col xs={24} md={8}>
+                  {empresa.tem_dados_comex && empresa.kpis.total_imp + empresa.kpis.total_exp > 0 && empresa.mercado_uf.total_imp + empresa.mercado_uf.total_exp > 0 && (
+                    <Statistic
+                      title="Market Share Estimado"
+                      value={((empresa.kpis.total_imp + empresa.kpis.total_exp) / (empresa.mercado_uf.total_imp + empresa.mercado_uf.total_exp) * 100).toFixed(2)}
+                      suffix="%"
+                      prefix={<RiseOutlined style={{ color: "#722ed1" }} />}
+                    />
+                  )}
+                </Col>
+              </Row>
+              {empresa.mercado_uf.timeline.length > 0 && (
+                <TimelineChart data={empresa.mercado_uf.timeline} height={200} />
+              )}
+            </Card>
+          )}
+
+          {/* Sugestão CNAE */}
+          {!empresa.tem_dados_comex && (
+            <Card title={`🔮 Potencial Estimado por Segmento CNAE`} style={{ marginBottom: 16 }}>
+              {empresa.sugestao ? (
+                <SugestaoPanel sugestao={empresa.sugestao} razao={empresa.razao_social} />
+              ) : (
+                <Alert type="info" showIcon message="Carregue a sugestão pelo botão na aba Contatos ou aguarde estimativa automática." />
+              )}
+            </Card>
+          )}
+        </>
+      )}
+
+      {/* ══ MODO MERCADO (sem empresa selecionada) ═════════════════════════ */}
+      {!empresa && !loadingEmpresa && (
+        <>
+          {loadingMercado ? (
+            <div style={{ textAlign: "center", padding: 64 }}>
+              <Spin size="large" tip="Carregando visão geral do mercado..." />
+            </div>
+          ) : mercado ? (
+            <>
+              {/* KPIs Mercado Brasil */}
+              <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+                <Col xs={24} md={8}>
+                  <Card style={{ background: "linear-gradient(135deg, #1890ff, #0050b3)", color: "#fff" }}>
+                    <div style={{ color: "rgba(255,255,255,.8)", fontSize: 13, marginBottom: 4 }}>🇧🇷 Importações Brasil</div>
+                    <div style={{ color: "#fff", fontSize: 28, fontWeight: 700 }}>{fmtM(mercado.total_imp)}</div>
+                    <div style={{ color: "rgba(255,255,255,.6)", fontSize: 12 }}>{anoInicio}–{anoFim}</div>
+                  </Card>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Card style={{ background: "linear-gradient(135deg, #52c41a, #237804)", color: "#fff" }}>
+                    <div style={{ color: "rgba(255,255,255,.8)", fontSize: 13, marginBottom: 4 }}>🇧🇷 Exportações Brasil</div>
+                    <div style={{ color: "#fff", fontSize: 28, fontWeight: 700 }}>{fmtM(mercado.total_exp)}</div>
+                    <div style={{ color: "rgba(255,255,255,.6)", fontSize: 12 }}>{anoInicio}–{anoFim}</div>
+                  </Card>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Card style={{ background: mercado.saldo >= 0 ? "linear-gradient(135deg, #722ed1, #531dab)" : "linear-gradient(135deg, #f5222d, #a8071a)", color: "#fff" }}>
+                    <div style={{ color: "rgba(255,255,255,.8)", fontSize: 13, marginBottom: 4 }}>⚖️ Saldo Comercial</div>
+                    <div style={{ color: "#fff", fontSize: 28, fontWeight: 700 }}>{fmtM(mercado.saldo)}</div>
+                    <div style={{ color: "rgba(255,255,255,.6)", fontSize: 12 }}>{mercado.saldo >= 0 ? "Superávit" : "Déficit"}</div>
+                  </Card>
+                </Col>
+              </Row>
+
+              {/* Timeline Mercado */}
+              {mercado.timeline?.length > 0 && (
+                <Card title="📈 Evolução do Comércio Exterior Brasileiro" style={{ marginBottom: 16 }}>
+                  <TimelineChart data={mercado.timeline} height={300} />
+                </Card>
+              )}
+
+              {/* Top Empresas */}
+              <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={24} md={12}>
+                  <Card title="🏆 Top Importadores">
+                    <TopBar data={mercado.top_importadores} color="#1890ff" label="Importação" />
+                  </Card>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Card title="🏆 Top Exportadores">
+                    <TopBar data={mercado.top_exportadores} color="#52c41a" label="Exportação" />
+                  </Card>
+                </Col>
+              </Row>
+
+              {/* Heatmap UF */}
+              {mercado.heatmap?.length > 0 && (
+                <Card title="🗺️ Volume por UF" style={{ marginBottom: 16 }}>
+                  <HeatmapTable data={mercado.heatmap} />
+                </Card>
+              )}
+
+              <Alert
+                type="info"
+                showIcon
+                message="Use a busca acima para analisar uma empresa específica"
+                description="Busque por nome ou CNPJ para ver importações, exportações, NCMs, distribuição por estado e potencial de mercado por segmento."
               />
             </>
+          ) : (
+            <Alert type="error" showIcon message="Não foi possível carregar os dados de mercado." />
           )}
         </>
       )}

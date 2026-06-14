@@ -227,6 +227,13 @@ try:
 except ImportError as e:
     logger.warning(f"Router Contatos não disponível: {e}")
 
+try:
+    from routers.empresa_intel_routes import router as empresa_intel_router
+    app.include_router(empresa_intel_router)
+    logger.info("✅ Router Empresa Intel (/api/empresa-intel) incluído")
+except ImportError as e:
+    logger.warning(f"Router Empresa Intel não disponível: {e}")
+
 
 def _env_truthy(name: str) -> bool:
     v = (os.getenv(name) or "").strip().lower()
