@@ -416,18 +416,28 @@ def _get_top_ncms_uf(client, uf: str, ano_inicio: int, ano_fim: int, limit: int 
     sql = f"""
     WITH facts AS (
       SELECT CAST(id_ncm AS STRING) AS ncm,
-             COALESCE(CAST(total_importacao_fob AS FLOAT64), 0) AS v_imp, 0.0 AS v_exp
+             COALESCE(CAST(total_importacao_fob AS FLOAT64), 0) AS v_imp,
+             CAST(0 AS FLOAT64) AS v_exp
       FROM {t_imp}
       WHERE CAST(ano AS INT64) BETWEEN @ano_ini AND @ano_fim
         AND UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf
       UNION ALL
-      SELECT CAST(id_ncm AS STRING), 0.0, COALESCE(CAST(total_exportacao_fob AS FLOAT64), 0)
+      SELECT CAST(id_ncm AS STRING),
+             CAST(0 AS FLOAT64),
+             COALESCE(CAST(total_exportacao_fob AS FLOAT64), 0)
       FROM {t_exp}
       WHERE CAST(ano AS INT64) BETWEEN @ano_ini AND @ano_fim
         AND UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf
     )
-    SELECT ncm, SUM(v_imp) AS v_imp, SUM(v_exp) AS v_exp
-    FROM facts GROUP BY ncm ORDER BY SUM(v_imp+v_exp) DESC LIMIT {int(limit)}
+    SELECT
+      ncm,
+      SUM(v_imp) AS v_imp,
+      SUM(v_exp) AS v_exp,
+      SUM(v_imp + v_exp) AS v_total
+    FROM facts
+    GROUP BY ncm
+    ORDER BY v_total DESC
+    LIMIT {int(limit)}
     """
     params = [
         bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()),
@@ -438,7 +448,7 @@ def _get_top_ncms_uf(client, uf: str, ano_inicio: int, ano_fim: int, limit: int 
         return _run_query(client, sql, params)
     except Exception as e:
         logger.warning(f"_get_top_ncms_uf error: {e}")
-        return []
+        return [{"ncm": None, "v_imp": 0, "v_exp": 0, "_erro": str(e)[:200]}]
 
 
 @router.get("/mercado")
@@ -574,11 +584,13 @@ async def empresa_inteligencia(
     if not tem_dados and uf:
         try:
             top_ncms_uf = _get_top_ncms_uf(client, uf, ano_inicio, ano_fim, limit=15)
+            _ncm_erro = next((r.get("_erro") for r in top_ncms_uf if r.get("_erro")), None)
             potencial = {
                 "tipo": "mercado_uf_ncm",
                 "uf": uf,
                 "mercado_imp_uf": float(market_uf.get("total_imp_uf") or 0),
                 "mercado_exp_uf": float(market_uf.get("total_exp_uf") or 0),
+                "_ncm_erro": _ncm_erro,
                 "top_ncms_uf": [
                     {"ncm": r.get("ncm"), "v_imp": float(r.get("v_imp") or 0), "v_exp": float(r.get("v_exp") or 0)}
                     for r in top_ncms_uf if r.get("ncm")
