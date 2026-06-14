@@ -31,24 +31,13 @@ def _env(key: str, default: str) -> str:
 
 
 def _get_bq_client():
-    from google.cloud import bigquery
-    cred_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if cred_json:
-        import json, tempfile
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w")
-        tmp.write(cred_json); tmp.close()
-        from google.oauth2 import service_account
-        creds = service_account.Credentials.from_service_account_file(tmp.name)
-        return bigquery.Client(credentials=creds, project=creds.project_id)
-    return bigquery.Client()
+    from services.bq_client import get_bigquery_client
+    return get_bigquery_client()
 
 
 def _run_query(client, sql: str, params=None):
-    from google.cloud import bigquery
-    job_config = bigquery.QueryJobConfig(query_parameters=params or [])
-    job = client.query(sql, job_config=job_config)
-    rows = job.result()
-    return [dict(r) for r in rows]
+    from services.bq_client import run_query
+    return run_query(client, sql, params)
 
 
 def _resolve_cnpjs(client, termo: str) -> List[str]:

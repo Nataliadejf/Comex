@@ -181,7 +181,7 @@ export default function EmpresasDashboard() {
           <Alert
             type="success"
             showIcon
-            style={{ marginBottom: 16 }}
+            style={{ marginBottom: 12 }}
             message={`${perfil.razao_social}`}
             description={
               `CNPJ: ${perfil.cnpj} · UF Sede: ${perfil.uf_sede || '—'} · Estabelecimentos: ${perfil.estabelecimentos || 0}` +
@@ -190,6 +190,26 @@ export default function EmpresasDashboard() {
             }
           />
 
+          {/* Sem dados de comex por CNPJ */}
+          {(kpis.valor_importacao_usd || 0) + (kpis.valor_exportacao_usd || 0) === 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="Dados de comércio exterior não disponíveis por CNPJ"
+              description={
+                <span>
+                  Esta empresa não possui registros na base de importação/exportação por CNPJ disponível.
+                  {' '}<a href="/dashboard-comex-bq" style={{ fontWeight: 600 }}>
+                    Acesse a Inteligência de Comércio Exterior →
+                  </a>
+                  {' '}para ver estimativas do segmento e dados de mercado por UF.
+                </span>
+              }
+            />
+          )}
+
+          {(kpis.valor_importacao_usd || 0) + (kpis.valor_exportacao_usd || 0) > 0 && (
           <Row gutter={[16, 16]}>
             <Col xs={24} sm={12} md={6}>
               <Card><Text type="secondary">Importação</Text><Title level={4}>{fmtUsd(kpis.valor_importacao_usd)}</Title></Card>
@@ -204,7 +224,10 @@ export default function EmpresasDashboard() {
               <Card><Text type="secondary">Países</Text><Title level={4}>{kpis.num_paises ?? 0}</Title></Card>
             </Col>
           </Row>
+          )}
 
+          {(kpis.valor_importacao_usd || 0) + (kpis.valor_exportacao_usd || 0) > 0 && (
+          <>
           <Tabs
             style={{ marginTop: 16 }}
             activeKey={tipoNcm}
@@ -251,6 +274,8 @@ export default function EmpresasDashboard() {
               height={300}
             />
           </Card>
+          </>
+          )}
 
           <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
             <Col xs={24} lg={12}>
