@@ -448,7 +448,7 @@ def _get_top_ncms_uf(client, uf: str, ano_inicio: int, ano_fim: int, limit: int 
         return _run_query(client, sql, params)
     except Exception as e:
         logger.warning(f"_get_top_ncms_uf error: {e}")
-        return [{"ncm": None, "v_imp": 0, "v_exp": 0, "_erro": str(e)[:200]}]
+        return []
 
 
 @router.get("/mercado")
@@ -584,13 +584,11 @@ async def empresa_inteligencia(
     if not tem_dados and uf:
         try:
             top_ncms_uf = _get_top_ncms_uf(client, uf, ano_inicio, ano_fim, limit=15)
-            _ncm_erro = next((r.get("_erro") for r in top_ncms_uf if r.get("_erro")), None)
             potencial = {
                 "tipo": "mercado_uf_ncm",
                 "uf": uf,
                 "mercado_imp_uf": float(market_uf.get("total_imp_uf") or 0),
                 "mercado_exp_uf": float(market_uf.get("total_exp_uf") or 0),
-                "_ncm_erro": _ncm_erro,
                 "top_ncms_uf": [
                     {"ncm": r.get("ncm"), "v_imp": float(r.get("v_imp") or 0), "v_exp": float(r.get("v_exp") or 0)}
                     for r in top_ncms_uf if r.get("ncm")
