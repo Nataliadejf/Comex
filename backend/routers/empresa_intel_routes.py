@@ -73,31 +73,93 @@ def _resolve_cnpjs(client, termo: str) -> List[str]:
     return [str(r["cnpj14"]) for r in rows if r.get("cnpj14")]
 
 
+def _get_razao_base(client, cnpjs: List[str]) -> Dict:
+    """Razão social + UF a partir de empresas_base (fonte garantida)."""
+    if not cnpjs:
+        return {}
+    from google.cloud import bigquery
+    t = _bt(_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE))
+    sql = f"""
+    SELECT
+        CAST(razao_social AS STRING) AS razao_social,
+        UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
+        CAST(id_municipio_nome AS STRING) AS municipio
+    FROM {t}
+    WHERE REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') = @cnpj14
+    LIMIT 1
+    """
+    try:
+        rows = _run_query(client, sql, [bigquery.ScalarQueryParameter("cnpj14", "STRING", cnpjs[0])])
+        return rows[0] if rows else {}
+    except Exception as e:
+        logger.warning(f"_get_razao_base erro: {e}")
+        return {}
+
+
+def _estab_columns(client, t_ref: str) -> set:
+    """Descobre colunas reais da tabela de estabelecimentos (schema varia)."""
+    try:
+        bare = t_ref.strip().strip("`")
+        parts = bare.split(".")
+        if len(parts) != 3:
+            return set()
+        proj, ds, tbl = parts
+        sql = f"SELECT column_name FROM `{proj}.{ds}.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = @t"
+        from google.cloud import bigquery
+        rows = _run_query(client, sql, [bigquery.ScalarQueryParameter("t", "STRING", tbl)])
+        return {str(r.get("column_name") or "").lower() for r in rows}
+    except Exception as e:
+        logger.warning(f"_estab_columns erro: {e}")
+        return set()
+
+
 def _get_estab_profile(client, cnpjs: List[str]) -> Dict:
-    """Perfil da empresa via Estabelecimentos_Ativos_UltimoMes."""
+    """Perfil da empresa via Estabelecimentos_Ativos_UltimoMes (colunas detectadas em runtime)."""
     if not cnpjs:
         return {}
     from google.cloud import bigquery
     t = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
     cnpj_raiz = cnpjs[0][:8]
+    cols = _estab_columns(client, t)
+
+    # Monta SELECT seguro usando apenas colunas existentes
+    def pick(*names, default="NULL"):
+        for n in names:
+            if n.lower() in cols:
+                return f"CAST({n} AS STRING)"
+        return default
+
+    razao_expr = pick("razao_social", "nome_empresarial", default="NULL")
+    cnae_expr = pick("cnae_fiscal_principal", "cnae_fiscal", default="NULL")
+    uf_expr = pick("sigla_uf", "uf", default="NULL")
+    mun_expr = pick("nome_municipio", "municipio", "id_municipio_nome", default="NULL")
+    sit_expr = pick("situacao_cadastral", default="NULL")
+    has_sit = sit_expr != "NULL"
+
+    order_clause = (
+        "ORDER BY CASE WHEN CAST(situacao_cadastral AS STRING) IN ('2','02','ATIVA') THEN 0 ELSE 1 END"
+        if has_sit else ""
+    )
     sql = f"""
     SELECT
         REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj14,
-        CAST(razao_social AS STRING) AS razao_social,
-        CAST(cnae_fiscal_principal AS STRING) AS cnae,
-        UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
-        CAST(municipio AS STRING) AS municipio,
-        CAST(telefone1 AS STRING) AS telefone1,
-        CAST(email AS STRING) AS email,
-        CAST(situacao_cadastral AS STRING) AS situacao,
+        {razao_expr} AS razao_social,
+        {cnae_expr} AS cnae,
+        UPPER(TRIM({uf_expr})) AS uf,
+        {mun_expr} AS municipio,
+        {sit_expr} AS situacao,
         COUNT(*) OVER (PARTITION BY SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', ''), 1, 8)) AS num_estab
     FROM {t}
     WHERE SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', ''), 1, 8) = @cnpj_raiz
-    ORDER BY CASE WHEN CAST(situacao_cadastral AS STRING) = '2' THEN 0 ELSE 1 END
+    {order_clause}
     LIMIT 1
     """
-    rows = _run_query(client, sql, [bigquery.ScalarQueryParameter("cnpj_raiz", "STRING", cnpj_raiz)])
-    return rows[0] if rows else {}
+    try:
+        rows = _run_query(client, sql, [bigquery.ScalarQueryParameter("cnpj_raiz", "STRING", cnpj_raiz)])
+        return rows[0] if rows else {}
+    except Exception as e:
+        logger.warning(f"_get_estab_profile erro: {e}")
+        return {}
 
 
 def _get_comex_empresa(client, cnpjs: List[str], ano_inicio: int, ano_fim: int) -> Dict:
@@ -424,25 +486,32 @@ async def empresa_inteligencia(
             "aviso": f"Empresa '{q}' não encontrada na base de dados.",
         }
 
-    # 2. Buscar perfil + comex + mercado UF em paralelo
+    # 2. Buscar perfil + comex em paralelo (cada função é resiliente a erros)
     jobs = {
         "perfil": lambda: _get_estab_profile(client, cnpjs),
         "comex": lambda: _get_comex_empresa(client, cnpjs, ano_inicio, ano_fim),
+        "razao": lambda: _get_razao_base(client, cnpjs),
     }
     results = {}
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futs = {pool.submit(fn): key for key, fn in jobs.items()}
         for fut in as_completed(futs):
-            results[futs[fut]] = fut.result()
+            key = futs[fut]
+            try:
+                results[key] = fut.result()
+            except Exception as e:
+                logger.warning(f"empresa_intel job '{key}' falhou: {e}")
+                results[key] = {}
 
     perfil = results.get("perfil") or {}
     comex = results.get("comex") or {}
+    razao_base = results.get("razao") or {}
 
     total_imp = float(comex.get("total_imp") or 0)
     total_exp = float(comex.get("total_exp") or 0)
     tem_dados = (total_imp + total_exp) > 0
 
-    uf = str(perfil.get("uf") or "").strip() or None
+    uf = str(perfil.get("uf") or razao_base.get("uf") or "").strip() or None
 
     # 3. Se tem UF, buscar mercado UF
     market_uf: Dict = {}
@@ -484,14 +553,14 @@ async def empresa_inteligencia(
         for r in (comex.get("top_ufs") or [])
     ]
 
-    razao = str(perfil.get("razao_social") or cnpjs[0]).strip()
+    razao = str(perfil.get("razao_social") or razao_base.get("razao_social") or cnpjs[0]).strip()
 
     return {
         "q": q,
         "cnpjs": cnpjs,
         "razao_social": razao,
-        "uf_sede": str(perfil.get("uf") or "").strip() or None,
-        "municipio": str(perfil.get("municipio") or "").strip() or None,
+        "uf_sede": uf,
+        "municipio": str(perfil.get("municipio") or razao_base.get("municipio") or "").strip() or None,
         "cnae": cnae,
         "num_estabelecimentos": int(perfil.get("num_estab") or 0),
         "tem_dados_comex": tem_dados,
