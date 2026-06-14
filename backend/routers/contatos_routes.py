@@ -53,6 +53,68 @@ def _fmt_telefone(ddd, num) -> Optional[str]:
     return num_clean
 
 
+# ── Detecção de schema BQ (cache em memória) ──────────────────────────────────
+_schema_cache: Dict[str, list] = {}
+
+def _get_columns(client, full_table_id: str) -> list:
+    """Retorna lista de nomes de colunas via INFORMATION_SCHEMA (cacheado)."""
+    if full_table_id in _schema_cache:
+        return _schema_cache[full_table_id]
+    # full_table_id ex: `project.dataset.table`
+    clean = full_table_id.strip("`")
+    parts = clean.split(".")
+    if len(parts) != 3:
+        return []
+    project, dataset, table = parts
+    sql = f"""
+        SELECT column_name
+        FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS`
+        WHERE table_name = '{table}'
+        ORDER BY ordinal_position
+    """
+    try:
+        rows = run_query(client, sql)
+        cols = [r["column_name"] for r in rows]
+        _schema_cache[full_table_id] = cols
+        return cols
+    except Exception as exc:
+        logger.warning(f"Schema BQ {full_table_id}: {exc}")
+        return []
+
+
+def _col(cols: list, *candidates: str, default: str = "NULL") -> str:
+    """Retorna o primeiro candidato presente na lista de colunas, ou default."""
+    for c in candidates:
+        if c in cols:
+            return c
+    return default
+
+
+def _build_empresa_select(cols: list, alias_prefix: str = "") -> str:
+    """
+    Monta SELECT adaptativo baseado nas colunas disponíveis.
+    Suporta variações de nome nas tabelas empresas_base e empresasimportexport.
+    """
+    p = alias_prefix  # ex: "e." ou ""
+
+    cnpj_col     = _col(cols, "cnpj", "CNPJ", "cnpj_basico")
+    nome_col     = _col(cols, "razao_social", "RAZAO_SOCIAL", "nome_empresa", "nome")
+    uf_col       = _col(cols, "sigla_uf", "UF", "uf", "uf_sede")
+    cnae_col     = _col(cols, "cnae_fiscal_principal", "cnae_fiscal", "CNAE_FISCAL")
+
+    cnpj_expr = f"REGEXP_REPLACE(CAST({p}{cnpj_col} AS STRING), r'[^0-9]', '')" if cnpj_col != "NULL" else "NULL"
+    nome_expr = f"CAST({p}{nome_col} AS STRING)" if nome_col != "NULL" else "NULL"
+    uf_expr   = f"UPPER(TRIM(CAST({p}{uf_col} AS STRING)))" if uf_col != "NULL" else "NULL"
+    cnae_expr = f"CAST({p}{cnae_col} AS STRING)" if cnae_col != "NULL" else "NULL"
+
+    return f"""
+        {cnpj_expr} AS cnpj,
+        {nome_expr} AS razao_social,
+        {uf_expr}   AS uf,
+        {cnae_expr} AS cnae_fiscal
+    """
+
+
 # ── Helpers BigQuery ──────────────────────────────────────────────────────────
 
 def _query_autocomplete(q: str, limit: int) -> List[dict]:
@@ -66,33 +128,27 @@ def _query_autocomplete(q: str, limit: int) -> List[dict]:
     termo = q.strip()
     apenas_num = _apenas_digitos(termo)
 
+    # Descobrir colunas reais da tabela
+    tbl_clean = TBL_EMPRESAS_BASE.strip("`")
+    cols = _get_columns(client, tbl_clean)
+    if not cols:
+        # fallback sem schema: usar empresasimportexport
+        cols = []
+
+    sel = _build_empresa_select(cols)
+
     if len(apenas_num) >= 8:
-        sql = f"""
-            SELECT
-                REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj,
-                CAST(razao_social AS STRING) AS razao_social,
-                UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
-                NULL AS cnae_fiscal
-            FROM {TBL_EMPRESAS_BASE}
-            WHERE REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') LIKE @cnpj_prefix
-              AND cnpj IS NOT NULL
-            ORDER BY razao_social
-            LIMIT @limit
-        """
+        where = f"WHERE REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') LIKE @cnpj_prefix" if "cnpj" in cols or not cols else "WHERE TRUE"
+        sql = f"SELECT {sel} FROM {TBL_EMPRESAS_BASE} {where} ORDER BY razao_social LIMIT @limit"
         params = [
             bq_lib.ScalarQueryParameter("cnpj_prefix", "STRING", f"{apenas_num}%"),
             bq_lib.ScalarQueryParameter("limit", "INT64", limit),
         ]
     else:
         sql = f"""
-            SELECT
-                REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj,
-                CAST(razao_social AS STRING) AS razao_social,
-                UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
-                NULL AS cnae_fiscal
+            SELECT {sel}
             FROM {TBL_EMPRESAS_BASE}
             WHERE LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@termo)
-              AND cnpj IS NOT NULL
             ORDER BY razao_social
             LIMIT @limit
         """
@@ -105,14 +161,11 @@ def _query_autocomplete(q: str, limit: int) -> List[dict]:
         rows = run_query(client, sql, params)
     except Exception as exc:
         logger.warning(f"Autocomplete empresas_base erro ({exc}), tentando empresasimportexport")
-        # Fallback: tabela empresasimportexport
         tbl_fallback = _tbl("empresasimportexport")
+        cols_fb = _get_columns(client, tbl_fallback.strip("`"))
+        sel_fb = _build_empresa_select(cols_fb)
         sql_fb = f"""
-            SELECT DISTINCT
-                REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj,
-                CAST(razao_social AS STRING) AS razao_social,
-                UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
-                NULL AS cnae_fiscal
+            SELECT DISTINCT {sel_fb}
             FROM {tbl_fallback}
             WHERE LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@termo)
             LIMIT @limit
@@ -147,21 +200,19 @@ def _query_perfil(cnpj_raiz: str) -> Optional[dict]:
     client = get_bigquery_client()
     from google.cloud import bigquery as bq_lib
 
-    # Query principal com colunas confirmadas
+    tbl_clean = TBL_EMPRESAS_BASE.strip("`")
+    cols = _get_columns(client, tbl_clean)
+    sel = _build_empresa_select(cols)
+
     sql = f"""
-        SELECT
-            REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj,
-            CAST(razao_social AS STRING)                          AS razao_social,
-            UPPER(TRIM(CAST(sigla_uf AS STRING)))                 AS uf_sede,
+        SELECT {sel},
             NULL AS municipio_sede,
             NULL AS natureza_juridica,
             NULL AS porte,
             NULL AS situacao,
-            NULL AS data_abertura,
-            NULL AS cnae_fiscal
+            NULL AS data_abertura
         FROM {TBL_EMPRESAS_BASE}
         WHERE REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') LIKE @cnpj_prefix
-          AND cnpj IS NOT NULL
         LIMIT 1
     """
     try:
@@ -169,33 +220,40 @@ def _query_perfil(cnpj_raiz: str) -> Optional[dict]:
             bq_lib.ScalarQueryParameter("cnpj_prefix", "STRING", f"{cnpj_raiz}%"),
         ])
         if rows:
-            return rows[0]
+            r = rows[0]
+            return {
+                "cnpj": r.get("cnpj"), "razao_social": r.get("razao_social"),
+                "uf_sede": r.get("uf"), "cnae_fiscal": r.get("cnae_fiscal"),
+                "municipio_sede": None, "natureza_juridica": None,
+                "porte": None, "situacao": None, "data_abertura": None,
+            }
     except Exception as exc:
         logger.warning(f"Perfil empresas_base erro ({exc}), tentando empresasimportexport")
 
     # Fallback: empresasimportexport
     tbl_fb = _tbl("empresasimportexport")
+    cols_fb = _get_columns(client, tbl_fb.strip("`"))
+    sel_fb = _build_empresa_select(cols_fb)
     sql_fb = f"""
-        SELECT DISTINCT
-            REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj,
-            CAST(razao_social AS STRING)                          AS razao_social,
-            UPPER(TRIM(CAST(sigla_uf AS STRING)))                 AS uf_sede,
-            NULL AS municipio_sede,
-            NULL AS natureza_juridica,
-            NULL AS porte,
-            NULL AS situacao,
-            NULL AS data_abertura,
-            NULL AS cnae_fiscal
+        SELECT DISTINCT {sel_fb}, NULL AS municipio_sede, NULL AS natureza_juridica,
+            NULL AS porte, NULL AS situacao, NULL AS data_abertura
         FROM {tbl_fb}
         WHERE REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') LIKE @cnpj_prefix
-          AND cnpj IS NOT NULL
         LIMIT 1
     """
     try:
         rows = run_query(client, sql_fb, [
             bq_lib.ScalarQueryParameter("cnpj_prefix", "STRING", f"{cnpj_raiz}%"),
         ])
-        return rows[0] if rows else None
+        if rows:
+            r = rows[0]
+            return {
+                "cnpj": r.get("cnpj"), "razao_social": r.get("razao_social"),
+                "uf_sede": r.get("uf"), "cnae_fiscal": r.get("cnae_fiscal"),
+                "municipio_sede": None, "natureza_juridica": None,
+                "porte": None, "situacao": None, "data_abertura": None,
+            }
+        return None
     except Exception as exc2:
         logger.error(f"Perfil fallback erro: {exc2}")
         return None
