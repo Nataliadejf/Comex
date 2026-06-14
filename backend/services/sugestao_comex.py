@@ -48,49 +48,57 @@ def sugerir_por_cnae(
     # Prefixo de 4 dígitos para ampliar a busca se necessário
     cnae4 = cnae_str[:4]
 
-    sql_peers = f"""
-    WITH estab_cnae AS (
-        SELECT DISTINCT
-            SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', ''), 1, 14) AS cnpj14
-        FROM {TBL_ESTAB}
-        WHERE REGEXP_REPLACE(CAST(cnae_fiscal_principal AS STRING), r'[^0-9]', '') LIKE @cnae_prefix
-        {'AND UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf' if uf else ''}
-        LIMIT {max_peers * 5}
-    ),
-    comex AS (
+    def _consultar_peers(usar_uf: bool) -> dict:
+        filtro_uf = "AND UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf" if (usar_uf and uf) else ""
+        sql_peers = f"""
+        WITH estab_cnae AS (
+            SELECT DISTINCT
+                SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', ''), 1, 14) AS cnpj14
+            FROM {TBL_ESTAB}
+            WHERE REGEXP_REPLACE(CAST(cnae_fiscal_principal AS STRING), r'[^0-9]', '') LIKE @cnae_prefix
+            {filtro_uf}
+            LIMIT {max_peers * 5}
+        ),
+        comex AS (
+            SELECT
+                REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj14,
+                SUM(CAST(total_importacao_fob AS FLOAT64)) AS total_imp,
+                SUM(CAST(total_exportacao_fob AS FLOAT64)) AS total_exp
+            FROM {TBL_EMPRESAS_NCM}
+            WHERE ano >= EXTRACT(YEAR FROM CURRENT_DATE()) - @anos
+            GROUP BY cnpj14
+            HAVING (total_imp > 0 OR total_exp > 0)
+        )
         SELECT
-            REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj14,
-            SUM(CAST(total_importacao_fob AS FLOAT64)) AS total_imp,
-            SUM(CAST(total_exportacao_fob AS FLOAT64)) AS total_exp
-        FROM {TBL_EMPRESAS_NCM}
-        WHERE ano >= EXTRACT(YEAR FROM CURRENT_DATE()) - @anos
-        GROUP BY cnpj14
-        HAVING (total_imp > 0 OR total_exp > 0)
-    )
-    SELECT
-        COUNT(DISTINCT c.cnpj14) AS n_empresas,
-        AVG(c.total_imp) AS media_imp,
-        AVG(c.total_exp) AS media_exp,
-        APPROX_QUANTILES(c.total_imp, 2)[OFFSET(1)] AS mediana_imp,
-        APPROX_QUANTILES(c.total_exp, 2)[OFFSET(1)] AS mediana_exp
-    FROM estab_cnae e
-    JOIN comex c ON c.cnpj14 = e.cnpj14
-    """
+            COUNT(DISTINCT c.cnpj14) AS n_empresas,
+            AVG(c.total_imp) AS media_imp,
+            AVG(c.total_exp) AS media_exp,
+            APPROX_QUANTILES(c.total_imp, 2)[OFFSET(1)] AS mediana_imp,
+            APPROX_QUANTILES(c.total_exp, 2)[OFFSET(1)] AS mediana_exp
+        FROM estab_cnae e
+        JOIN comex c ON c.cnpj14 = e.cnpj14
+        """
+        params = [
+            bq_lib.ScalarQueryParameter("cnae_prefix", "STRING", f"{cnae4}%"),
+            bq_lib.ScalarQueryParameter("anos", "INT64", anos),
+        ]
+        if usar_uf and uf:
+            params.append(bq_lib.ScalarQueryParameter("uf", "STRING", uf.upper()))
+        rows = run_query(client, sql_peers, params)
+        return rows[0] if rows else {}
 
-    params_peers = [
-        bq_lib.ScalarQueryParameter("cnae_prefix", "STRING", f"{cnae4}%"),
-        bq_lib.ScalarQueryParameter("anos", "INT64", anos),
-    ]
-    if uf:
-        params_peers.append(bq_lib.ScalarQueryParameter("uf", "STRING", uf.upper()))
-
+    # Tenta primeiro com UF (mercado local); se vazio, repete sem UF (segmento nacional)
+    abrangencia = "nacional"
     try:
-        rows = run_query(client, sql_peers, params_peers)
+        row = _consultar_peers(usar_uf=bool(uf))
+        if int(row.get("n_empresas") or 0) == 0 and uf:
+            row = _consultar_peers(usar_uf=False)
+        elif uf:
+            abrangencia = f"UF {uf.upper()}"
     except Exception as exc:
         logger.warning(f"Sugestão CNAE peers erro: {exc}")
         return _sem_dados("Erro ao consultar base de referência")
 
-    row = rows[0] if rows else {}
     n = int(row.get("n_empresas") or 0)
     if n == 0:
         return _sem_dados(f"Nenhuma empresa com CNAE {cnae_str} encontrada na base comex")
@@ -100,8 +108,9 @@ def sugerir_por_cnae(
     mediana_imp = float(row.get("mediana_imp") or 0)
     mediana_exp = float(row.get("mediana_exp") or 0)
 
-    # NCMs mais frequentes no segmento
-    ncms_tipicos = _ncms_tipicos_por_cnae(client, run_query, cnae4, uf, anos)
+    # NCMs mais frequentes no segmento (sem filtro de UF — segmento nacional)
+    uf_ncm = uf if abrangencia != "nacional" else None
+    ncms_tipicos = _ncms_tipicos_por_cnae(client, run_query, cnae4, uf_ncm, anos)
 
     return {
         "tem_sugestao": True,
@@ -114,9 +123,10 @@ def sugerir_por_cnae(
         "ncms_tipicos": ncms_tipicos,
         "num_empresas_referencia": n,
         "anos_base": anos,
+        "abrangencia": abrangencia,
         "metodologia": (
             f"Valores estimados a partir de {n} empresa(s) com CNAE similar "
-            f"(prefixo {cnae4}xx) nos últimos {anos} anos. "
+            f"(prefixo {cnae4}xx, abrangência {abrangencia}) nos últimos {anos} anos. "
             "Use como referência de mercado — não representa obrigação ou histórico real da empresa."
         ),
     }
