@@ -71,11 +71,10 @@ def sugerir_por_cnae(
         COUNT(DISTINCT c.cnpj14) AS n_empresas,
         AVG(c.total_imp) AS media_imp,
         AVG(c.total_exp) AS media_exp,
-        PERCENTILE_CONT(c.total_imp, 0.5) OVER () AS mediana_imp,
-        PERCENTILE_CONT(c.total_exp, 0.5) OVER () AS mediana_exp
+        APPROX_QUANTILES(c.total_imp, 2)[OFFSET(1)] AS mediana_imp,
+        APPROX_QUANTILES(c.total_exp, 2)[OFFSET(1)] AS mediana_exp
     FROM estab_cnae e
     JOIN comex c ON c.cnpj14 = e.cnpj14
-    LIMIT 1
     """
 
     params_peers = [
