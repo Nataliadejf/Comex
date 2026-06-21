@@ -40,6 +40,48 @@ def _run_query(client, sql: str, params=None):
     return run_query(client, sql, params)
 
 
+_PROJECT_DATASET = "liquid-receiver-483923-n6.Projeto_Comex"
+
+
+@router.get("/inspecionar")
+async def inspecionar_tabelas(
+    tabelas: str = Query(..., description="Nomes de tabelas separados por vírgula"),
+):
+    """Diagnóstico: schema + 1 amostra + contagem de linhas para cada tabela."""
+    try:
+        client = _get_bq_client()
+    except Exception as e:
+        return {"error": str(e)}
+
+    out = {}
+    for nome in [t.strip() for t in tabelas.split(",") if t.strip()]:
+        full = nome if "." in nome else f"{_PROJECT_DATASET}.{nome}"
+        info: Dict = {"tabela": full}
+        try:
+            from google.cloud import bigquery
+            proj, ds, tbl = full.split(".")
+            cols = _run_query(
+                client,
+                f"SELECT column_name, data_type FROM `{proj}.{ds}.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = @t ORDER BY ordinal_position",
+                [bigquery.ScalarQueryParameter("t", "STRING", tbl)],
+            )
+            info["colunas"] = [{"nome": c.get("column_name"), "tipo": c.get("data_type")} for c in cols]
+        except Exception as e:
+            info["colunas_erro"] = str(e)[:300]
+        try:
+            cnt = _run_query(client, f"SELECT COUNT(*) AS n FROM `{full}`", None)
+            info["num_linhas"] = int(cnt[0].get("n") or 0) if cnt else 0
+        except Exception as e:
+            info["count_erro"] = str(e)[:300]
+        try:
+            amostra = _run_query(client, f"SELECT * FROM `{full}` LIMIT 1", None)
+            info["amostra"] = {k: str(v)[:80] for k, v in (amostra[0].items() if amostra else {})}
+        except Exception as e:
+            info["amostra_erro"] = str(e)[:300]
+        out[nome] = info
+    return out
+
+
 def _resolve_cnpjs(client, termo: str) -> List[str]:
     """Resolve CNPJs a partir de nome ou CNPJ direto via empresas_base."""
     from google.cloud import bigquery
