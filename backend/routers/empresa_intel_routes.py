@@ -82,6 +82,25 @@ async def inspecionar_tabelas(
     return out
 
 
+_SQL_BLOCKED = ("insert", "update", "delete", "drop", "truncate", "merge", "alter", "grant", "revoke")
+
+
+@router.get("/sql")
+async def sql_readonly(q: str = Query(..., description="SELECT/WITH apenas, dataset Projeto_Comex")):
+    """Runner SQL somente-leitura para diagnóstico (guardado contra DML/DDL)."""
+    ql = q.strip().lower()
+    if not (ql.startswith("select") or ql.startswith("with")):
+        return {"error": "Apenas SELECT/WITH permitido."}
+    if any(b in ql for b in _SQL_BLOCKED):
+        return {"error": "Comando bloqueado (DML/DDL detectado)."}
+    try:
+        client = _get_bq_client()
+        rows = _run_query(client, q, None)
+        return {"linhas": len(rows), "dados": [{k: str(v)[:120] for k, v in r.items()} for r in rows[:100]]}
+    except Exception as e:
+        return {"error": str(e)[:500]}
+
+
 def _resolve_cnpjs(client, termo: str) -> List[str]:
     """Resolve CNPJs a partir de nome ou CNPJ direto via empresas_base."""
     from google.cloud import bigquery
