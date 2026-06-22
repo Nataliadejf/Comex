@@ -82,6 +82,70 @@ async def inspecionar_tabelas(
     return out
 
 
+_DEFAULT_ESTIMADO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_comex_estimado"
+
+
+def _ddl_tabela_estimativa(ano_ini: int = 2020, ano_fim: int = 2021) -> str:
+    """DDL: cria tabela de comex ESTIMADO por CNPJ (rateio do mercado UF×NCM
+    entre os CNPJs comex-ativos de cada UF no período de sobreposição)."""
+    t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+    t_iex = _bt("liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport")
+    t_dst = _bt(_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
+    return f"""
+    CREATE OR REPLACE TABLE {t_dst} AS
+    WITH
+    uf_imp AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, SUM(CAST(total_importacao_fob AS FLOAT64)) v
+      FROM {t_imp} WHERE ano BETWEEN {ano_ini} AND {ano_fim} GROUP BY uf
+    ),
+    uf_exp AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, SUM(CAST(total_exportacao_fob AS FLOAT64)) v
+      FROM {t_exp} WHERE ano BETWEEN {ano_ini} AND {ano_fim} GROUP BY uf
+    ),
+    emp AS (
+      SELECT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','') cnpj14,
+             ANY_VALUE(razao_social) razao_social,
+             UPPER(TRIM(ANY_VALUE(sigla_uf))) uf,
+             ANY_VALUE(cnae_2_primaria) cnae
+      FROM {t_iex} WHERE ano BETWEEN {ano_ini} AND {ano_fim}
+        AND LENGTH(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) = 14
+      GROUP BY cnpj14
+    ),
+    uf_n AS (SELECT uf, COUNT(*) n FROM emp GROUP BY uf)
+    SELECT
+      emp.cnpj14 AS cnpj,
+      emp.razao_social,
+      emp.uf,
+      emp.cnae,
+      uf_n.n AS empresas_uf,
+      COALESCE(ui.v, 0) / NULLIF(uf_n.n, 0) AS imp_estimado,
+      COALESCE(ue.v, 0) / NULLIF(uf_n.n, 0) AS exp_estimado,
+      {ano_ini} AS ano_ini,
+      {ano_fim} AS ano_fim
+    FROM emp
+    JOIN uf_n ON uf_n.uf = emp.uf
+    LEFT JOIN uf_imp ui ON ui.uf = emp.uf
+    LEFT JOIN uf_exp ue ON ue.uf = emp.uf
+    """
+
+
+@router.post("/criar-tabela-estimativa")
+async def criar_tabela_estimativa(
+    ano_ini: int = Query(2020, ge=2000, le=2030),
+    ano_fim: int = Query(2021, ge=2000, le=2030),
+):
+    """Cria/atualiza a tabela empresas_comex_estimado. Operação administrativa."""
+    try:
+        client = _get_bq_client()
+        ddl = _ddl_tabela_estimativa(ano_ini, ano_fim)
+        _run_query(client, ddl, None)
+        cnt = _run_query(client, f"SELECT COUNT(*) n FROM {_bt(_env('COMEX_BQ_TABLE_ESTIMADO', _DEFAULT_ESTIMADO))}", None)
+        return {"ok": True, "tabela": _DEFAULT_ESTIMADO, "linhas": int(cnt[0].get("n") or 0), "periodo": f"{ano_ini}-{ano_fim}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:500]}
+
+
 _SQL_BLOCKED = ("insert", "update", "delete", "drop", "truncate", "merge", "alter", "grant", "revoke")
 
 
@@ -154,6 +218,54 @@ def _get_razao_base(client, cnpjs: List[str]) -> Dict:
         return rows[0] if rows else {}
     except Exception as e:
         logger.warning(f"_get_razao_base erro: {e}")
+        return {}
+
+
+def _get_comex_estimado(client, cnpjs: List[str]) -> Dict:
+    """Lê a estimativa de comex por CNPJ da tabela empresas_comex_estimado.
+    Soma os CNPJs da empresa e retorna detalhamento por UF."""
+    if not cnpjs:
+        return {}
+    from google.cloud import bigquery
+    t = _bt(_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
+    sql = f"""
+    SELECT
+      uf,
+      SUM(imp_estimado) AS imp_uf,
+      SUM(exp_estimado) AS exp_uf,
+      ANY_VALUE(empresas_uf) AS empresas_uf,
+      ANY_VALUE(ano_ini) AS ano_ini,
+      ANY_VALUE(ano_fim) AS ano_fim,
+      COUNT(*) AS n_cnpjs
+    FROM {t}
+    WHERE cnpj IN UNNEST(@cnpj_list)
+    GROUP BY uf
+    ORDER BY (SUM(imp_estimado) + SUM(exp_estimado)) DESC
+    """
+    try:
+        rows = _run_query(client, sql, [bigquery.ArrayQueryParameter("cnpj_list", "STRING", cnpjs)])
+        if not rows:
+            return {}
+        total_imp = sum(float(r.get("imp_uf") or 0) for r in rows)
+        total_exp = sum(float(r.get("exp_uf") or 0) for r in rows)
+        return {
+            "total_imp": total_imp,
+            "total_exp": total_exp,
+            "ano_ini": int(rows[0].get("ano_ini") or 0),
+            "ano_fim": int(rows[0].get("ano_fim") or 0),
+            "por_uf": [
+                {
+                    "uf": r.get("uf"),
+                    "imp": float(r.get("imp_uf") or 0),
+                    "exp": float(r.get("exp_uf") or 0),
+                    "empresas_uf": int(r.get("empresas_uf") or 0),
+                    "n_cnpjs": int(r.get("n_cnpjs") or 0),
+                }
+                for r in rows
+            ],
+        }
+    except Exception as e:
+        logger.warning(f"_get_comex_estimado erro: {e}")
         return {}
 
 
@@ -617,6 +729,18 @@ async def empresa_inteligencia(
     total_exp = float(comex.get("total_exp") or 0)
     tem_dados = (total_imp + total_exp) > 0
 
+    # 2b. Estimativa por CNPJ (tabela empresas_comex_estimado), usada quando não há dado real
+    estimado = {}
+    fonte_valores = "indisponivel"
+    if not tem_dados:
+        estimado = _get_comex_estimado(client, cnpjs)
+        if estimado and (float(estimado.get("total_imp") or 0) + float(estimado.get("total_exp") or 0)) > 0:
+            total_imp = float(estimado.get("total_imp") or 0)
+            total_exp = float(estimado.get("total_exp") or 0)
+            fonte_valores = "estimado"
+    else:
+        fonte_valores = "real"
+
     uf = str(perfil.get("uf") or razao_base.get("uf") or "").strip() or None
 
     # 3. Se tem UF, buscar mercado UF
@@ -681,13 +805,40 @@ async def empresa_inteligencia(
         for r in (comex.get("top_ncms") or [])
     ]
 
-    # 7. UFs
-    ufs_empresa = [
-        {"uf": r.get("uf"), "v_imp": float(r.get("vi") or 0), "v_exp": float(r.get("ve") or 0)}
-        for r in (comex.get("top_ufs") or [])
-    ]
+    # 7. UFs — de dados reais ou, na ausência, do detalhamento estimado por UF
+    if comex.get("top_ufs"):
+        ufs_empresa = [
+            {"uf": r.get("uf"), "v_imp": float(r.get("vi") or 0), "v_exp": float(r.get("ve") or 0)}
+            for r in comex.get("top_ufs")
+        ]
+    else:
+        ufs_empresa = [
+            {"uf": r.get("uf"), "v_imp": float(r.get("imp") or 0), "v_exp": float(r.get("exp") or 0)}
+            for r in (estimado.get("por_uf") or [])
+        ]
 
     razao = str(perfil.get("razao_social") or razao_base.get("razao_social") or cnpjs[0]).strip()
+
+    # Há valores a exibir (reais ou estimados)?
+    tem_valores = fonte_valores in ("real", "estimado")
+    periodo_est = (
+        f"{estimado.get('ano_ini')}-{estimado.get('ano_fim')}"
+        if fonte_valores == "estimado" and estimado.get("ano_ini") else None
+    )
+
+    if fonte_valores == "estimado":
+        aviso = (
+            f"Valores ESTIMADOS para {razao}. Não há registro real de comex por CNPJ na base; "
+            f"a estimativa rateia o total de importação/exportação de cada UF ({periodo_est}) "
+            "entre os CNPJs comex-ativos do estado. Use como ordem de grandeza, não como histórico real."
+        )
+    elif fonte_valores == "real":
+        aviso = None
+    else:
+        aviso = (
+            f"Não há registros nem estimativa de comex por CNPJ para {razao}. "
+            f"Exibindo o mercado de comércio exterior da UF {uf or '—'} como referência."
+        )
 
     return {
         "q": q,
@@ -698,14 +849,17 @@ async def empresa_inteligencia(
         "cnae": cnae,
         "cnae_hierarquia": cnae_hierarquia,
         "num_estabelecimentos": int(perfil.get("num_estab") or 0),
-        "tem_dados_comex": tem_dados,
+        "tem_dados_comex": tem_valores,
+        "fonte_valores": fonte_valores,
+        "periodo_estimativa": periodo_est,
         "kpis": {
             "total_imp": total_imp,
             "total_exp": total_exp,
             "saldo": total_exp - total_imp,
             "num_ncms": int(comex.get("num_ncms") or 0),
-            "num_ufs": int(comex.get("num_ufs") or 0),
+            "num_ufs": int(comex.get("num_ufs") or 0) or len(estimado.get("por_uf") or []),
         },
+        "estimado_por_uf": estimado.get("por_uf") or [],
         "timeline": timeline_empresa,
         "ncms": ncms,
         "ufs": ufs_empresa,
@@ -716,9 +870,5 @@ async def empresa_inteligencia(
             "timeline": timeline_uf,
         },
         "potencial": potencial,
-        "aviso": None if tem_dados else (
-            f"Não há registros de importação/exportação por CNPJ para {razao} na base disponível. "
-            f"Exibindo o mercado de comércio exterior da UF {uf or '—'} e os NCMs mais movimentados "
-            "no estado como estimativa do mercado endereçável do segmento."
-        ),
+        "aviso": aviso,
     }
