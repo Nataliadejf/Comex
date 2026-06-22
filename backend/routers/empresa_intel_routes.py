@@ -221,52 +221,119 @@ def _get_razao_base(client, cnpjs: List[str]) -> Dict:
         return {}
 
 
-def _get_comex_estimado(client, cnpjs: List[str]) -> Dict:
-    """Lê a estimativa de comex por CNPJ da tabela empresas_comex_estimado.
-    Soma os CNPJs da empresa e retorna detalhamento por UF."""
+def _get_comex_estimado(client, cnpjs: List[str], ano_ini: int = 2020, ano_fim: int = 2021) -> Dict:
+    """Estimativa de comex por CNPJ calculada ao vivo (sem tabela materializada).
+
+    Metodologia: para cada UF onde a empresa é comex-ativa (empresasimportexport),
+    rateia o total de importação/exportação da UF (tabelas UF×NCM, período de
+    sobreposição) igualmente entre os CNPJs comex-ativos do estado, e soma a
+    parte dos CNPJs da empresa.
+    """
     if not cnpjs:
         return {}
     from google.cloud import bigquery
-    t = _bt(_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
-    sql = f"""
-    SELECT
-      uf,
-      SUM(imp_estimado) AS imp_uf,
-      SUM(exp_estimado) AS exp_uf,
-      ANY_VALUE(empresas_uf) AS empresas_uf,
-      ANY_VALUE(ano_ini) AS ano_ini,
-      ANY_VALUE(ano_fim) AS ano_fim,
-      COUNT(*) AS n_cnpjs
-    FROM {t}
-    WHERE cnpj IN UNNEST(@cnpj_list)
-    GROUP BY uf
-    ORDER BY (SUM(imp_estimado) + SUM(exp_estimado)) DESC
+
+    # Se houver tabela materializada, usa-a (mais rápido); senão calcula ao vivo.
+    t_est = _bt(_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
+    sql_tab = f"""
+    SELECT uf, SUM(imp_estimado) imp_uf, SUM(exp_estimado) exp_uf,
+           ANY_VALUE(empresas_uf) empresas_uf, ANY_VALUE(ano_ini) ano_ini,
+           ANY_VALUE(ano_fim) ano_fim, COUNT(*) n_cnpjs
+    FROM {t_est} WHERE cnpj IN UNNEST(@cnpj_list)
+    GROUP BY uf ORDER BY (SUM(imp_estimado)+SUM(exp_estimado)) DESC
     """
     try:
-        rows = _run_query(client, sql, [bigquery.ArrayQueryParameter("cnpj_list", "STRING", cnpjs)])
-        if not rows:
-            return {}
-        total_imp = sum(float(r.get("imp_uf") or 0) for r in rows)
-        total_exp = sum(float(r.get("exp_uf") or 0) for r in rows)
-        return {
-            "total_imp": total_imp,
-            "total_exp": total_exp,
-            "ano_ini": int(rows[0].get("ano_ini") or 0),
-            "ano_fim": int(rows[0].get("ano_fim") or 0),
-            "por_uf": [
-                {
-                    "uf": r.get("uf"),
-                    "imp": float(r.get("imp_uf") or 0),
-                    "exp": float(r.get("exp_uf") or 0),
-                    "empresas_uf": int(r.get("empresas_uf") or 0),
-                    "n_cnpjs": int(r.get("n_cnpjs") or 0),
-                }
-                for r in rows
-            ],
-        }
-    except Exception as e:
-        logger.warning(f"_get_comex_estimado erro: {e}")
+        rows = _run_query(client, sql_tab, [bigquery.ArrayQueryParameter("cnpj_list", "STRING", cnpjs)])
+        if rows:
+            return _montar_estimado(rows, key_imp="imp_uf", key_exp="exp_uf")
+    except Exception:
+        pass  # tabela não existe — segue para cálculo ao vivo
+
+    raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
+    if not raizes:
         return {}
+    t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+    t_iex = _bt("liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport")
+    sql_live = f"""
+    WITH
+    emp AS (
+      SELECT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','') cnpj14,
+             UPPER(TRIM(CAST(sigla_uf AS STRING))) uf
+      FROM {t_iex}
+      WHERE ano BETWEEN @a0 AND @a1
+        AND SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8) IN UNNEST(@raizes)
+      GROUP BY cnpj14, uf
+    ),
+    ufs AS (SELECT DISTINCT uf FROM emp),
+    uf_n AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf,
+             COUNT(DISTINCT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) n
+      FROM {t_iex}
+      WHERE ano BETWEEN @a0 AND @a1
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN (SELECT uf FROM ufs)
+      GROUP BY uf
+    ),
+    uf_imp AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, SUM(CAST(total_importacao_fob AS FLOAT64)) v
+      FROM {t_imp} WHERE ano BETWEEN @a0 AND @a1
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN (SELECT uf FROM ufs)
+      GROUP BY uf
+    ),
+    uf_exp AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, SUM(CAST(total_exportacao_fob AS FLOAT64)) v
+      FROM {t_exp} WHERE ano BETWEEN @a0 AND @a1
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN (SELECT uf FROM ufs)
+      GROUP BY uf
+    )
+    SELECT
+      emp.uf,
+      COUNT(*) AS n_cnpjs,
+      ANY_VALUE(uf_n.n) AS empresas_uf,
+      COALESCE(ANY_VALUE(uf_imp.v),0) / NULLIF(ANY_VALUE(uf_n.n),0) * COUNT(*) AS imp_uf,
+      COALESCE(ANY_VALUE(uf_exp.v),0) / NULLIF(ANY_VALUE(uf_n.n),0) * COUNT(*) AS exp_uf,
+      {ano_ini} AS ano_ini, {ano_fim} AS ano_fim
+    FROM emp
+    JOIN uf_n ON uf_n.uf = emp.uf
+    LEFT JOIN uf_imp ON uf_imp.uf = emp.uf
+    LEFT JOIN uf_exp ON uf_exp.uf = emp.uf
+    GROUP BY emp.uf
+    ORDER BY imp_uf + exp_uf DESC
+    """
+    params = [
+        bigquery.ArrayQueryParameter("raizes", "STRING", raizes),
+        bigquery.ScalarQueryParameter("a0", "INT64", ano_ini),
+        bigquery.ScalarQueryParameter("a1", "INT64", ano_fim),
+    ]
+    try:
+        rows = _run_query(client, sql_live, params)
+        return _montar_estimado(rows, key_imp="imp_uf", key_exp="exp_uf")
+    except Exception as e:
+        logger.warning(f"_get_comex_estimado (live) erro: {e}")
+        return {}
+
+
+def _montar_estimado(rows, key_imp: str, key_exp: str) -> Dict:
+    if not rows:
+        return {}
+    total_imp = sum(float(r.get(key_imp) or 0) for r in rows)
+    total_exp = sum(float(r.get(key_exp) or 0) for r in rows)
+    return {
+        "total_imp": total_imp,
+        "total_exp": total_exp,
+        "ano_ini": int(rows[0].get("ano_ini") or 0),
+        "ano_fim": int(rows[0].get("ano_fim") or 0),
+        "por_uf": [
+            {
+                "uf": r.get("uf"),
+                "imp": float(r.get(key_imp) or 0),
+                "exp": float(r.get(key_exp) or 0),
+                "empresas_uf": int(r.get("empresas_uf") or 0),
+                "n_cnpjs": int(r.get("n_cnpjs") or 0),
+            }
+            for r in rows
+        ],
+    }
 
 
 def _estab_columns(client, t_ref: str) -> set:
