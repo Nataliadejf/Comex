@@ -202,6 +202,133 @@ def _get_razao_base(client, cnpjs: List[str]) -> Dict:
         return {}
 
 
+_TBL_IEX = "liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport"
+
+
+@router.get("/habilitacao")
+async def habilitacao_empresa(q: str = Query(..., min_length=2, description="CNPJ ou nome")):
+    """Verifica se uma empresa tem habilitação para comex (registro de operações)."""
+    try:
+        client = _get_bq_client()
+        cnpjs = _resolve_cnpjs(client, q)
+    except Exception as e:
+        return {"error": str(e)}
+    if not cnpjs:
+        return {"q": q, "encontrada": False, "habilitada": False, "aviso": f"Empresa '{q}' não localizada."}
+    hab = _get_habilitacao(client, cnpjs)
+    return {"q": q, "encontrada": True, "cnpjs": cnpjs, **hab}
+
+
+@router.get("/habilitadas")
+async def listar_habilitadas(
+    uf: Optional[str] = Query(None, description="Sigla UF"),
+    cnae_prefixo: Optional[str] = Query(None, description="Prefixo do CNAE (ex.: 4530)"),
+    ano: Optional[int] = Query(None, ge=1997, le=2030),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Lista empresas habilitadas (comex-ativas) com filtros UF/CNAE/ano."""
+    try:
+        client = _get_bq_client()
+    except Exception as e:
+        return {"error": str(e), "empresas": []}
+    from google.cloud import bigquery
+    t = _bt(_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _TBL_IEX))
+    where = ["1=1"]
+    params: List = []
+    if uf:
+        where.append("UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf")
+        params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
+    if cnae_prefixo:
+        where.append("REGEXP_REPLACE(CAST(cnae_2_primaria AS STRING), r'[^0-9]','') LIKE @cnaep")
+        params.append(bigquery.ScalarQueryParameter("cnaep", "STRING", f"{cnae_prefixo}%"))
+    if ano:
+        where.append("ano = @ano")
+        params.append(bigquery.ScalarQueryParameter("ano", "INT64", ano))
+    sql = f"""
+    SELECT
+      REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','') AS cnpj,
+      ANY_VALUE(razao_social) AS razao_social,
+      UPPER(TRIM(ANY_VALUE(sigla_uf))) AS uf,
+      ANY_VALUE(cnae_2_primaria) AS cnae,
+      MIN(ano) AS primeiro_ano,
+      MAX(ano) AS ultimo_ano,
+      COUNT(DISTINCT ano) AS anos_ativos
+    FROM {t}
+    WHERE {' AND '.join(where)}
+      AND LENGTH(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) = 14
+    GROUP BY cnpj
+    ORDER BY anos_ativos DESC, ultimo_ano DESC
+    LIMIT {int(limit)}
+    """
+    try:
+        rows = _run_query(client, sql, params)
+        return {
+            "filtros": {"uf": uf, "cnae_prefixo": cnae_prefixo, "ano": ano},
+            "total": len(rows),
+            "empresas": [
+                {
+                    "cnpj": r.get("cnpj"), "razao_social": r.get("razao_social"),
+                    "uf": r.get("uf"), "cnae": r.get("cnae"),
+                    "primeiro_ano": int(r.get("primeiro_ano") or 0),
+                    "ultimo_ano": int(r.get("ultimo_ano") or 0),
+                    "anos_ativos": int(r.get("anos_ativos") or 0),
+                }
+                for r in rows
+            ],
+        }
+    except Exception as e:
+        return {"error": str(e)[:300], "empresas": []}
+
+
+def _get_habilitacao(client, cnpjs: List[str]) -> Dict:
+    """Verifica a 'habilitação' para comex via empresasimportexport.
+
+    Uma empresa que aparece nessa base operou import/export no(s) ano(s) listado(s),
+    o que pressupõe habilitação no RADAR/Siscomex naquele período.
+    """
+    if not cnpjs:
+        return {"habilitada": False}
+    from google.cloud import bigquery
+    raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
+    if not raizes:
+        return {"habilitada": False}
+    t = _bt(_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _TBL_IEX))
+    sql = f"""
+    SELECT
+      ANY_VALUE(razao_social) razao_social,
+      UPPER(TRIM(ANY_VALUE(sigla_uf))) uf,
+      ANY_VALUE(cnae_2_primaria) cnae,
+      MIN(ano) primeiro_ano,
+      MAX(ano) ultimo_ano,
+      COUNT(DISTINCT ano) anos_ativos,
+      COUNT(DISTINCT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) n_cnpjs,
+      ARRAY_AGG(DISTINCT ano ORDER BY ano DESC LIMIT 30) anos
+    FROM {t}
+    WHERE SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8) IN UNNEST(@raizes)
+    """
+    try:
+        rows = _run_query(client, sql, [bigquery.ArrayQueryParameter("raizes", "STRING", raizes)])
+        if not rows or not rows[0].get("primeiro_ano"):
+            return {"habilitada": False}
+        r = rows[0]
+        anos = r.get("anos") or []
+        anos = list(anos) if not isinstance(anos, list) else anos
+        return {
+            "habilitada": True,
+            "primeiro_ano": int(r.get("primeiro_ano") or 0),
+            "ultimo_ano": int(r.get("ultimo_ano") or 0),
+            "anos_ativos": int(r.get("anos_ativos") or 0),
+            "n_cnpjs": int(r.get("n_cnpjs") or 0),
+            "uf": r.get("uf"),
+            "cnae": r.get("cnae"),
+            "anos": [int(a) for a in anos],
+            "fonte": "empresasimportexport (operações de comércio exterior — base MDIC)",
+        }
+    except Exception as e:
+        logger.warning(f"_get_habilitacao erro: {e}")
+        return {"habilitada": False, "erro": str(e)[:200]}
+
+
 def _get_comex_estimado(client, cnpjs: List[str], ano_ini: int = 2020, ano_fim: int = 2021) -> Dict:
     """Estimativa de comex por CNPJ calculada ao vivo (sem tabela materializada).
 
@@ -752,14 +879,15 @@ async def empresa_inteligencia(
             "aviso": f"Empresa '{q}' não encontrada na base de dados.",
         }
 
-    # 2. Buscar perfil + comex em paralelo (cada função é resiliente a erros)
+    # 2. Buscar perfil + comex + habilitação em paralelo (cada função é resiliente a erros)
     jobs = {
         "perfil": lambda: _get_estab_profile(client, cnpjs),
         "comex": lambda: _get_comex_empresa(client, cnpjs, ano_inicio, ano_fim),
         "razao": lambda: _get_razao_base(client, cnpjs),
+        "habilitacao": lambda: _get_habilitacao(client, cnpjs),
     }
     results = {}
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futs = {pool.submit(fn): key for key, fn in jobs.items()}
         for fut in as_completed(futs):
             key = futs[fut]
@@ -772,6 +900,7 @@ async def empresa_inteligencia(
     perfil = results.get("perfil") or {}
     comex = results.get("comex") or {}
     razao_base = results.get("razao") or {}
+    habilitacao = results.get("habilitacao") or {"habilitada": False}
 
     total_imp = float(comex.get("total_imp") or 0)
     total_exp = float(comex.get("total_exp") or 0)
@@ -897,6 +1026,7 @@ async def empresa_inteligencia(
         "cnae": cnae,
         "cnae_hierarquia": cnae_hierarquia,
         "num_estabelecimentos": int(perfil.get("num_estab") or 0),
+        "habilitacao": habilitacao,
         "tem_dados_comex": tem_valores,
         "fonte_valores": fonte_valores,
         "periodo_estimativa": periodo_est,
