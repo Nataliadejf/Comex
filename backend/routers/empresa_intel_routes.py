@@ -85,67 +85,6 @@ async def inspecionar_tabelas(
 _DEFAULT_ESTIMADO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_comex_estimado"
 
 
-def _ddl_tabela_estimativa(ano_ini: int = 2020, ano_fim: int = 2021) -> str:
-    """DDL: cria tabela de comex ESTIMADO por CNPJ (rateio do mercado UF×NCM
-    entre os CNPJs comex-ativos de cada UF no período de sobreposição)."""
-    t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
-    t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
-    t_iex = _bt("liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport")
-    t_dst = _bt(_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
-    return f"""
-    CREATE OR REPLACE TABLE {t_dst} AS
-    WITH
-    uf_imp AS (
-      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, SUM(CAST(total_importacao_fob AS FLOAT64)) v
-      FROM {t_imp} WHERE ano BETWEEN {ano_ini} AND {ano_fim} GROUP BY uf
-    ),
-    uf_exp AS (
-      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, SUM(CAST(total_exportacao_fob AS FLOAT64)) v
-      FROM {t_exp} WHERE ano BETWEEN {ano_ini} AND {ano_fim} GROUP BY uf
-    ),
-    emp AS (
-      SELECT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','') cnpj14,
-             ANY_VALUE(razao_social) razao_social,
-             UPPER(TRIM(ANY_VALUE(sigla_uf))) uf,
-             ANY_VALUE(cnae_2_primaria) cnae
-      FROM {t_iex} WHERE ano BETWEEN {ano_ini} AND {ano_fim}
-        AND LENGTH(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) = 14
-      GROUP BY cnpj14
-    ),
-    uf_n AS (SELECT uf, COUNT(*) n FROM emp GROUP BY uf)
-    SELECT
-      emp.cnpj14 AS cnpj,
-      emp.razao_social,
-      emp.uf,
-      emp.cnae,
-      uf_n.n AS empresas_uf,
-      COALESCE(ui.v, 0) / NULLIF(uf_n.n, 0) AS imp_estimado,
-      COALESCE(ue.v, 0) / NULLIF(uf_n.n, 0) AS exp_estimado,
-      {ano_ini} AS ano_ini,
-      {ano_fim} AS ano_fim
-    FROM emp
-    JOIN uf_n ON uf_n.uf = emp.uf
-    LEFT JOIN uf_imp ui ON ui.uf = emp.uf
-    LEFT JOIN uf_exp ue ON ue.uf = emp.uf
-    """
-
-
-@router.post("/criar-tabela-estimativa")
-async def criar_tabela_estimativa(
-    ano_ini: int = Query(2020, ge=2000, le=2030),
-    ano_fim: int = Query(2021, ge=2000, le=2030),
-):
-    """Cria/atualiza a tabela empresas_comex_estimado. Operação administrativa."""
-    try:
-        client = _get_bq_client()
-        ddl = _ddl_tabela_estimativa(ano_ini, ano_fim)
-        _run_query(client, ddl, None)
-        cnt = _run_query(client, f"SELECT COUNT(*) n FROM {_bt(_env('COMEX_BQ_TABLE_ESTIMADO', _DEFAULT_ESTIMADO))}", None)
-        return {"ok": True, "tabela": _DEFAULT_ESTIMADO, "linhas": int(cnt[0].get("n") or 0), "periodo": f"{ano_ini}-{ano_fim}"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:500]}
-
-
 def _resolve_cnpjs(client, termo: str) -> List[str]:
     """Resolve CNPJs a partir de nome ou CNPJ direto via empresas_base."""
     from google.cloud import bigquery
@@ -292,8 +231,20 @@ def _get_habilitacao(client, cnpjs: List[str]) -> Dict:
     raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
     if not raizes:
         return {"habilitada": False}
+    params = [bigquery.ArrayQueryParameter("raizes", "STRING", raizes)]
+    fonte = "empresasimportexport (operações de comércio exterior — base MDIC)"
+
+    # Caminho rápido: tabela materializada empresas_habilitacao
+    t_hab = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"))
+    sql_tab = f"""
+    SELECT ANY_VALUE(razao_social) razao_social, UPPER(TRIM(ANY_VALUE(uf))) uf,
+           ANY_VALUE(cnae) cnae, MIN(primeiro_ano) primeiro_ano, MAX(ultimo_ano) ultimo_ano,
+           MAX(anos_ativos) anos_ativos, SUM(n_cnpjs) n_cnpjs
+    FROM {t_hab} WHERE cnpj_raiz IN UNNEST(@raizes)
+    """
+    # Caminho ao vivo (fallback se a tabela não existir)
     t = _bt(_env("COMEX_BQ_TABLE_EMPRESAS_IMPEX", _TBL_IEX))
-    sql = f"""
+    sql_live = f"""
     SELECT
       ANY_VALUE(razao_social) razao_social,
       UPPER(TRIM(ANY_VALUE(sigla_uf))) uf,
@@ -301,18 +252,14 @@ def _get_habilitacao(client, cnpjs: List[str]) -> Dict:
       MIN(ano) primeiro_ano,
       MAX(ano) ultimo_ano,
       COUNT(DISTINCT ano) anos_ativos,
-      COUNT(DISTINCT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) n_cnpjs,
-      ARRAY_AGG(DISTINCT ano ORDER BY ano DESC LIMIT 30) anos
+      COUNT(DISTINCT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]','')) n_cnpjs
     FROM {t}
     WHERE SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8) IN UNNEST(@raizes)
     """
-    try:
-        rows = _run_query(client, sql, [bigquery.ArrayQueryParameter("raizes", "STRING", raizes)])
-        if not rows or not rows[0].get("primeiro_ano"):
+
+    def _fmt(r) -> Dict:
+        if not r or not r.get("primeiro_ano"):
             return {"habilitada": False}
-        r = rows[0]
-        anos = r.get("anos") or []
-        anos = list(anos) if not isinstance(anos, list) else anos
         return {
             "habilitada": True,
             "primeiro_ano": int(r.get("primeiro_ano") or 0),
@@ -321,9 +268,18 @@ def _get_habilitacao(client, cnpjs: List[str]) -> Dict:
             "n_cnpjs": int(r.get("n_cnpjs") or 0),
             "uf": r.get("uf"),
             "cnae": r.get("cnae"),
-            "anos": [int(a) for a in anos],
-            "fonte": "empresasimportexport (operações de comércio exterior — base MDIC)",
+            "fonte": fonte,
         }
+
+    try:
+        rows = _run_query(client, sql_tab, params)
+        if rows:
+            return _fmt(rows[0])
+    except Exception:
+        pass  # tabela materializada ausente — usa cálculo ao vivo
+    try:
+        rows = _run_query(client, sql_live, params)
+        return _fmt(rows[0] if rows else {})
     except Exception as e:
         logger.warning(f"_get_habilitacao erro: {e}")
         return {"habilitada": False, "erro": str(e)[:200]}
@@ -352,7 +308,7 @@ def _get_comex_estimado(client, cnpjs: List[str], ano_ini: int = 2020, ano_fim: 
     SELECT uf, SUM(imp_estimado) imp_uf, SUM(exp_estimado) exp_uf,
            ANY_VALUE(empresas_uf) empresas_uf, ANY_VALUE(ano_ini) ano_ini,
            ANY_VALUE(ano_fim) ano_fim, COUNT(*) n_cnpjs
-    FROM {t_est} WHERE SUBSTR(cnpj, 1, 8) IN UNNEST(@raizes)
+    FROM {t_est} WHERE cnpj_raiz IN UNNEST(@raizes)
     GROUP BY uf ORDER BY (SUM(imp_estimado)+SUM(exp_estimado)) DESC
     """
     try:
@@ -361,6 +317,9 @@ def _get_comex_estimado(client, cnpjs: List[str], ano_ini: int = 2020, ano_fim: 
             return _montar_estimado(rows, key_imp="imp_uf", key_exp="exp_uf")
     except Exception:
         pass  # tabela não existe — segue para cálculo ao vivo
+
+    # Fallback simplificado (rateio igual, sem ponderar porte) — só usado se a
+    # tabela materializada estiver ausente. A versão ponderada está na tabela.
     t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
     t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
     t_iex = _bt("liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport")
@@ -1008,7 +967,8 @@ async def empresa_inteligencia(
         aviso = (
             f"Valores ESTIMADOS para {razao}. Não há registro real de comex por CNPJ na base; "
             f"a estimativa rateia o total de importação/exportação de cada UF ({periodo_est}) "
-            "entre os CNPJs comex-ativos do estado. Use como ordem de grandeza, não como histórico real."
+            "entre as empresas comex-ativas do estado, ponderado pelo porte (nº de "
+            "estabelecimentos). Use como ordem de grandeza, não como histórico real."
         )
     elif fonte_valores == "real":
         aviso = None

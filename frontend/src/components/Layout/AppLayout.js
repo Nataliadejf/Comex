@@ -6,6 +6,7 @@ import {
   SearchOutlined,
   BankOutlined,
   PhoneOutlined,
+  SafetyCertificateOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuFoldOutlined,
@@ -64,6 +65,11 @@ const AppLayout = ({ children }) => {
       key: '/contatos',
       icon: <PhoneOutlined />,
       label: 'Empresas & Contatos',
+    },
+    {
+      key: '/habilitadas',
+      icon: <SafetyCertificateOutlined />,
+      label: 'Habilitadas Comex',
     },
   ];
 
