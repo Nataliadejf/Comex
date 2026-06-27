@@ -341,25 +341,26 @@ def _get_comex_estimado(client, cnpjs: List[str], ano_ini: int = 2020, ano_fim: 
         return {}
     from google.cloud import bigquery
 
-    # Se houver tabela materializada, usa-a (mais rápido); senão calcula ao vivo.
+    raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
+    if not raizes:
+        return {}
+
+    # Se houver tabela materializada, usa-a (mais rápido); casa por raiz (8 díg.)
+    # para capturar todos os estabelecimentos da empresa, igual ao cálculo ao vivo.
     t_est = _bt(_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
     sql_tab = f"""
     SELECT uf, SUM(imp_estimado) imp_uf, SUM(exp_estimado) exp_uf,
            ANY_VALUE(empresas_uf) empresas_uf, ANY_VALUE(ano_ini) ano_ini,
            ANY_VALUE(ano_fim) ano_fim, COUNT(*) n_cnpjs
-    FROM {t_est} WHERE cnpj IN UNNEST(@cnpj_list)
+    FROM {t_est} WHERE SUBSTR(cnpj, 1, 8) IN UNNEST(@raizes)
     GROUP BY uf ORDER BY (SUM(imp_estimado)+SUM(exp_estimado)) DESC
     """
     try:
-        rows = _run_query(client, sql_tab, [bigquery.ArrayQueryParameter("cnpj_list", "STRING", cnpjs)])
+        rows = _run_query(client, sql_tab, [bigquery.ArrayQueryParameter("raizes", "STRING", raizes)])
         if rows:
             return _montar_estimado(rows, key_imp="imp_uf", key_exp="exp_uf")
     except Exception:
         pass  # tabela não existe — segue para cálculo ao vivo
-
-    raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
-    if not raizes:
-        return {}
     t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
     t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
     t_iex = _bt("liquid-receiver-483923-n6.Projeto_Comex.empresasimportexport")
