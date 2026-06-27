@@ -53,9 +53,15 @@ interface Potencial {
 }
 
 interface EstimadoUf { uf: string; imp: number; exp: number; empresas_uf: number; n_cnpjs: number }
+interface Habilitacao {
+  habilitada: boolean; primeiro_ano?: number; ultimo_ano?: number;
+  anos_ativos?: number; n_cnpjs?: number; uf?: string; cnae?: string;
+  anos?: number[]; fonte?: string;
+}
 
 interface EmpresaIntel {
   razao_social: string; uf_sede: string | null; municipio: string | null;
+  habilitacao: Habilitacao;
   cnae: string | null; cnae_hierarquia: CnaeHierarquia | null; num_estabelecimentos: number;
   tem_dados_comex: boolean; aviso: string | null;
   fonte_valores: "real" | "estimado" | "indisponivel";
@@ -347,8 +353,49 @@ const DashboardComexBigQuery: React.FC = () => {
                   {empresa.num_estabelecimentos > 0 && <Tag color="geekblue">{empresa.num_estabelecimentos} estabelecimentos</Tag>}
                 </div>
               </Col>
+              <Col>
+                {empresa.habilitacao?.habilitada ? (
+                  <Tag color="green" style={{ fontSize: 13, padding: "4px 12px" }}>
+                    ✓ Habilitada p/ Comex
+                  </Tag>
+                ) : (
+                  <Tag color="default" style={{ fontSize: 13, padding: "4px 12px" }}>
+                    Sem registro de comex
+                  </Tag>
+                )}
+              </Col>
             </Row>
           </Card>
+
+          {/* Habilitação para comércio exterior */}
+          {empresa.habilitacao?.habilitada && (
+            <Card
+              title="🛂 Habilitação para Comércio Exterior (RADAR/Siscomex)"
+              size="small"
+              style={{ marginBottom: 16 }}
+              extra={<Tag color="green">Ativa</Tag>}
+            >
+              <Row gutter={[16, 8]}>
+                <Col xs={12} md={6}>
+                  <Statistic title="Anos Operando" value={empresa.habilitacao.anos_ativos || 0} suffix="anos" />
+                </Col>
+                <Col xs={12} md={6}>
+                  <Statistic title="Período" value={`${empresa.habilitacao.primeiro_ano}–${empresa.habilitacao.ultimo_ano}`} />
+                </Col>
+                <Col xs={12} md={6}>
+                  <Statistic title="Estabelecimentos Habilitados" value={empresa.habilitacao.n_cnpjs || 0} />
+                </Col>
+                <Col xs={12} md={6}>
+                  <Statistic title="Último Ano Ativo" value={empresa.habilitacao.ultimo_ano || 0} />
+                </Col>
+              </Row>
+              <div style={{ marginTop: 12, fontSize: 12, color: "#888" }}>
+                Fonte: {empresa.habilitacao.fonte}. Empresa que operou comércio exterior estava habilitada
+                no RADAR/Siscomex no período. (A habilitação RADAR é automática desde 2021 e não é mais
+                publicada individualmente no DOU.)
+              </div>
+            </Card>
+          )}
 
           {/* Banner conforme a fonte dos valores */}
           {empresa.fonte_valores === "estimado" && (
