@@ -1074,6 +1074,56 @@ def get_tabela_detalhada_bq(
     """Linhas detalhadas para a tabela do dashboard principal (formato legado), só BigQuery."""
     ym_start, ym_end = _parse_ym_bounds(data_inicio, data_fim, meses)
     rel = _use_related_model()
+
+    # Filtro por empresa sem comex real → detalhamento ESTIMADO por UF
+    if emp_stats.empresa_filtro_ativo(empresa_importadora, empresa_exportadora):
+        try:
+            client = _get_bigquery_client()
+            unified = emp_stats.try_unified_empresa_stats(
+                client, _run_query, _bt, _table_env, _get_table_ref,
+                _build_main_dashboard_where, _fonte_dados(), ym_start, ym_end,
+                tipo_operacao, ncm, ncms, empresa_importadora, empresa_exportadora,
+            )
+            if not unified:
+                cnpjs = emp_stats.resolve_cnpjs_empresa_base(
+                    client, _run_query, _bt, _table_env, empresa_importadora, empresa_exportadora
+                )
+                estimativa = emp_stats.fetch_estimativa_empresa(
+                    client, _run_query, _bt, _table_env, cnpjs
+                )
+                if estimativa:
+                    nome_emp = (empresa_importadora or empresa_exportadora or "").strip()
+                    por_uf = estimativa.get("por_uf") or []
+                    todas = [
+                        {
+                            "cnpj": cnpjs[0] if cnpjs else None,
+                            "razao_social": nome_emp,
+                            "sigla_uf": u.get("uf"),
+                            "id_ncm": "",
+                            "ano": estimativa.get("ano_fim") or 2021,
+                            "mes": 12,
+                            "total_importacao_fob": float(u.get("imp") or 0),
+                            "total_exportacao_fob": float(u.get("exp") or 0),
+                        }
+                        for u in por_uf
+                    ]
+                    total = len(todas)
+                    offset = (page - 1) * page_size
+                    pagina = todas[offset:offset + page_size]
+                    results = [_map_row_to_operacao_detalhe(r, i) for i, r in enumerate(pagina)]
+                    return {
+                        "results": results,
+                        "page": page,
+                        "page_size": page_size,
+                        "total": total,
+                        "fonte_valores": "estimado",
+                        "fonte_dados": _fonte_dados(),
+                    }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(f"tabela-detalhada estimativa falhou: {exc}")
+
     where_clause, params = _build_main_dashboard_where(
         ym_start,
         ym_end,
