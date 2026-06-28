@@ -44,6 +44,146 @@ _PROJECT_DATASET = "liquid-receiver-483923-n6.Projeto_Comex"
 
 
 _TBL_HABILITACAO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"
+_STOP_TOKENS = {
+    "ltda", "ltda.", "sa", "s.a", "s.a.", "s/a", "me", "mei", "epp", "eireli",
+    "cia", "cia.", "e", "de", "do", "da", "dos", "das", "em", "&", "-", "ind", "com",
+}
+
+
+def _deaccent(s: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
+
+def _tokens_busca(q: str) -> list:
+    import re
+    raw = re.findall(r"[0-9a-zà-ÿ]+", (q or "").lower())
+    out = []
+    for t in raw:
+        td = _deaccent(t)
+        if len(td) >= 2 and td not in _STOP_TOKENS:
+            out.append(td)
+    return out
+
+
+def _norm_sql(col: str) -> str:
+    """Expressão SQL: minúsculo + sem acentos."""
+    return f"REGEXP_REPLACE(NORMALIZE(LOWER(CAST({col} AS STRING)), NFD), r'\\pM', '')"
+
+
+def _regex_token(tk: str) -> str:
+    """Regex RE2 para casar o token como palavra inteira."""
+    import re as _re
+    return f"(^|[^0-9a-z]){_re.escape(tk)}([^0-9a-z]|$)"
+
+
+def _buscar_empresas_geral(client, q_clean, prefixos, uf, limit):
+    """Busca empresas por nome/CNPJ em DUAS fontes e mescla por raiz:
+    1) empresas_habilitacao (razão social — empresas de comex)
+    2) Estabelecimentos RF (nome fantasia — base completa)
+    Casamento por palavra inteira (regex). Marca tem_comex."""
+    from google.cloud import bigquery
+    toks = _tokens_busca(q_clean)
+    digitos = "".join(c for c in q_clean if c.isdigit())
+    if not toks and len(digitos) < 4:
+        return None
+    t_estab = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
+    t_hab = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
+    cnpj_pref = digitos[:8] if len(digitos) >= 4 else None
+
+    def _tok_params(prefix):
+        ps = []
+        for i, tk in enumerate(toks):
+            ps.append(bigquery.ScalarQueryParameter(f"{prefix}{i}", "STRING", _regex_token(tk)))
+        return ps
+
+    def _tok_conds(col, prefix):
+        return [f"REGEXP_CONTAINS({_norm_sql(col)}, @{prefix}{i})" for i in range(len(toks))]
+
+    # ── Query 1: base de comex por razão social ──
+    def q_comex():
+        p = []
+        cond_or = []
+        if toks:
+            cond_or.append("(" + " AND ".join(_tok_conds("razao_social", "rc")) + ")")
+            p += _tok_params("rc")
+        if cnpj_pref:
+            cond_or.append("cnpj_raiz LIKE @qc")
+            p.append(bigquery.ScalarQueryParameter("qc", "STRING", f"{cnpj_pref}%"))
+        w = ["(" + " OR ".join(cond_or) + ")"]
+        if uf:
+            w.append("UPPER(TRIM(CAST(uf AS STRING))) = @ufc")
+            p.append(bigquery.ScalarQueryParameter("ufc", "STRING", uf.upper()))
+        if prefixos:
+            w.append("SUBSTR(REGEXP_REPLACE(CAST(cnae AS STRING), r'[^0-9]',''),1,4) IN UNNEST(@pc)")
+            p.append(bigquery.ArrayQueryParameter("pc", "STRING", prefixos))
+        sql = f"""
+        SELECT cnpj_raiz AS raiz, razao_social, CAST(NULL AS STRING) nome_fantasia,
+               uf, cnae, anos_ativos, primeiro_ano, ultimo_ano, TRUE AS tem_comex
+        FROM {t_hab} WHERE {' AND '.join(w)}
+        ORDER BY anos_ativos DESC, ultimo_ano DESC LIMIT {int(limit)}
+        """
+        return _run_query(client, sql, p)
+
+    # ── Query 2: base completa de Estabelecimentos por nome fantasia ──
+    def q_estab():
+        p = []
+        cond_or = []
+        if toks:
+            cond_or.append("(" + " AND ".join(_tok_conds("nome_fantasia", "rf")) + ")")
+            p += _tok_params("rf")
+        if cnpj_pref:
+            cond_or.append("SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8) LIKE @qe")
+            p.append(bigquery.ScalarQueryParameter("qe", "STRING", f"{cnpj_pref}%"))
+        w = ["(" + " OR ".join(cond_or) + ")"]
+        if uf:
+            w.append("UPPER(TRIM(CAST(sigla_uf AS STRING))) = @ufe")
+            p.append(bigquery.ScalarQueryParameter("ufe", "STRING", uf.upper()))
+        if prefixos:
+            w.append("SUBSTR(REGEXP_REPLACE(CAST(cnae_fiscal_principal AS STRING), r'[^0-9]',''),1,4) IN UNNEST(@pe)")
+            p.append(bigquery.ArrayQueryParameter("pe", "STRING", prefixos))
+        sql = f"""
+        WITH filtrado AS (
+          SELECT SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8) AS raiz,
+                 CAST(nome_fantasia AS STRING) AS nome_fantasia,
+                 UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
+                 CAST(cnae_fiscal_principal AS STRING) AS cnae
+          FROM {t_estab} WHERE {' AND '.join(w)}
+        ),
+        e AS (SELECT raiz, ANY_VALUE(nome_fantasia) nome_fantasia, ANY_VALUE(uf) uf, ANY_VALUE(cnae) cnae
+              FROM filtrado GROUP BY raiz LIMIT {int(limit) * 3})
+        SELECT e.raiz, h.razao_social, e.nome_fantasia, e.uf, e.cnae,
+               h.anos_ativos, h.primeiro_ano, h.ultimo_ano,
+               (h.cnpj_raiz IS NOT NULL) AS tem_comex
+        FROM e LEFT JOIN {t_hab} h ON h.cnpj_raiz = e.raiz
+        LIMIT {int(limit)}
+        """
+        return _run_query(client, sql, p)
+
+    res = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futs = {pool.submit(q_comex): "c", pool.submit(q_estab): "e"}
+        for fut in as_completed(futs):
+            try:
+                res[futs[fut]] = fut.result()
+            except Exception as exc:
+                logger.warning(f"busca_geral {futs[fut]} erro: {exc}")
+                res[futs[fut]] = []
+
+    # Mesclar por raiz — preferir entrada com razão social (comex)
+    por_raiz: Dict[str, dict] = {}
+    for r in (res.get("c") or []):
+        por_raiz[r.get("raiz")] = dict(r)
+    for r in (res.get("e") or []):
+        raiz = r.get("raiz")
+        if raiz in por_raiz:
+            if not por_raiz[raiz].get("nome_fantasia"):
+                por_raiz[raiz]["nome_fantasia"] = r.get("nome_fantasia")
+        else:
+            por_raiz[raiz] = dict(r)
+    merged = sorted(por_raiz.values(),
+                    key=lambda r: (not r.get("tem_comex"), -(r.get("anos_ativos") or 0)))
+    return merged[:int(limit)]
 
 
 @router.get("/cnae-arvore")
@@ -86,8 +226,47 @@ async def empresas_por_segmento(
     except Exception as e:
         return {"error": str(e), "empresas": []}
 
+    filtros_out = {"setor": setor, "segmento": segmento, "ramo": ramo,
+                   "categoria": categoria, "uf": uf, "q": q_clean or None}
+
+    # ─── Busca por empresa (q): base completa de Estabelecimentos + flag comex ───
+    if q_clean:
+        try:
+            rows = _buscar_empresas_geral(client, q_clean, prefixos, uf, limit) or []
+        except Exception as e:
+            return {"error": str(e)[:300], "empresas": [], "filtros": filtros_out}
+        empresas = []
+        resumo = {}
+        for r in rows:
+            h = cnae_service.enriquecer_por_prefixo(
+                r.get("cnae"), setor=setor, segmento=segmento, ramo=ramo, categoria=categoria
+            ) or {}
+            nome = (r.get("razao_social") or r.get("nome_fantasia") or "—")
+            ufr = r.get("uf")
+            if ufr:
+                resumo[ufr] = resumo.get(ufr, 0) + 1
+            empresas.append({
+                "cnpj": r.get("raiz"), "razao_social": nome,
+                "nome_fantasia": r.get("nome_fantasia"),
+                "uf": ufr, "cnae": r.get("cnae"),
+                "setor": h.get("setor"), "segmento": h.get("segmento"),
+                "ramo": h.get("ramo"), "categoria": h.get("categoria"),
+                "tem_comex": bool(r.get("tem_comex")),
+                "primeiro_ano": int(r.get("primeiro_ano") or 0),
+                "ultimo_ano": int(r.get("ultimo_ano") or 0),
+                "anos_ativos": int(r.get("anos_ativos") or 0),
+            })
+        resumo_uf = sorted(
+            [{"uf": k, "n": v} for k, v in resumo.items()], key=lambda x: -x["n"]
+        )[:15]
+        return {
+            "filtros": filtros_out, "total": len(empresas), "exibidas": len(empresas),
+            "empresas": empresas, "resumo_uf": resumo_uf, "prefixos_cnae": prefixos,
+            "fonte": "Estabelecimentos RF (base completa) + flag de comex",
+        }
+
+    # ─── Filtro por CNAE apenas (sem q): empresas comex-habilitadas ───
     t = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
-    t_estab = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
     where: List[str] = []
     params: List = []
     if prefixos:
@@ -96,23 +275,8 @@ async def empresas_por_segmento(
     if uf:
         where.append("UPPER(TRIM(CAST(uf AS STRING))) = @uf")
         params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
-    if q_clean:
-        digitos = "".join(c for c in q_clean if c.isdigit())
-        cond = ["LOWER(CAST(razao_social AS STRING)) LIKE @qlike"]
-        params.append(bigquery.ScalarQueryParameter("qlike", "STRING", f"%{q_clean.lower()}%"))
-        if len(digitos) >= 4:
-            cond.append("cnpj_raiz LIKE @qcnpj")
-            params.append(bigquery.ScalarQueryParameter("qcnpj", "STRING", f"{digitos[:8]}%"))
-        # nome fantasia via Estabelecimentos (raiz)
-        cond.append(f"""cnpj_raiz IN (
-            SELECT DISTINCT SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8)
-            FROM {t_estab}
-            WHERE LOWER(CAST(nome_fantasia AS STRING)) LIKE @qlike
-        )""")
-        where.append("(" + " OR ".join(cond) + ")")
     wsql = " AND ".join(where) if where else "1=1"
 
-    # Lista + total + resumo por UF em paralelo
     sql_lista = f"""
     SELECT cnpj_raiz, razao_social, uf, cnae, primeiro_ano, ultimo_ano, anos_ativos
     FROM {t} WHERE {wsql}
@@ -133,7 +297,6 @@ async def empresas_por_segmento(
             }
             for fut in as_completed(futs):
                 results[futs[fut]] = fut.result()
-        # Enriquecer com hierarquia CNAE
         empresas = []
         for r in results.get("lista", []):
             h = cnae_service.enriquecer_por_prefixo(
@@ -144,6 +307,7 @@ async def empresas_por_segmento(
                 "uf": r.get("uf"), "cnae": r.get("cnae"),
                 "setor": h.get("setor"), "segmento": h.get("segmento"),
                 "ramo": h.get("ramo"), "categoria": h.get("categoria"),
+                "tem_comex": True,
                 "primeiro_ano": int(r.get("primeiro_ano") or 0),
                 "ultimo_ano": int(r.get("ultimo_ano") or 0),
                 "anos_ativos": int(r.get("anos_ativos") or 0),
@@ -151,8 +315,7 @@ async def empresas_por_segmento(
         total = int((results.get("total") or [{}])[0].get("n") or 0)
         resumo_uf = [{"uf": r.get("uf"), "n": int(r.get("n") or 0)} for r in results.get("uf", [])]
         return {
-            "filtros": {"setor": setor, "segmento": segmento, "ramo": ramo,
-                        "categoria": categoria, "uf": uf, "q": q_clean or None},
+            "filtros": filtros_out,
             "total": total, "exibidas": len(empresas),
             "empresas": empresas, "resumo_uf": resumo_uf,
             "prefixos_cnae": prefixos,
