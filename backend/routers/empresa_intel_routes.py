@@ -63,12 +63,22 @@ async def empresas_por_segmento(
     ramo: Optional[str] = Query(None),
     categoria: Optional[str] = Query(None),
     uf: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Busca por CNPJ, razão social ou nome fantasia"),
     limit: int = Query(100, ge=1, le=500),
 ):
-    """Lista empresas de um setor/segmento/ramo/categoria (CNAE), com resumo."""
+    """Lista empresas por setor/segmento/ramo/categoria (CNAE) e/ou busca por
+    CNPJ / razão social / nome fantasia. Inclui resumo por UF."""
     from services import cnae_service
-    prefixos = cnae_service.prefixos_por_filtro(setor, segmento, ramo, categoria)
-    if not prefixos:
+    from google.cloud import bigquery
+
+    q_clean = (q or "").strip()
+    tem_cnae = bool(setor or segmento or ramo or categoria)
+    if not tem_cnae and not q_clean:
+        return {"filtros": {}, "total": 0, "empresas": [], "resumo_uf": [],
+                "aviso": "Selecione um setor/segmento ou busque por empresa (CNPJ/nome)."}
+
+    prefixos = cnae_service.prefixos_por_filtro(setor, segmento, ramo, categoria) if tem_cnae else []
+    if tem_cnae and not prefixos:
         return {"filtros": {"setor": setor, "segmento": segmento, "ramo": ramo, "categoria": categoria},
                 "total": 0, "empresas": [], "resumo_uf": [], "aviso": "Nenhum CNAE corresponde ao filtro."}
     try:
@@ -76,14 +86,31 @@ async def empresas_por_segmento(
     except Exception as e:
         return {"error": str(e), "empresas": []}
 
-    from google.cloud import bigquery
     t = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
-    where = ["SUBSTR(REGEXP_REPLACE(CAST(cnae AS STRING), r'[^0-9]',''), 1, 4) IN UNNEST(@prefixos)"]
-    params: List = [bigquery.ArrayQueryParameter("prefixos", "STRING", prefixos)]
+    t_estab = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
+    where: List[str] = []
+    params: List = []
+    if prefixos:
+        where.append("SUBSTR(REGEXP_REPLACE(CAST(cnae AS STRING), r'[^0-9]',''), 1, 4) IN UNNEST(@prefixos)")
+        params.append(bigquery.ArrayQueryParameter("prefixos", "STRING", prefixos))
     if uf:
         where.append("UPPER(TRIM(CAST(uf AS STRING))) = @uf")
         params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
-    wsql = " AND ".join(where)
+    if q_clean:
+        digitos = "".join(c for c in q_clean if c.isdigit())
+        cond = ["LOWER(CAST(razao_social AS STRING)) LIKE @qlike"]
+        params.append(bigquery.ScalarQueryParameter("qlike", "STRING", f"%{q_clean.lower()}%"))
+        if len(digitos) >= 4:
+            cond.append("cnpj_raiz LIKE @qcnpj")
+            params.append(bigquery.ScalarQueryParameter("qcnpj", "STRING", f"{digitos[:8]}%"))
+        # nome fantasia via Estabelecimentos (raiz)
+        cond.append(f"""cnpj_raiz IN (
+            SELECT DISTINCT SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8)
+            FROM {t_estab}
+            WHERE LOWER(CAST(nome_fantasia AS STRING)) LIKE @qlike
+        )""")
+        where.append("(" + " OR ".join(cond) + ")")
+    wsql = " AND ".join(where) if where else "1=1"
 
     # Lista + total + resumo por UF em paralelo
     sql_lista = f"""
@@ -124,7 +151,8 @@ async def empresas_por_segmento(
         total = int((results.get("total") or [{}])[0].get("n") or 0)
         resumo_uf = [{"uf": r.get("uf"), "n": int(r.get("n") or 0)} for r in results.get("uf", [])]
         return {
-            "filtros": {"setor": setor, "segmento": segmento, "ramo": ramo, "categoria": categoria, "uf": uf},
+            "filtros": {"setor": setor, "segmento": segmento, "ramo": ramo,
+                        "categoria": categoria, "uf": uf, "q": q_clean or None},
             "total": total, "exibidas": len(empresas),
             "empresas": empresas, "resumo_uf": resumo_uf,
             "prefixos_cnae": prefixos,

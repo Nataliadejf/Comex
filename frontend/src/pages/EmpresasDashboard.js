@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Button, Card, Col, Empty, Row, Select, Space, Spin, Statistic, Table, Tag, Typography, message,
+  Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Spin, Statistic, Table, Tag, Typography, message,
 } from 'antd';
 import { ApartmentOutlined, DownloadOutlined, SearchOutlined } from '@ant-design/icons';
 import api from '../services/api';
@@ -27,6 +27,7 @@ export default function EmpresasDashboard() {
   const [ramo, setRamo] = useState(undefined);
   const [categoria, setCategoria] = useState(undefined);
   const [uf, setUf] = useState(undefined);
+  const [busca, setBusca] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [resultado, setResultado] = useState(null);
@@ -66,8 +67,9 @@ export default function EmpresasDashboard() {
   const onRamo = (v) => { setRamo(v); setCategoria(undefined); };
 
   const buscar = useCallback(async () => {
-    if (!setor && !segmento) {
-      message.warning('Selecione ao menos um Setor ou Segmento.');
+    const termo = (busca || '').trim();
+    if (!setor && !segmento && !termo) {
+      message.warning('Selecione um Setor/Segmento ou busque por empresa (CNPJ/nome).');
       return;
     }
     setLoading(true);
@@ -79,6 +81,7 @@ export default function EmpresasDashboard() {
       if (ramo) params.ramo = ramo;
       if (categoria) params.categoria = categoria;
       if (uf) params.uf = uf;
+      if (termo) params.q = termo;
       const res = await api.get('/api/empresa-intel/empresas-por-segmento', { params });
       if (res.data?.error) {
         message.error('Erro: ' + res.data.error);
@@ -90,11 +93,11 @@ export default function EmpresasDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [setor, segmento, ramo, categoria, uf]);
+  }, [setor, segmento, ramo, categoria, uf, busca]);
 
   const limpar = () => {
     setSetor(undefined); setSegmento(undefined); setRamo(undefined);
-    setCategoria(undefined); setUf(undefined); setResultado(null);
+    setCategoria(undefined); setUf(undefined); setBusca(''); setResultado(null);
   };
 
   const exportarCsv = () => {
@@ -139,7 +142,29 @@ export default function EmpresasDashboard() {
 
       <Card style={{ marginTop: 16, marginBottom: 16 }}>
         <Spin spinning={loadingArvore}>
-          <Row gutter={[12, 12]} align="bottom">
+          {/* Busca por empresa */}
+          <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+            <Col xs={24} md={18}>
+              <Text style={{ fontSize: 12 }}>Buscar empresa (CNPJ, razão social ou nome fantasia)</Text>
+              <Input
+                allowClear
+                placeholder="Ex.: Vale, 33592510, Supermercado..."
+                prefix={<SearchOutlined />}
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                onPressEnter={buscar}
+              />
+            </Col>
+            <Col xs={24} md={6} style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+              <Button type="primary" icon={<SearchOutlined />} onClick={buscar} loading={loading} style={{ flex: 1 }}>
+                Buscar
+              </Button>
+              <Button onClick={limpar} style={{ flex: 1 }}>Limpar</Button>
+            </Col>
+          </Row>
+
+          {/* Filtros por hierarquia CNAE */}
+          <Row gutter={[12, 12]}>
             <Col xs={24} sm={12} md={8} lg={5}>
               <Text style={{ fontSize: 12 }}>Setor</Text>
               <Select allowClear showSearch placeholder="Todos" style={{ width: '100%' }} value={setor} onChange={onSetor}>
@@ -158,23 +183,17 @@ export default function EmpresasDashboard() {
                 {ramos.map((r) => <Option key={r} value={r}>{r}</Option>)}
               </Select>
             </Col>
-            <Col xs={24} sm={12} md={8} lg={4}>
+            <Col xs={24} sm={12} md={8} lg={5}>
               <Text style={{ fontSize: 12 }}>Categoria</Text>
               <Select allowClear showSearch placeholder="Todas" style={{ width: '100%' }} value={categoria} onChange={setCategoria} disabled={!ramo}>
                 {categorias.map((c) => <Option key={c} value={c}>{c}</Option>)}
               </Select>
             </Col>
-            <Col xs={12} sm={8} md={6} lg={3}>
+            <Col xs={24} sm={12} md={8} lg={4}>
               <Text style={{ fontSize: 12 }}>UF</Text>
               <Select allowClear showSearch placeholder="Todas" style={{ width: '100%' }} value={uf} onChange={setUf}>
                 {UFS.map((u) => <Option key={u} value={u}>{u}</Option>)}
               </Select>
-            </Col>
-            <Col xs={12} sm={16} md={6} lg={2}>
-              <Space>
-                <Button type="primary" icon={<SearchOutlined />} onClick={buscar} loading={loading}>Buscar</Button>
-                <Button onClick={limpar}>Limpar</Button>
-              </Space>
             </Col>
           </Row>
         </Spin>
@@ -208,6 +227,7 @@ export default function EmpresasDashboard() {
           {/* Contexto do filtro */}
           <div style={{ marginBottom: 12 }}>
             <Space wrap>
+              {resultado.filtros?.q && <Tag color="cyan">Busca: "{resultado.filtros.q}"</Tag>}
               {resultado.filtros?.setor && <Tag color={CORES_SETOR[resultado.filtros.setor] || 'default'}>Setor: {resultado.filtros.setor}</Tag>}
               {resultado.filtros?.segmento && <Tag color="geekblue">Segmento: {resultado.filtros.segmento}</Tag>}
               {resultado.filtros?.ramo && <Tag color="purple">Ramo: {resultado.filtros.ramo}</Tag>}
@@ -240,8 +260,8 @@ export default function EmpresasDashboard() {
       {!resultado && !loading && (
         <Alert
           type="info" showIcon
-          message="Selecione um setor/segmento e clique em Buscar"
-          description="Ex.: Setor PRIMÁRIO → Segmento MINERAÇÃO retorna as mineradoras habilitadas em comércio exterior, com distribuição por estado."
+          message="Busque por empresa ou selecione um setor/segmento"
+          description="Pesquise por CNPJ, razão social ou nome fantasia — ou filtre por hierarquia CNAE (ex.: Setor PRIMÁRIO → Segmento MINERAÇÃO retorna as mineradoras habilitadas, com distribuição por estado)."
         />
       )}
     </div>
