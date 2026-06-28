@@ -148,8 +148,9 @@ export default function EmpresasDashboard() {
         Empresas por Setor e Segmento
       </Title>
       <Text type="secondary">
-        Explore empresas habilitadas em comércio exterior por hierarquia CNAE
-        (Setor → Segmento → Ramo → Categoria). Filtre e veja o resumo por UF.
+        Explore todas as empresas da Receita Federal por hierarquia CNAE
+        (Setor → Segmento → Ramo → Categoria) ou busque por nome/CNPJ.
+        A coluna "Comex" indica quais têm histórico de comércio exterior.
       </Text>
 
       <Card style={{ marginTop: 16, marginBottom: 16 }}>
@@ -273,7 +274,7 @@ export default function EmpresasDashboard() {
         <Alert
           type="info" showIcon
           message="Busque por empresa ou selecione um setor/segmento"
-          description="Pesquise por CNPJ, razão social ou nome fantasia — ou filtre por hierarquia CNAE (ex.: Setor PRIMÁRIO → Segmento MINERAÇÃO retorna as mineradoras habilitadas, com distribuição por estado)."
+          description="Pesquise por CNPJ, razão social ou nome fantasia — ou filtre por hierarquia CNAE (ex.: Setor PRIMÁRIO → Segmento MINERAÇÃO). O painel mostra TODAS as empresas da Receita Federal do segmento, com indicação de quais têm comércio exterior."
         />
       )}
     </div>

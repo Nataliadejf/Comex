@@ -186,6 +186,63 @@ def _buscar_empresas_geral(client, q_clean, prefixos, uf, limit):
     return merged[:int(limit)]
 
 
+def _listar_empresas_cnae(client, prefixos, uf, limit):
+    """Lista TODAS as empresas (base RF completa) de um conjunto de prefixos CNAE,
+    com flag de comex via LEFT JOIN empresas_habilitacao. Retorna (lista, total, resumo_uf)."""
+    from google.cloud import bigquery
+    if not prefixos:
+        return [], 0, []
+    t_estab = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
+    t_hab = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
+    where = ["SUBSTR(REGEXP_REPLACE(CAST(cnae_fiscal_principal AS STRING), r'[^0-9]',''),1,4) IN UNNEST(@pref)"]
+    params: List = [bigquery.ArrayQueryParameter("pref", "STRING", prefixos)]
+    if uf:
+        where.append("UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf")
+        params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
+    wsql = " AND ".join(where)
+
+    sql_lista = f"""
+    WITH filtrado AS (
+      SELECT SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8) AS raiz,
+             CAST(nome_fantasia AS STRING) AS nome_fantasia,
+             UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
+             CAST(cnae_fiscal_principal AS STRING) AS cnae
+      FROM {t_estab} WHERE {wsql}
+    ),
+    e AS (
+      SELECT raiz, ANY_VALUE(nome_fantasia) nome_fantasia, ANY_VALUE(uf) uf, ANY_VALUE(cnae) cnae
+      FROM filtrado GROUP BY raiz
+    )
+    SELECT e.raiz, h.razao_social, e.nome_fantasia, e.uf, e.cnae,
+           h.anos_ativos, h.primeiro_ano, h.ultimo_ano,
+           (h.cnpj_raiz IS NOT NULL) AS tem_comex
+    FROM e LEFT JOIN {t_hab} h ON h.cnpj_raiz = e.raiz
+    ORDER BY tem_comex DESC, e.nome_fantasia
+    LIMIT {int(limit)}
+    """
+    sql_total = f"""
+    SELECT COUNT(DISTINCT SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8)) n
+    FROM {t_estab} WHERE {wsql}
+    """
+    sql_uf = f"""
+    SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf,
+           COUNT(DISTINCT SUBSTR(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]',''),1,8)) n
+    FROM {t_estab} WHERE {wsql} GROUP BY uf ORDER BY n DESC LIMIT 15
+    """
+    res = {}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futs = {
+            pool.submit(_run_query, client, sql_lista, params): "lista",
+            pool.submit(_run_query, client, sql_total, params): "total",
+            pool.submit(_run_query, client, sql_uf, params): "uf",
+        }
+        for fut in as_completed(futs):
+            res[futs[fut]] = fut.result()
+    total = int((res.get("total") or [{}])[0].get("n") or 0)
+    resumo_uf = [{"uf": r.get("uf"), "n": int(r.get("n") or 0)} for r in (res.get("uf") or [])]
+    return res.get("lista") or [], total, resumo_uf
+
+
 @router.get("/cnae-arvore")
 async def cnae_arvore():
     """Árvore CNAE Setor→Segmento→Ramo→Categoria para os filtros do Painel de Empresas."""
@@ -265,63 +322,35 @@ async def empresas_por_segmento(
             "fonte": "Estabelecimentos RF (base completa) + flag de comex",
         }
 
-    # ─── Filtro por CNAE apenas (sem q): empresas comex-habilitadas ───
-    t = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
-    where: List[str] = []
-    params: List = []
-    if prefixos:
-        where.append("SUBSTR(REGEXP_REPLACE(CAST(cnae AS STRING), r'[^0-9]',''), 1, 4) IN UNNEST(@prefixos)")
-        params.append(bigquery.ArrayQueryParameter("prefixos", "STRING", prefixos))
-    if uf:
-        where.append("UPPER(TRIM(CAST(uf AS STRING))) = @uf")
-        params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
-    wsql = " AND ".join(where) if where else "1=1"
-
-    sql_lista = f"""
-    SELECT cnpj_raiz, razao_social, uf, cnae, primeiro_ano, ultimo_ano, anos_ativos
-    FROM {t} WHERE {wsql}
-    ORDER BY anos_ativos DESC, ultimo_ano DESC LIMIT {int(limit)}
-    """
-    sql_total = f"SELECT COUNT(*) n FROM {t} WHERE {wsql}"
-    sql_uf = f"""
-    SELECT UPPER(TRIM(CAST(uf AS STRING))) uf, COUNT(*) n
-    FROM {t} WHERE {wsql} GROUP BY uf ORDER BY n DESC LIMIT 15
-    """
+    # ─── Filtro por CNAE apenas (sem q): TODAS as empresas da base RF ───
     try:
-        results = {}
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futs = {
-                pool.submit(_run_query, client, sql_lista, params): "lista",
-                pool.submit(_run_query, client, sql_total, params): "total",
-                pool.submit(_run_query, client, sql_uf, params): "uf",
-            }
-            for fut in as_completed(futs):
-                results[futs[fut]] = fut.result()
-        empresas = []
-        for r in results.get("lista", []):
-            h = cnae_service.enriquecer_por_prefixo(
-                r.get("cnae"), setor=setor, segmento=segmento, ramo=ramo, categoria=categoria
-            ) or {}
-            empresas.append({
-                "cnpj": r.get("cnpj_raiz"), "razao_social": r.get("razao_social"),
-                "uf": r.get("uf"), "cnae": r.get("cnae"),
-                "setor": h.get("setor"), "segmento": h.get("segmento"),
-                "ramo": h.get("ramo"), "categoria": h.get("categoria"),
-                "tem_comex": True,
-                "primeiro_ano": int(r.get("primeiro_ano") or 0),
-                "ultimo_ano": int(r.get("ultimo_ano") or 0),
-                "anos_ativos": int(r.get("anos_ativos") or 0),
-            })
-        total = int((results.get("total") or [{}])[0].get("n") or 0)
-        resumo_uf = [{"uf": r.get("uf"), "n": int(r.get("n") or 0)} for r in results.get("uf", [])]
-        return {
-            "filtros": filtros_out,
-            "total": total, "exibidas": len(empresas),
-            "empresas": empresas, "resumo_uf": resumo_uf,
-            "prefixos_cnae": prefixos,
-        }
+        rows, total, resumo_uf = _listar_empresas_cnae(client, prefixos, uf, limit)
     except Exception as e:
-        return {"error": str(e)[:300], "empresas": []}
+        return {"error": str(e)[:300], "empresas": [], "filtros": filtros_out}
+    empresas = []
+    for r in rows:
+        h = cnae_service.enriquecer_por_prefixo(
+            r.get("cnae"), setor=setor, segmento=segmento, ramo=ramo, categoria=categoria
+        ) or {}
+        nome = (r.get("razao_social") or r.get("nome_fantasia") or "—")
+        empresas.append({
+            "cnpj": r.get("raiz"), "razao_social": nome,
+            "nome_fantasia": r.get("nome_fantasia"),
+            "uf": r.get("uf"), "cnae": r.get("cnae"),
+            "setor": h.get("setor"), "segmento": h.get("segmento"),
+            "ramo": h.get("ramo"), "categoria": h.get("categoria"),
+            "tem_comex": bool(r.get("tem_comex")),
+            "primeiro_ano": int(r.get("primeiro_ano") or 0),
+            "ultimo_ano": int(r.get("ultimo_ano") or 0),
+            "anos_ativos": int(r.get("anos_ativos") or 0),
+        })
+    return {
+        "filtros": filtros_out,
+        "total": total, "exibidas": len(empresas),
+        "empresas": empresas, "resumo_uf": resumo_uf,
+        "prefixos_cnae": prefixos,
+        "fonte": "Estabelecimentos RF (base completa) + flag de comex",
+    }
 
 
 @router.get("/inspecionar")
