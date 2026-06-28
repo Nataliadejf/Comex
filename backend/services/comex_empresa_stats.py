@@ -214,6 +214,142 @@ def stats_payload_unified(
     }
 
 
+_DEFAULT_ESTIMADO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_comex_estimado"
+_DEFAULT_IMPORT_UF = "liquid-receiver-483923-n6.Projeto_Comex.importacao_uf_ncm"
+_DEFAULT_EXPORT_UF = "liquid-receiver-483923-n6.Projeto_Comex.exportacao_uf_ncm"
+
+
+def fetch_estimativa_empresa(client, run_query, bt, table_env, cnpjs: List[str]) -> Optional[Dict]:
+    """Lê a estimativa de comex por empresa da tabela materializada
+    empresas_comex_estimado (ponderada por porte). Casa por raiz (8 díg.).
+    Retorna {total_imp, total_exp, por_uf:[{uf,imp,exp}], ano_ini, ano_fim} ou None."""
+    if not cnpjs:
+        return None
+    from google.cloud import bigquery
+
+    raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
+    if not raizes:
+        return None
+    t = bt(table_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO))
+    sql = f"""
+    SELECT uf, SUM(imp_estimado) imp, SUM(exp_estimado) exp,
+           ANY_VALUE(ano_ini) ano_ini, ANY_VALUE(ano_fim) ano_fim
+    FROM {t} WHERE cnpj_raiz IN UNNEST(@raizes)
+    GROUP BY uf ORDER BY (SUM(imp_estimado)+SUM(exp_estimado)) DESC
+    """
+    try:
+        rows = run_query(client, sql, [bigquery.ArrayQueryParameter("raizes", "STRING", raizes)])
+    except Exception as exc:
+        logger.warning(f"fetch_estimativa_empresa erro: {exc}")
+        return None
+    if not rows:
+        return None
+    por_uf = [
+        {"uf": r.get("uf"), "imp": float(r.get("imp") or 0), "exp": float(r.get("exp") or 0)}
+        for r in rows if r.get("uf")
+    ]
+    total_imp = sum(u["imp"] for u in por_uf)
+    total_exp = sum(u["exp"] for u in por_uf)
+    if (total_imp + total_exp) <= 0:
+        return None
+    return {
+        "total_imp": total_imp,
+        "total_exp": total_exp,
+        "por_uf": por_uf,
+        "ano_ini": int(rows[0].get("ano_ini") or 0),
+        "ano_fim": int(rows[0].get("ano_fim") or 0),
+    }
+
+
+def fetch_top_ncms_ufs(client, run_query, bt, table_env, ufs: List[str],
+                       ano_ini: int, ano_fim: int, limit: int = 12) -> List[Dict]:
+    """Top NCMs movimentados nas UFs da empresa (dados reais UF×NCM)."""
+    if not ufs:
+        return []
+    from google.cloud import bigquery
+
+    t_imp = bt(table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = bt(table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+    sql = f"""
+    WITH facts AS (
+      SELECT CAST(id_ncm AS STRING) ncm, COALESCE(CAST(total_importacao_fob AS FLOAT64),0) v
+      FROM {t_imp} WHERE ano BETWEEN @a0 AND @a1
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN UNNEST(@ufs)
+      UNION ALL
+      SELECT CAST(id_ncm AS STRING), COALESCE(CAST(total_exportacao_fob AS FLOAT64),0)
+      FROM {t_exp} WHERE ano BETWEEN @a0 AND @a1
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN UNNEST(@ufs)
+    )
+    SELECT ncm, SUM(v) v_total FROM facts GROUP BY ncm ORDER BY v_total DESC LIMIT {int(limit)}
+    """
+    params = [
+        bigquery.ArrayQueryParameter("ufs", "STRING", [u.upper() for u in ufs]),
+        bigquery.ScalarQueryParameter("a0", "INT64", ano_ini or 2020),
+        bigquery.ScalarQueryParameter("a1", "INT64", ano_fim or 2021),
+    ]
+    try:
+        rows = run_query(client, sql, params)
+        return [
+            {"ncm": str(r.get("ncm") or ""), "descricao": "", "valor_total": float(r.get("v_total") or 0), "total_operacoes": 0}
+            for r in rows if r.get("ncm")
+        ]
+    except Exception as exc:
+        logger.warning(f"fetch_top_ncms_ufs erro: {exc}")
+        return []
+
+
+def stats_payload_empresa_estimado(
+    fonte_dados: Dict[str, str],
+    empresa_importadora: Optional[str],
+    empresa_exportadora: Optional[str],
+    estimativa: Dict,
+    cnpjs: Optional[List[str]] = None,
+    principais_ncms: Optional[List[Dict]] = None,
+) -> Dict:
+    """Payload do dashboard com valores ESTIMADOS por empresa (rateio ponderado por porte)."""
+    nome = (empresa_importadora or empresa_exportadora or "empresa").strip()
+    total_imp = float(estimativa.get("total_imp") or 0)
+    total_exp = float(estimativa.get("total_exp") or 0)
+    periodo = f"{estimativa.get('ano_ini')}-{estimativa.get('ano_fim')}"
+    aviso = (
+        f"Valores ESTIMADOS para «{nome}» (período {periodo}). Não há registro real de "
+        "comércio exterior por CNPJ na base; a estimativa rateia o total de cada UF entre as "
+        "empresas comex-ativas do estado, ponderado pelo porte (nº de estabelecimentos). "
+        "Use como ordem de grandeza, não como histórico real."
+    )
+    principais_paises = [
+        {"pais": f"UF: {u.get('uf')}", "valor_total": float(u.get("imp") or 0) + float(u.get("exp") or 0), "total_operacoes": 0}
+        for u in (estimativa.get("por_uf") or [])
+    ]
+    return {
+        "volume_importacoes": 0.0,
+        "volume_exportacoes": 0.0,
+        "volume_disponivel": False,
+        "valor_total_usd": total_imp + total_exp,
+        "valor_total_importacoes": total_imp,
+        "valor_total_exportacoes": total_exp,
+        "quantidade_estatistica_importacoes": 0.0,
+        "quantidade_estatistica_exportacoes": 0.0,
+        "quantidade_estatistica_total": 0.0,
+        "principais_ncms": principais_ncms or [],
+        "principais_paises": principais_paises,
+        "principais_importadores": [],
+        "principais_exportadores": [],
+        "registros_por_mes": {},
+        "valores_por_mes": {},
+        "pesos_por_mes": {},
+        "filtro_empresa_aplicado": True,
+        "ufs_filtradas_por_empresa": [u.get("uf") for u in (estimativa.get("por_uf") or [])],
+        "dados_empresa_reais": False,
+        "kpis_empresa_indisponiveis": False,
+        "fonte_valores": "estimado",
+        "periodo_estimativa": periodo,
+        "cnpjs_resolvidos": cnpjs or [],
+        "aviso_dados_sem_empresa": aviso,
+        "fonte_dados": fonte_dados,
+    }
+
+
 def stats_payload_empresa_indisponivel(
     fonte_dados: Dict[str, str],
     empresa_importadora: Optional[str],

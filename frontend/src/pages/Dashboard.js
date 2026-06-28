@@ -1632,7 +1632,17 @@ const Dashboard = () => {
         />
       )}
 
-      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && !stats.kpis_empresa_indisponiveis && !stats.dados_empresa_reais && (
+      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && !stats.kpis_empresa_indisponiveis && !stats.dados_empresa_reais && stats.fonte_valores === 'estimado' && (
+        <Alert
+          message={`📊 Valores ESTIMADOS por empresa${stats.periodo_estimativa ? ` (período ${stats.periodo_estimativa})` : ''}`}
+          description={stats.aviso_dados_sem_empresa}
+          type="info"
+          showIcon
+          style={{ marginBottom: '24px' }}
+        />
+      )}
+
+      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && !stats.kpis_empresa_indisponiveis && !stats.dados_empresa_reais && stats.fonte_valores !== 'estimado' && (
         <Alert
           message={
             Array.isArray(stats.ufs_filtradas_por_empresa) && stats.ufs_filtradas_por_empresa.length > 0

@@ -715,10 +715,29 @@ def _dashboard_stats_payload_from_bq(
         cnpjs = emp_stats.resolve_cnpjs_empresa_base(
             client, _run_query, _bt, _table_env, empresa_importadora, empresa_exportadora
         )
-        # Buscar CNAE e UF para sugestão estatística no frontend
+        # Buscar CNAE e UF para contexto no frontend
         cnae_hint, uf_hint = emp_stats.resolve_cnae_empresa(
             client, _run_query, _bt, _table_env, cnpjs
         )
+        # Tentar estimativa por empresa (tabela materializada ponderada por porte)
+        estimativa = emp_stats.fetch_estimativa_empresa(
+            client, _run_query, _bt, _table_env, cnpjs
+        )
+        if estimativa:
+            ufs_emp = [u.get("uf") for u in estimativa.get("por_uf", []) if u.get("uf")]
+            principais_ncms = emp_stats.fetch_top_ncms_ufs(
+                client, _run_query, _bt, _table_env, ufs_emp,
+                estimativa.get("ano_ini") or 2020, estimativa.get("ano_fim") or 2021,
+            )
+            payload = emp_stats.stats_payload_empresa_estimado(
+                fonte, empresa_importadora, empresa_exportadora,
+                estimativa, cnpjs=cnpjs, principais_ncms=principais_ncms,
+            )
+            payload["cnae_hint"] = cnae_hint
+            payload["uf_hint"] = uf_hint
+            payload["cnpj_hint"] = cnpjs[0] if cnpjs else None
+            return payload
+        # Sem estimativa — payload indisponível
         payload = emp_stats.stats_payload_empresa_indisponivel(
             fonte,
             empresa_importadora,
