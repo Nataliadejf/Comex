@@ -103,7 +103,7 @@ export default function EmpresasDashboard() {
   const exportarCsv = () => {
     const emp = resultado?.empresas || [];
     if (!emp.length) return;
-    const header = ['cnpj', 'razao_social', 'uf', 'cnae', 'setor', 'segmento', 'ramo', 'categoria', 'anos_ativos'];
+    const header = ['cnpj', 'razao_social', 'nome_fantasia', 'uf', 'cnae', 'setor', 'segmento', 'ramo', 'categoria', 'tem_comex', 'anos_ativos'];
     const linhas = emp.map((e) => header.map((h) => `"${String(e[h] ?? '').replace(/"/g, '""')}"`).join(','));
     const csv = [header.join(','), ...linhas].join('\n');
     const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
@@ -117,15 +117,27 @@ export default function EmpresasDashboard() {
 
   const columns = [
     { title: 'CNPJ (raiz)', dataIndex: 'cnpj', key: 'cnpj', width: 110 },
-    { title: 'Razão Social', dataIndex: 'razao_social', key: 'razao_social', ellipsis: true },
-    { title: 'UF', dataIndex: 'uf', key: 'uf', width: 60, render: (v) => <Tag color="blue">{v}</Tag> },
+    {
+      title: 'Empresa', dataIndex: 'razao_social', key: 'razao_social', ellipsis: true,
+      render: (v, r) => (
+        <span>
+          {v || r.nome_fantasia || '—'}
+          {r.nome_fantasia && v && r.nome_fantasia !== v && (
+            <Text type="secondary" style={{ fontSize: 11 }}> ({r.nome_fantasia})</Text>
+          )}
+        </span>
+      ),
+    },
+    { title: 'UF', dataIndex: 'uf', key: 'uf', width: 60, render: (v) => v ? <Tag color="blue">{v}</Tag> : '—' },
     { title: 'CNAE', dataIndex: 'cnae', key: 'cnae', width: 90 },
     { title: 'Segmento', dataIndex: 'segmento', key: 'segmento', ellipsis: true, render: (v) => v ? <Tag color="geekblue">{v}</Tag> : '—' },
-    { title: 'Ramo', dataIndex: 'ramo', key: 'ramo', ellipsis: true, render: (v) => v || '—' },
     {
-      title: 'Anos Ativos', dataIndex: 'anos_ativos', key: 'anos_ativos', width: 100,
-      sorter: (a, b) => a.anos_ativos - b.anos_ativos, defaultSortOrder: 'descend',
-      render: (v) => <Tag color={v >= 10 ? 'green' : v >= 3 ? 'gold' : 'default'}>{v}</Tag>,
+      title: 'Comex', dataIndex: 'tem_comex', key: 'tem_comex', width: 110,
+      filters: [{ text: 'Com comex', value: true }, { text: 'Sem comex', value: false }],
+      onFilter: (val, r) => Boolean(r.tem_comex) === val,
+      render: (v, r) => v
+        ? <Tag color="green">✓ {r.anos_ativos || ''} anos</Tag>
+        : <Tag color="default">sem histórico</Tag>,
     },
   ];
 
