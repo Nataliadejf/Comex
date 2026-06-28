@@ -319,12 +319,15 @@ def fetch_serie_mensal_estimada(
     ym_start: int, ym_end: int, total_imp: float, total_exp: float,
 ) -> tuple:
     """Distribui o total estimado (imp/exp) pelos meses do período seguindo a
-    sazonalidade real das UFs da empresa. Retorna (valores_por_mes, registros_por_mes)."""
+    sazonalidade real das UFs da empresa.
+    Retorna (valores_por_mes, registros_por_mes, valores_imp_por_mes, valores_exp_por_mes)."""
     meses = _meses_no_intervalo(ym_start, ym_end)
     if not meses:
-        return {}, {}
+        return {}, {}, {}, {}
     valores_por_mes: Dict[str, float] = {}
     registros_por_mes: Dict[str, int] = {}
+    valores_imp_por_mes: Dict[str, float] = {}
+    valores_exp_por_mes: Dict[str, float] = {}
 
     forma_imp: Dict[str, float] = {}
     forma_exp: Dict[str, float] = {}
@@ -374,8 +377,10 @@ def fetch_serie_mensal_estimada(
         else:
             ve = total_exp / n
         valores_por_mes[ym] = vi + ve
+        valores_imp_por_mes[ym] = vi
+        valores_exp_por_mes[ym] = ve
         registros_por_mes[ym] = 1 if (vi + ve) > 0 else 0
-    return valores_por_mes, registros_por_mes
+    return valores_por_mes, registros_por_mes, valores_imp_por_mes, valores_exp_por_mes
 
 
 def stats_payload_empresa_estimado(
@@ -387,6 +392,8 @@ def stats_payload_empresa_estimado(
     principais_ncms: Optional[List[Dict]] = None,
     valores_por_mes: Optional[Dict[str, float]] = None,
     registros_por_mes: Optional[Dict[str, int]] = None,
+    valores_imp_por_mes: Optional[Dict[str, float]] = None,
+    valores_exp_por_mes: Optional[Dict[str, float]] = None,
 ) -> Dict:
     """Payload do dashboard com valores ESTIMADOS por empresa (rateio ponderado por porte)."""
     nome = (empresa_importadora or empresa_exportadora or "empresa").strip()
@@ -437,6 +444,8 @@ def stats_payload_empresa_estimado(
         "principais_exportadores": [],
         "registros_por_mes": registros_por_mes or {},
         "valores_por_mes": valores_por_mes or {},
+        "valores_imp_por_mes": valores_imp_por_mes or {},
+        "valores_exp_por_mes": valores_exp_por_mes or {},
         "pesos_por_mes": {},
         "filtro_empresa_aplicado": True,
         "ufs_filtradas_por_empresa": [u.get("uf") for u in (estimativa.get("por_uf") or [])],

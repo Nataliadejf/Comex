@@ -1179,6 +1179,9 @@ const Dashboard = () => {
       })
     : [];
 
+  // Só mostra a linha/eixo de peso quando há dados de peso (estimativa não tem)
+  const temPesoTendencias = tendenciasData.some((d) => (d.peso || 0) > 0);
+
   // Top Importadores (quando há filtro por empresa, mostrar a empresa filtrada; senão lista geral)
   const topImportadores = (() => {
     if (!statsFinal) return [];
@@ -1327,15 +1330,22 @@ const Dashboard = () => {
 
   // Dados para gráfico de linha de importadores/exportadores ao longo do tempo
   // Usar TODOS os meses do período (incluindo 2024) com valor 0 quando não houver dado
+  // Mapas mensais separados por imp/exp (presentes na estimativa). Fallback ao
+  // combinado × percentual quando não houver (dados reais legados).
+  const temSerieImpExp = Boolean(
+    statsFinal && (statsFinal.valores_imp_por_mes || statsFinal.valores_exp_por_mes)
+  );
   const importadoresTempoData = statsFinal && mesesDoPeriodoCompleto.length > 0
     ? mesesDoPeriodoCompleto.map((mes) => {
         const [ano, mesNum] = mes.split('-');
         const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-        const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
+        const valorImpMes = temSerieImpExp
+          ? (statsFinal.valores_imp_por_mes?.[mes] || 0)
+          : (statsFinal.valores_por_mes?.[mes] || 0);
         const data = { mes: mesFormatado };
         topImportadores.forEach((imp, idx) => {
-          const percentual = (imp.percentual || 0) / 100;
-          data[`imp_${idx}`] = valorTotalMes * percentual;
+          const percentual = temSerieImpExp ? 1 : (imp.percentual || 0) / 100;
+          data[`imp_${idx}`] = valorImpMes * percentual;
         });
         return data;
       })
@@ -1345,11 +1355,13 @@ const Dashboard = () => {
     ? mesesDoPeriodoCompleto.map((mes) => {
         const [ano, mesNum] = mes.split('-');
         const mesFormatado = dayjs(`${ano}-${mesNum}-01`).format('MMM/YY');
-        const valorTotalMes = statsFinal.valores_por_mes?.[mes] || 0;
+        const valorExpMes = temSerieImpExp
+          ? (statsFinal.valores_exp_por_mes?.[mes] || 0)
+          : (statsFinal.valores_por_mes?.[mes] || 0);
         const data = { mes: mesFormatado };
         topExportadores.forEach((exp, idx) => {
-          const percentual = (exp.percentual || 0) / 100;
-          data[`exp_${idx}`] = valorTotalMes * percentual;
+          const percentual = temSerieImpExp ? 1 : (exp.percentual || 0) / 100;
+          data[`exp_${idx}`] = valorExpMes * percentual;
         });
         return data;
       })
@@ -1395,6 +1407,12 @@ const Dashboard = () => {
     : tipoOperacao === 'Exportação'
       ? (statsFinal.volume_exportacoes || 0)
       : ((statsFinal.volume_importacoes || 0) + (statsFinal.volume_exportacoes || 0));
+
+  // Seções globais (sinergias, sugestões, recomendadas, dados gerais) não
+  // respondem ao filtro de empresa — escondê-las quando uma empresa está filtrada.
+  const filtroEmpresaAtivo = Boolean(
+    (empresaImportadora || '').toString().trim() || (empresaExportadora || '').toString().trim()
+  );
 
   return (
     <div style={{ padding: isMobile ? '8px' : 'clamp(8px, 2vw, 24px)', background: '#f5f5f5', minHeight: '100vh' }}>
@@ -1807,27 +1825,29 @@ const Dashboard = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div style={{ flex: '1', minWidth: 0 }}>
                 <div className="metric-title" style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginBottom: '4px' }}>
-                  Quantidade Estatística
+                  {statsFinal?.fonte_valores === 'estimado' ? 'Saldo Comercial (estimado)' : 'Quantidade Estatística'}
                 </div>
-                <div className="metric-value" style={{ 
-                  color: '#fff', 
-                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)', 
-                  fontWeight: 'bold', 
-                  lineHeight: '1.2', 
+                <div className="metric-value" style={{
+                  color: '#fff',
+                  fontSize: isMobile ? 'clamp(18px, 5vw, 24px)' : 'clamp(16px, 4vw, 22px)',
+                  fontWeight: 'bold',
+                  lineHeight: '1.2',
                   wordBreak: 'break-word',
                   whiteSpace: 'normal',
                   overflow: 'visible',
                 }}>
-                  {formatQuantity(quantidadeTotal)}
+                  {statsFinal?.fonte_valores === 'estimado'
+                    ? formatCurrency((statsFinal.valor_total_exportacoes || 0) - (statsFinal.valor_total_importacoes || 0))
+                    : formatQuantity(quantidadeTotal)}
                 </div>
-                <div style={{ 
-                  color: 'rgba(255,255,255,0.7)', 
-                  fontSize: isMobile ? '11px' : '10px', 
-                  marginTop: '4px', 
+                <div style={{
+                  color: 'rgba(255,255,255,0.7)',
+                  fontSize: isMobile ? '11px' : '10px',
+                  marginTop: '4px',
                   lineHeight: '1.3',
                   display: isMobile ? 'none' : 'block',
                 }}>
-                  Soma das quantidades estatísticas
+                  {statsFinal?.fonte_valores === 'estimado' ? 'Exportações − Importações (estimado)' : 'Soma das quantidades estatísticas'}
                 </div>
               </div>
               <GlobalOutlined style={{ fontSize: 'clamp(24px, 6vw, 40px)', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
@@ -2126,47 +2146,52 @@ const Dashboard = () => {
             style={{ borderRadius: '8px' }}
           >
             <div style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
-              Valor total importado e peso
+              {temPesoTendencias ? 'Valor total (FOB) e peso por mês' : 'Valor total (FOB) por mês'}
+              {statsFinal?.fonte_valores === 'estimado' ? ' — valores estimados' : ''}
             </div>
             {tendenciasData.length > 0 ? (
               <ResponsiveContainer key={chartKey} width="100%" height={isMobile ? Math.max(280, window.innerHeight * 0.35) : Math.max(250, window.innerHeight * 0.3)}>
                 <ComposedChart data={tendenciasData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="mes" tick={{ fontSize: isMobile ? 'clamp(11px, 3vw, 13px)' : 'clamp(10px, 2.5vw, 12px)' }} />
-                  <YAxis 
+                  <YAxis
                     yAxisId="left"
                     label={{ value: 'FOB (USD)', angle: -90, position: 'insideLeft', style: { fontSize: 'clamp(10px, 2.5vw, 12px)' } }}
                     tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }}
                   />
-                  <YAxis 
-                    yAxisId="right"
-                    orientation="right"
-                    label={{ value: 'Peso (Kg)', angle: 90, position: 'insideRight', style: { fontSize: 'clamp(10px, 2.5vw, 12px)' } }}
-                    tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }}
-                  />
-                  <Tooltip 
+                  {temPesoTendencias && (
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      label={{ value: 'Peso (Kg)', angle: 90, position: 'insideRight', style: { fontSize: 'clamp(10px, 2.5vw, 12px)' } }}
+                      tick={{ fontSize: 'clamp(10px, 2.5vw, 12px)' }}
+                    />
+                  )}
+                  <Tooltip
                     content={
-                      <SafeTooltip 
+                      <SafeTooltip
                         formatter={(value, name) => {
                           if (name === 'fob') return formatCurrency(value);
                           if (name === 'peso') return formatWeight(value) + ' KG';
                           return value;
-                        }} 
+                        }}
                       />
                     }
                   />
                   <Legend />
                   <Bar yAxisId="left" dataKey="fob" fill="#722ed1" name="FOB (USD)" />
-                  <Line 
-                    yAxisId="right" 
-                    type="monotone" 
-                    dataKey="peso" 
-                    stroke="#ff8042" 
-                    strokeWidth={3}
-                    strokeDasharray="5 5"
-                    name="Peso (Kg)"
-                    dot={{ r: 5 }}
-                  />
+                  {temPesoTendencias && (
+                    <Line
+                      yAxisId="right"
+                      type="monotone"
+                      dataKey="peso"
+                      stroke="#ff8042"
+                      strokeWidth={3}
+                      strokeDasharray="5 5"
+                      name="Peso (Kg)"
+                      dot={{ r: 5 }}
+                    />
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             ) : (
@@ -2378,11 +2403,14 @@ const Dashboard = () => {
         </Col>
       </Row>
 
+      {/* Seções gerais (não específicas da empresa) — ocultas sob filtro de empresa */}
+      {!filtroEmpresaAtivo && (
+      <>
       {/* Seção de Sinergias e Sugestões */}
       <Row gutter={[8, 8]} style={{ marginTop: 'clamp(12px, 3vw, 24px)' }}>
         <Col xs={24} lg={12}>
-          <Card 
-            title="📊 Sinergias por Estado" 
+          <Card
+            title="📊 Sinergias por Estado"
             extra={
               <Button 
                 size="small" 
@@ -3002,6 +3030,8 @@ const Dashboard = () => {
             </Card>
           </Col>
         </Row>
+      )}
+      </>
       )}
     </div>
   );

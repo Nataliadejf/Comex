@@ -731,7 +731,7 @@ def _dashboard_stats_payload_from_bq(
             )
             # Série mensal: distribui o total estimado pelos meses do período
             # selecionado, seguindo a sazonalidade real das UFs da empresa.
-            valores_por_mes, registros_por_mes = emp_stats.fetch_serie_mensal_estimada(
+            valores_por_mes, registros_por_mes, valores_imp_pm, valores_exp_pm = emp_stats.fetch_serie_mensal_estimada(
                 client, _run_query, _bt, _table_env, ufs_emp, ym_start, ym_end,
                 float(estimativa.get("total_imp") or 0), float(estimativa.get("total_exp") or 0),
             )
@@ -739,6 +739,7 @@ def _dashboard_stats_payload_from_bq(
                 fonte, empresa_importadora, empresa_exportadora,
                 estimativa, cnpjs=cnpjs, principais_ncms=principais_ncms,
                 valores_por_mes=valores_por_mes, registros_por_mes=registros_por_mes,
+                valores_imp_por_mes=valores_imp_pm, valores_exp_por_mes=valores_exp_pm,
             )
             payload["cnae_hint"] = cnae_hint
             payload["uf_hint"] = uf_hint
