@@ -43,6 +43,94 @@ def _run_query(client, sql: str, params=None):
 _PROJECT_DATASET = "liquid-receiver-483923-n6.Projeto_Comex"
 
 
+_TBL_HABILITACAO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"
+
+
+@router.get("/cnae-arvore")
+async def cnae_arvore():
+    """Árvore CNAE Setor→Segmento→Ramo→Categoria para os filtros do Painel de Empresas."""
+    try:
+        from services import cnae_service
+        return {"arvore": cnae_service.arvore(), "setores": cnae_service.listar_setores()}
+    except Exception as e:
+        return {"error": str(e), "arvore": {}, "setores": []}
+
+
+@router.get("/empresas-por-segmento")
+async def empresas_por_segmento(
+    setor: Optional[str] = Query(None),
+    segmento: Optional[str] = Query(None),
+    ramo: Optional[str] = Query(None),
+    categoria: Optional[str] = Query(None),
+    uf: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Lista empresas de um setor/segmento/ramo/categoria (CNAE), com resumo."""
+    from services import cnae_service
+    prefixos = cnae_service.prefixos_por_filtro(setor, segmento, ramo, categoria)
+    if not prefixos:
+        return {"filtros": {"setor": setor, "segmento": segmento, "ramo": ramo, "categoria": categoria},
+                "total": 0, "empresas": [], "resumo_uf": [], "aviso": "Nenhum CNAE corresponde ao filtro."}
+    try:
+        client = _get_bq_client()
+    except Exception as e:
+        return {"error": str(e), "empresas": []}
+
+    from google.cloud import bigquery
+    t = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
+    where = ["SUBSTR(REGEXP_REPLACE(CAST(cnae AS STRING), r'[^0-9]',''), 1, 4) IN UNNEST(@prefixos)"]
+    params: List = [bigquery.ArrayQueryParameter("prefixos", "STRING", prefixos)]
+    if uf:
+        where.append("UPPER(TRIM(CAST(uf AS STRING))) = @uf")
+        params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
+    wsql = " AND ".join(where)
+
+    # Lista + total + resumo por UF em paralelo
+    sql_lista = f"""
+    SELECT cnpj_raiz, razao_social, uf, cnae, primeiro_ano, ultimo_ano, anos_ativos
+    FROM {t} WHERE {wsql}
+    ORDER BY anos_ativos DESC, ultimo_ano DESC LIMIT {int(limit)}
+    """
+    sql_total = f"SELECT COUNT(*) n FROM {t} WHERE {wsql}"
+    sql_uf = f"""
+    SELECT UPPER(TRIM(CAST(uf AS STRING))) uf, COUNT(*) n
+    FROM {t} WHERE {wsql} GROUP BY uf ORDER BY n DESC LIMIT 15
+    """
+    try:
+        results = {}
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futs = {
+                pool.submit(_run_query, client, sql_lista, params): "lista",
+                pool.submit(_run_query, client, sql_total, params): "total",
+                pool.submit(_run_query, client, sql_uf, params): "uf",
+            }
+            for fut in as_completed(futs):
+                results[futs[fut]] = fut.result()
+        # Enriquecer com hierarquia CNAE
+        empresas = []
+        for r in results.get("lista", []):
+            h = cnae_service.enriquecer(r.get("cnae")) or {}
+            empresas.append({
+                "cnpj": r.get("cnpj_raiz"), "razao_social": r.get("razao_social"),
+                "uf": r.get("uf"), "cnae": r.get("cnae"),
+                "setor": h.get("setor"), "segmento": h.get("segmento"),
+                "ramo": h.get("ramo"), "categoria": h.get("categoria"),
+                "primeiro_ano": int(r.get("primeiro_ano") or 0),
+                "ultimo_ano": int(r.get("ultimo_ano") or 0),
+                "anos_ativos": int(r.get("anos_ativos") or 0),
+            })
+        total = int((results.get("total") or [{}])[0].get("n") or 0)
+        resumo_uf = [{"uf": r.get("uf"), "n": int(r.get("n") or 0)} for r in results.get("uf", [])]
+        return {
+            "filtros": {"setor": setor, "segmento": segmento, "ramo": ramo, "categoria": categoria, "uf": uf},
+            "total": total, "exibidas": len(empresas),
+            "empresas": empresas, "resumo_uf": resumo_uf,
+            "prefixos_cnae": prefixos,
+        }
+    except Exception as e:
+        return {"error": str(e)[:300], "empresas": []}
+
+
 @router.get("/inspecionar")
 async def inspecionar_tabelas(
     tabelas: str = Query(..., description="Nomes de tabelas separados por vírgula"),

@@ -109,6 +109,74 @@ def listar_segmentos(setor: Optional[str] = None) -> list[str]:
     })
 
 
+def listar_ramos(setor: Optional[str] = None, segmento: Optional[str] = None) -> list:
+    if not _loaded:
+        carregar_cnae()
+    return sorted({
+        v["ramo"] for v in _cnae_map.values()
+        if v.get("ramo")
+        and (not setor or v.get("setor") == setor)
+        and (not segmento or v.get("segmento") == segmento)
+    })
+
+
+def listar_categorias(setor: Optional[str] = None, segmento: Optional[str] = None,
+                      ramo: Optional[str] = None) -> list:
+    if not _loaded:
+        carregar_cnae()
+    return sorted({
+        v["categoria"] for v in _cnae_map.values()
+        if v.get("categoria")
+        and (not setor or v.get("setor") == setor)
+        and (not segmento or v.get("segmento") == segmento)
+        and (not ramo or v.get("ramo") == ramo)
+    })
+
+
+def arvore() -> Dict[str, dict]:
+    """Árvore aninhada Setor → Segmento → Ramo → [Categorias] para dropdowns."""
+    if not _loaded:
+        carregar_cnae()
+    tree: Dict[str, dict] = {}
+    for v in _cnae_map.values():
+        s = v.get("setor")
+        if not s:
+            continue
+        seg = v.get("segmento") or "—"
+        ramo = v.get("ramo") or "—"
+        cat = v.get("categoria")
+        tree.setdefault(s, {}).setdefault(seg, {}).setdefault(ramo, set())
+        if cat:
+            tree[s][seg][ramo].add(cat)
+    # set → lista ordenada
+    return {
+        s: {seg: {r: sorted(cats) for r, cats in ramos.items()} for seg, ramos in segs.items()}
+        for s, segs in tree.items()
+    }
+
+
+def prefixos_por_filtro(setor: Optional[str] = None, segmento: Optional[str] = None,
+                        ramo: Optional[str] = None, categoria: Optional[str] = None) -> list:
+    """Retorna os prefixos CNAE de 4 dígitos que correspondem ao filtro de hierarquia.
+    Usado para casar com a base de empresas (CNAE a nível de classe)."""
+    if not _loaded:
+        carregar_cnae()
+    prefixos = set()
+    for codigo, v in _cnae_map.items():
+        if setor and v.get("setor") != setor:
+            continue
+        if segmento and v.get("segmento") != segmento:
+            continue
+        if ramo and v.get("ramo") != ramo:
+            continue
+        if categoria and v.get("categoria") != categoria:
+            continue
+        digitos = "".join(c for c in str(codigo) if c.isdigit())
+        if len(digitos) >= 4:
+            prefixos.add(digitos[:4])
+    return sorted(prefixos)
+
+
 def cnae_map() -> Dict[str, dict]:
     if not _loaded:
         carregar_cnae()
