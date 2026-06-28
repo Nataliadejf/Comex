@@ -108,6 +108,13 @@ const AppLayout = ({ children }) => {
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
+  // Título do topo conforme a página
+  const TITULOS_POR_ROTA = {
+    '/empresas': 'Empresas Brasileiras',
+    '/habilitadas': 'Empresas Habilitadas em Comex',
+  };
+  const tituloHeader = TITULOS_POR_ROTA[location.pathname] || 'Análise de Comércio Exterior';
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {/* Overlay escuro quando sidebar está aberto em mobile */}
@@ -205,7 +212,7 @@ const AppLayout = ({ children }) => {
                 display: isMobile && !collapsed ? 'none' : 'block',
               }}
             >
-              Análise de Comércio Exterior
+              {tituloHeader}
             </h1>
           </div>
           <Space>

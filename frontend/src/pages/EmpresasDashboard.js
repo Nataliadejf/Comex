@@ -130,9 +130,15 @@ export default function EmpresasDashboard() {
     },
     { title: 'UF', dataIndex: 'uf', key: 'uf', width: 60, render: (v) => v ? <Tag color="blue">{v}</Tag> : '—' },
     { title: 'CNAE', dataIndex: 'cnae', key: 'cnae', width: 90 },
-    { title: 'Segmento', dataIndex: 'segmento', key: 'segmento', ellipsis: true, render: (v) => v ? <Tag color="geekblue">{v}</Tag> : '—' },
     {
-      title: 'Comex', dataIndex: 'tem_comex', key: 'tem_comex', width: 110,
+      title: 'Setor', dataIndex: 'setor', key: 'setor', width: 130, ellipsis: true,
+      render: (v) => v ? <Tag color={CORES_SETOR[v] || 'default'}>{v}</Tag> : '—',
+    },
+    { title: 'Segmento', dataIndex: 'segmento', key: 'segmento', width: 160, ellipsis: true, render: (v) => v ? <Tag color="geekblue">{v}</Tag> : '—' },
+    { title: 'Ramo', dataIndex: 'ramo', key: 'ramo', width: 150, ellipsis: true, render: (v) => v ? <Tag color="purple">{v}</Tag> : '—' },
+    { title: 'Categoria', dataIndex: 'categoria', key: 'categoria', width: 150, ellipsis: true, render: (v) => v ? <Tag color="magenta">{v}</Tag> : '—' },
+    {
+      title: 'Comex', dataIndex: 'tem_comex', key: 'tem_comex', width: 110, fixed: 'right',
       filters: [{ text: 'Com comex', value: true }, { text: 'Sem comex', value: false }],
       onFilter: (val, r) => Boolean(r.tem_comex) === val,
       render: (v, r) => v
@@ -263,7 +269,7 @@ export default function EmpresasDashboard() {
                 dataSource={resultado.empresas}
                 size="small"
                 pagination={{ pageSize: 20, showSizeChanger: true }}
-                scroll={{ x: 900 }}
+                scroll={{ x: 1300 }}
               />
             </Card>
           )}
