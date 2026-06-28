@@ -109,7 +109,9 @@ async def empresas_por_segmento(
         # Enriquecer com hierarquia CNAE
         empresas = []
         for r in results.get("lista", []):
-            h = cnae_service.enriquecer_por_prefixo(r.get("cnae")) or {}
+            h = cnae_service.enriquecer_por_prefixo(
+                r.get("cnae"), setor=setor, segmento=segmento, ramo=ramo, categoria=categoria
+            ) or {}
             empresas.append({
                 "cnpj": r.get("cnpj_raiz"), "razao_social": r.get("razao_social"),
                 "uf": r.get("uf"), "cnae": r.get("cnae"),

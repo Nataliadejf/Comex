@@ -109,20 +109,30 @@ def listar_segmentos(setor: Optional[str] = None) -> list[str]:
     })
 
 
-def enriquecer_por_prefixo(cnae_codigo) -> Optional[dict]:
+def enriquecer_por_prefixo(cnae_codigo, setor: Optional[str] = None, segmento: Optional[str] = None,
+                           ramo: Optional[str] = None, categoria: Optional[str] = None) -> Optional[dict]:
     """Enriquecimento por prefixo CNAE de 4 dígitos (classe). Robusto a formatos
-    como '07.21-9' que a normalização padrão erra por causa de zeros à esquerda."""
+    como '07.21-9'. Quando há filtro ativo (setor/segmento/...), prefere a
+    hierarquia que casa com ele (um prefixo pode mapear a múltiplos segmentos)."""
     if not _loaded:
         carregar_cnae()
     digitos = "".join(c for c in str(cnae_codigo or "") if c.isdigit())
     if len(digitos) < 4:
         return None
     pref = digitos[:4]
-    for k, v in _cnae_map.items():
-        kd = "".join(c for c in str(k) if c.isdigit())
-        if kd[:4] == pref:
+    candidatos = [
+        v for k, v in _cnae_map.items()
+        if "".join(c for c in str(k) if c.isdigit())[:4] == pref
+    ]
+    if not candidatos:
+        return None
+    for v in candidatos:
+        if ((not setor or v.get("setor") == setor)
+                and (not segmento or v.get("segmento") == segmento)
+                and (not ramo or v.get("ramo") == ramo)
+                and (not categoria or v.get("categoria") == categoria)):
             return v
-    return None
+    return candidatos[0]
 
 
 def listar_ramos(setor: Optional[str] = None, segmento: Optional[str] = None) -> list:
