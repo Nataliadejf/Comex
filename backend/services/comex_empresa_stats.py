@@ -321,6 +321,24 @@ def stats_payload_empresa_estimado(
         {"pais": f"UF: {u.get('uf')}", "valor_total": float(u.get("imp") or 0) + float(u.get("exp") or 0), "total_operacoes": 0}
         for u in (estimativa.get("por_uf") or [])
     ]
+
+    # Escala os NCMs (valores de mercado da UF) para a participação estimada da
+    # empresa, para ficarem na mesma ordem de grandeza dos KPIs.
+    ncms_in = principais_ncms or []
+    soma_ncm = sum(float(n.get("valor_total") or 0) for n in ncms_in)
+    total_emp = total_imp + total_exp
+    if ncms_in and soma_ncm > 0 and total_emp > 0:
+        principais_ncms = [
+            {
+                "ncm": n.get("ncm"),
+                "descricao": n.get("descricao") or "",
+                "valor_total": total_emp * float(n.get("valor_total") or 0) / soma_ncm,
+                "total_operacoes": 0,
+            }
+            for n in ncms_in
+        ]
+    else:
+        principais_ncms = ncms_in
     return {
         "volume_importacoes": 0.0,
         "volume_exportacoes": 0.0,
