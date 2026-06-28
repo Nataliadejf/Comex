@@ -298,6 +298,86 @@ def fetch_top_ncms_ufs(client, run_query, bt, table_env, ufs: List[str],
         return []
 
 
+def _meses_no_intervalo(ym_start: int, ym_end: int) -> List[str]:
+    """Lista de chaves 'YYYY-MM' entre ym_start e ym_end (YYYYMM)."""
+    out: List[str] = []
+    y, m = ym_start // 100, ym_start % 100
+    ey, em = ym_end // 100, ym_end % 100
+    while (y, m) <= (ey, em):
+        out.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+        if len(out) > 600:
+            break
+    return out
+
+
+def fetch_serie_mensal_estimada(
+    client, run_query, bt, table_env, ufs: List[str],
+    ym_start: int, ym_end: int, total_imp: float, total_exp: float,
+) -> tuple:
+    """Distribui o total estimado (imp/exp) pelos meses do período seguindo a
+    sazonalidade real das UFs da empresa. Retorna (valores_por_mes, registros_por_mes)."""
+    meses = _meses_no_intervalo(ym_start, ym_end)
+    if not meses:
+        return {}, {}
+    valores_por_mes: Dict[str, float] = {}
+    registros_por_mes: Dict[str, int] = {}
+
+    forma_imp: Dict[str, float] = {}
+    forma_exp: Dict[str, float] = {}
+    if ufs:
+        from google.cloud import bigquery
+        t_imp = bt(table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+        t_exp = bt(table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+        sql = f"""
+        WITH facts AS (
+          SELECT ano, mes, COALESCE(CAST(total_importacao_fob AS FLOAT64),0) imp, 0.0 exp
+          FROM {t_imp}
+          WHERE (ano*100+mes) BETWEEN @a AND @b
+            AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN UNNEST(@ufs)
+          UNION ALL
+          SELECT ano, mes, 0.0, COALESCE(CAST(total_exportacao_fob AS FLOAT64),0)
+          FROM {t_exp}
+          WHERE (ano*100+mes) BETWEEN @a AND @b
+            AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN UNNEST(@ufs)
+        )
+        SELECT FORMAT('%04d-%02d', ano, mes) ym, SUM(imp) imp, SUM(exp) exp
+        FROM facts GROUP BY ano, mes
+        """
+        params = [
+            bigquery.ScalarQueryParameter("a", "INT64", ym_start),
+            bigquery.ScalarQueryParameter("b", "INT64", ym_end),
+            bigquery.ArrayQueryParameter("ufs", "STRING", [u.upper() for u in ufs if u]),
+        ]
+        try:
+            for r in run_query(client, sql, params):
+                ym = str(r.get("ym") or "")
+                if ym:
+                    forma_imp[ym] = float(r.get("imp") or 0)
+                    forma_exp[ym] = float(r.get("exp") or 0)
+        except Exception as exc:
+            logger.warning(f"fetch_serie_mensal_estimada erro: {exc}")
+
+    soma_imp = sum(forma_imp.values())
+    soma_exp = sum(forma_exp.values())
+    n = len(meses)
+    for ym in meses:
+        if soma_imp > 0:
+            vi = total_imp * forma_imp.get(ym, 0.0) / soma_imp
+        else:
+            vi = total_imp / n  # fallback: distribuição uniforme
+        if soma_exp > 0:
+            ve = total_exp * forma_exp.get(ym, 0.0) / soma_exp
+        else:
+            ve = total_exp / n
+        valores_por_mes[ym] = vi + ve
+        registros_por_mes[ym] = 1 if (vi + ve) > 0 else 0
+    return valores_por_mes, registros_por_mes
+
+
 def stats_payload_empresa_estimado(
     fonte_dados: Dict[str, str],
     empresa_importadora: Optional[str],
@@ -305,6 +385,8 @@ def stats_payload_empresa_estimado(
     estimativa: Dict,
     cnpjs: Optional[List[str]] = None,
     principais_ncms: Optional[List[Dict]] = None,
+    valores_por_mes: Optional[Dict[str, float]] = None,
+    registros_por_mes: Optional[Dict[str, int]] = None,
 ) -> Dict:
     """Payload do dashboard com valores ESTIMADOS por empresa (rateio ponderado por porte)."""
     nome = (empresa_importadora or empresa_exportadora or "empresa").strip()
@@ -353,8 +435,8 @@ def stats_payload_empresa_estimado(
         "principais_paises": principais_paises,
         "principais_importadores": [],
         "principais_exportadores": [],
-        "registros_por_mes": {},
-        "valores_por_mes": {},
+        "registros_por_mes": registros_por_mes or {},
+        "valores_por_mes": valores_por_mes or {},
         "pesos_por_mes": {},
         "filtro_empresa_aplicado": True,
         "ufs_filtradas_por_empresa": [u.get("uf") for u in (estimativa.get("por_uf") or [])],
