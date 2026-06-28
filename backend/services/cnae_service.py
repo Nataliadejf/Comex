@@ -109,6 +109,22 @@ def listar_segmentos(setor: Optional[str] = None) -> list[str]:
     })
 
 
+def enriquecer_por_prefixo(cnae_codigo) -> Optional[dict]:
+    """Enriquecimento por prefixo CNAE de 4 dígitos (classe). Robusto a formatos
+    como '07.21-9' que a normalização padrão erra por causa de zeros à esquerda."""
+    if not _loaded:
+        carregar_cnae()
+    digitos = "".join(c for c in str(cnae_codigo or "") if c.isdigit())
+    if len(digitos) < 4:
+        return None
+    pref = digitos[:4]
+    for k, v in _cnae_map.items():
+        kd = "".join(c for c in str(k) if c.isdigit())
+        if kd[:4] == pref:
+            return v
+    return None
+
+
 def listar_ramos(setor: Optional[str] = None, segmento: Optional[str] = None) -> list:
     if not _loaded:
         carregar_cnae()
