@@ -59,7 +59,7 @@ const AppLayout = ({ children }) => {
     {
       key: '/empresas',
       icon: <BankOutlined />,
-      label: 'Empresas',
+      label: 'Empresas por Segmento',
     },
     {
       key: '/contatos',
