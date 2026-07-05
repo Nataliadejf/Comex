@@ -9,14 +9,13 @@ $log  = Join-Path $dir "atualizar_comex.log"
 $env:GOOGLE_APPLICATION_CREDENTIALS = $cred
 Set-Location $dir
 
-$ano    = (Get-Date).Year
-$anoAnt = $ano - 1
 $inicio = Get-Date
 
-"==== Início: $inicio | anos: $anoAnt $ano ====" | Out-File -FilePath $log -Append -Encoding utf8
+"==== Início: $inicio ====" | Out-File -FilePath $log -Append -Encoding utf8
 
-# 1) Baixa e atualiza as tabelas UF×NCM (ano anterior cobre dez.; ano atual, novos meses)
-python atualizar_comex_uf_ncm.py $anoAnt $ano *>> $log
+# 1) Atualiza as tabelas UF×NCM a partir da Base dos Dados (janela automática:
+#    últimos anos disponíveis na fonte). Sem argumentos = janela automática.
+python atualizar_comex_uf_ncm.py *>> $log
 
 # 2) Regenera as tabelas derivadas (estimativa ponderada + habilitação)
 python criar_tabela_estimativa.py *>> $log
