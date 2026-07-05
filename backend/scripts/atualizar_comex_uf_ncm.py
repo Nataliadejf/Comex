@@ -15,9 +15,11 @@ Uso:
 
 Requisitos: pandas, requests, google-cloud-bigquery (já no projeto).
 """
+import os
 import sys
-import io
+import tempfile
 import requests
+import urllib3
 import pandas as pd
 from google.cloud import bigquery
 
@@ -31,30 +33,55 @@ CONFIG = {
 }
 
 
+def _baixar_arquivo(url: str, destino: str):
+    """Baixa (streaming) para arquivo. Tenta com verificação SSL; se falhar
+    (cadeia de certificado gov.br), refaz sem verificação (fonte oficial pública)."""
+    for verify in (True, False):
+        try:
+            if not verify:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                print("  [aviso] verificação SSL desabilitada (cadeia gov.br) — fonte oficial MDIC")
+            with requests.get(url, timeout=900, stream=True, verify=verify) as r:
+                r.raise_for_status()
+                with open(destino, "wb") as f:
+                    for bloco in r.iter_content(chunk_size=1024 * 1024):
+                        if bloco:
+                            f.write(bloco)
+            return
+        except requests.exceptions.SSLError:
+            if verify:
+                continue  # tenta de novo sem verificação
+            raise
+
+
 def baixar_e_agregar(fluxo: str, ano: int) -> pd.DataFrame:
     """Baixa IMP_<ano>.csv ou EXP_<ano>.csv e agrega por ano×mês×UF×NCM."""
     url = f"{BASE_URL}/{fluxo}_{ano}.csv"
     print(f"  Baixando {url} ...")
-    r = requests.get(url, timeout=600, stream=True)
-    r.raise_for_status()
-    conteudo = io.BytesIO(r.content)
-
-    agregado = None
-    usecols = ["CO_ANO", "CO_MES", "SG_UF_NCM", "CO_NCM", "VL_FOB"]
-    for chunk in pd.read_csv(conteudo, sep=";", usecols=usecols, chunksize=CHUNK,
-                             dtype={"CO_ANO": int, "CO_MES": int, "SG_UF_NCM": str,
-                                    "CO_NCM": str, "VL_FOB": float}):
-        g = (chunk.groupby(["CO_ANO", "CO_MES", "SG_UF_NCM", "CO_NCM"], as_index=False)["VL_FOB"]
-                  .sum())
-        agregado = g if agregado is None else (
-            pd.concat([agregado, g]).groupby(["CO_ANO", "CO_MES", "SG_UF_NCM", "CO_NCM"],
-                                             as_index=False)["VL_FOB"].sum())
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    tmp.close()
+    try:
+        _baixar_arquivo(url, tmp.name)
+        agregado = None
+        usecols = ["CO_ANO", "CO_MES", "SG_UF_NCM", "CO_NCM", "VL_FOB"]
+        for chunk in pd.read_csv(tmp.name, sep=";", usecols=usecols, chunksize=CHUNK,
+                                 dtype={"CO_ANO": int, "CO_MES": int, "SG_UF_NCM": str,
+                                        "CO_NCM": str, "VL_FOB": float}):
+            g = (chunk.groupby(["CO_ANO", "CO_MES", "SG_UF_NCM", "CO_NCM"], as_index=False)["VL_FOB"]
+                      .sum())
+            agregado = g if agregado is None else (
+                pd.concat([agregado, g]).groupby(["CO_ANO", "CO_MES", "SG_UF_NCM", "CO_NCM"],
+                                                 as_index=False)["VL_FOB"].sum())
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
     if agregado is None:
         return pd.DataFrame()
-    agregado = agregado.rename(columns={
+    return agregado.rename(columns={
         "CO_ANO": "ano", "CO_MES": "mes", "SG_UF_NCM": "sigla_uf", "CO_NCM": "id_ncm",
     })
-    return agregado
 
 
 def atualizar(client: bigquery.Client, fluxo: str, ano: int):
