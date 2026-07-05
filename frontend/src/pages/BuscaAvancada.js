@@ -53,7 +53,18 @@ const BuscaAvancada = () => {
       if (values.valor_fob_min) params.fob_min = Number(values.valor_fob_min);
       if (values.valor_fob_max) params.fob_max = Number(values.valor_fob_max);
 
-      const res = await api.get('/api/empresa-intel/busca-comex', { params });
+      // Serializa arrays como chave repetida (ncms=a&ncms=b), que é o que o FastAPI espera
+      const res = await api.get('/api/empresa-intel/busca-comex', {
+        params,
+        paramsSerializer: (p) => {
+          const usp = new URLSearchParams();
+          Object.entries(p).forEach(([k, v]) => {
+            if (Array.isArray(v)) v.forEach((x) => usp.append(k, x));
+            else if (v !== undefined && v !== null && v !== '') usp.append(k, v);
+          });
+          return usp.toString();
+        },
+      });
       if (res.data?.error) {
         message.error('Erro: ' + res.data.error);
         setResults([]); setTotal(0);
