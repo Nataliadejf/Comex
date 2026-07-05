@@ -44,6 +44,7 @@ _PROJECT_DATASET = "liquid-receiver-483923-n6.Projeto_Comex"
 
 
 _TBL_HABILITACAO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"
+_TBL_EMPRESAS_RAZAO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_razao"
 _STOP_TOKENS = {
     "ltda", "ltda.", "sa", "s.a", "s.a.", "s/a", "me", "mei", "epp", "eireli",
     "cia", "cia.", "e", "de", "do", "da", "dos", "das", "em", "&", "-", "ind", "com",
@@ -89,6 +90,7 @@ def _buscar_empresas_geral(client, q_clean, prefixos, uf, limit):
         return None
     t_estab = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
     t_hab = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
+    t_razao = _bt(_env("COMEX_BQ_TABLE_EMPRESAS_RAZAO", _TBL_EMPRESAS_RAZAO))
     cnpj_pref = digitos[:8] if len(digitos) >= 4 else None
 
     def _tok_params(prefix):
@@ -152,10 +154,14 @@ def _buscar_empresas_geral(client, q_clean, prefixos, uf, limit):
         ),
         e AS (SELECT raiz, ANY_VALUE(nome_fantasia) nome_fantasia, ANY_VALUE(uf) uf, ANY_VALUE(cnae) cnae
               FROM filtrado GROUP BY raiz LIMIT {int(limit) * 3})
-        SELECT e.raiz, h.razao_social, e.nome_fantasia, e.uf, e.cnae,
+        SELECT e.raiz,
+               COALESCE(h.razao_social, er.razao_social) AS razao_social,
+               e.nome_fantasia, e.uf, e.cnae,
                h.anos_ativos, h.primeiro_ano, h.ultimo_ano,
                (h.cnpj_raiz IS NOT NULL) AS tem_comex
-        FROM e LEFT JOIN {t_hab} h ON h.cnpj_raiz = e.raiz
+        FROM e
+        LEFT JOIN {t_hab} h ON h.cnpj_raiz = e.raiz
+        LEFT JOIN {t_razao} er ON er.cnpj_raiz = e.raiz
         LIMIT {int(limit)}
         """
         return _run_query(client, sql, p)
@@ -194,6 +200,7 @@ def _listar_empresas_cnae(client, prefixos, uf, limit):
         return [], 0, []
     t_estab = _bt(_env("COMEX_BQ_TABLE_ESTAB", _DEFAULT_ESTAB))
     t_hab = _bt(_env("COMEX_BQ_TABLE_HABILITACAO", _TBL_HABILITACAO))
+    t_razao = _bt(_env("COMEX_BQ_TABLE_EMPRESAS_RAZAO", _TBL_EMPRESAS_RAZAO))
     where = ["SUBSTR(REGEXP_REPLACE(CAST(cnae_fiscal_principal AS STRING), r'[^0-9]',''),1,4) IN UNNEST(@pref)"]
     params: List = [bigquery.ArrayQueryParameter("pref", "STRING", prefixos)]
     if uf:
@@ -213,11 +220,15 @@ def _listar_empresas_cnae(client, prefixos, uf, limit):
       SELECT raiz, ANY_VALUE(nome_fantasia) nome_fantasia, ANY_VALUE(uf) uf, ANY_VALUE(cnae) cnae
       FROM filtrado GROUP BY raiz
     )
-    SELECT e.raiz, h.razao_social, e.nome_fantasia, e.uf, e.cnae,
+    SELECT e.raiz,
+           COALESCE(h.razao_social, er.razao_social) AS razao_social,
+           e.nome_fantasia, e.uf, e.cnae,
            h.anos_ativos, h.primeiro_ano, h.ultimo_ano,
            (h.cnpj_raiz IS NOT NULL) AS tem_comex
-    FROM e LEFT JOIN {t_hab} h ON h.cnpj_raiz = e.raiz
-    ORDER BY tem_comex DESC, e.nome_fantasia
+    FROM e
+    LEFT JOIN {t_hab} h ON h.cnpj_raiz = e.raiz
+    LEFT JOIN {t_razao} er ON er.cnpj_raiz = e.raiz
+    ORDER BY tem_comex DESC, razao_social
     LIMIT {int(limit)}
     """
     sql_total = f"""

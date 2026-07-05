@@ -20,4 +20,7 @@ python atualizar_comex_uf_ncm.py *>> $log
 # 2) Regenera as tabelas derivadas (estimativa ponderada + habilitação)
 python criar_tabela_estimativa.py *>> $log
 
+# 3) Atualiza a razão social de todas as empresas (cadastro RF via Base dos Dados)
+python criar_empresas_razao.py *>> $log
+
 "==== Fim: $(Get-Date) (duração: $((Get-Date) - $inicio)) ====`n" | Out-File -FilePath $log -Append -Encoding utf8
