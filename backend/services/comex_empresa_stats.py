@@ -261,6 +261,135 @@ def fetch_estimativa_empresa(client, run_query, bt, table_env, cnpjs: List[str])
     }
 
 
+_DEFAULT_ESTIMADO_TBL = "liquid-receiver-483923-n6.Projeto_Comex.empresas_comex_estimado"
+
+# Orientação de comércio por SETOR CNAE (heurística): distribuidores/varejo são
+# majoritariamente importadores; setor primário (mineração/agro) é exportador.
+_ORIENTACAO_SETOR = {
+    "PRIMÁRIO": (0.6, 1.25),
+    "INDÚSTRIA": (1.0, 1.0),
+    "DISTRIBUIDOR": (1.3, 0.35),
+    "VAREJO": (1.3, 0.25),
+    "SERVIÇOS": (1.1, 0.5),
+}
+
+
+def fatores_orientacao(setor: Optional[str]) -> tuple:
+    """Retorna (fator_imp, fator_exp) conforme o setor CNAE."""
+    return _ORIENTACAO_SETOR.get((setor or "").strip().upper(), (1.0, 1.0))
+
+
+def stats_estimativa_periodo(
+    client, run_query, bt, table_env, cnpjs: List[str],
+    ym_start: int, ym_end: int, fator_imp: float = 1.0, fator_exp: float = 1.0,
+) -> Optional[Dict]:
+    """Estimativa período-consciente: valores da empresa = participação estrutural
+    (share_uf) × mercado REAL da UF mês a mês, no período selecionado, com
+    orientação de comércio por setor. Preserva sazonalidade e variação anual.
+
+    Retorna {total_imp, total_exp, por_uf, valores_por_mes, valores_imp_por_mes,
+    valores_exp_por_mes, registros_por_mes, ano_ini, ano_fim} ou None."""
+    if not cnpjs:
+        return None
+    from google.cloud import bigquery
+    raizes = sorted({c[:8] for c in cnpjs if len(c) >= 8})
+    if not raizes:
+        return None
+    t_est = bt(table_env("COMEX_BQ_TABLE_ESTIMADO", _DEFAULT_ESTIMADO_TBL))
+    t_imp = bt(table_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = bt(table_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+
+    # 1) participação (share_uf) da empresa por UF
+    sql_share = f"""
+    SELECT uf, SUM(share_uf) AS share_uf, ANY_VALUE(ano_ini) ano_ini, ANY_VALUE(ano_fim) ano_fim
+    FROM {t_est} WHERE cnpj_raiz IN UNNEST(@raizes) GROUP BY uf
+    """
+    try:
+        shares_rows = run_query(client, sql_share, [bigquery.ArrayQueryParameter("raizes", "STRING", raizes)])
+    except Exception as exc:
+        logger.warning(f"stats_estimativa_periodo share erro: {exc}")
+        return None
+    shares = {r.get("uf"): float(r.get("share_uf") or 0) for r in shares_rows if r.get("uf")}
+    if not shares:
+        return None
+    ano_ini = int(shares_rows[0].get("ano_ini") or 0)
+    ano_fim = int(shares_rows[0].get("ano_fim") or 0)
+    ufs = list(shares.keys())
+
+    # 2) mercado real da UF mês a mês no período selecionado
+    params = [
+        bigquery.ScalarQueryParameter("a", "INT64", ym_start),
+        bigquery.ScalarQueryParameter("b", "INT64", ym_end),
+        bigquery.ArrayQueryParameter("ufs", "STRING", ufs),
+    ]
+    sql_mes = f"""
+    WITH imp AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, ano, mes,
+             SUM(CAST(total_importacao_fob AS FLOAT64)) v
+      FROM {t_imp} WHERE (ano*100+mes) BETWEEN @a AND @b
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN UNNEST(@ufs)
+      GROUP BY uf, ano, mes
+    ),
+    exp AS (
+      SELECT UPPER(TRIM(CAST(sigla_uf AS STRING))) uf, ano, mes,
+             SUM(CAST(total_exportacao_fob AS FLOAT64)) v
+      FROM {t_exp} WHERE (ano*100+mes) BETWEEN @a AND @b
+        AND UPPER(TRIM(CAST(sigla_uf AS STRING))) IN UNNEST(@ufs)
+      GROUP BY uf, ano, mes
+    )
+    SELECT COALESCE(imp.uf, exp.uf) uf,
+           COALESCE(imp.ano, exp.ano) ano, COALESCE(imp.mes, exp.mes) mes,
+           COALESCE(imp.v,0) imp, COALESCE(exp.v,0) exp
+    FROM imp FULL OUTER JOIN exp
+      ON imp.uf=exp.uf AND imp.ano=exp.ano AND imp.mes=exp.mes
+    """
+    try:
+        mes_rows = run_query(client, sql_mes, params)
+    except Exception as exc:
+        logger.warning(f"stats_estimativa_periodo mes erro: {exc}")
+        return None
+
+    valores_imp: Dict[str, float] = {}
+    valores_exp: Dict[str, float] = {}
+    por_uf: Dict[str, Dict[str, float]] = {}
+    for r in mes_rows:
+        uf = r.get("uf")
+        sh = shares.get(uf, 0.0)
+        if sh <= 0:
+            continue
+        ym = f"{int(r.get('ano') or 0):04d}-{int(r.get('mes') or 0):02d}"
+        vi = float(r.get("imp") or 0) * sh * fator_imp
+        ve = float(r.get("exp") or 0) * sh * fator_exp
+        valores_imp[ym] = valores_imp.get(ym, 0.0) + vi
+        valores_exp[ym] = valores_exp.get(ym, 0.0) + ve
+        d = por_uf.setdefault(uf, {"imp": 0.0, "exp": 0.0})
+        d["imp"] += vi
+        d["exp"] += ve
+
+    if not valores_imp and not valores_exp:
+        return None
+    todos_ym = sorted(set(valores_imp) | set(valores_exp))
+    valores_por_mes = {ym: valores_imp.get(ym, 0.0) + valores_exp.get(ym, 0.0) for ym in todos_ym}
+    registros_por_mes = {ym: (1 if valores_por_mes[ym] > 0 else 0) for ym in todos_ym}
+    total_imp = sum(valores_imp.values())
+    total_exp = sum(valores_exp.values())
+    por_uf_list = sorted(
+        [{"uf": k, "imp": v["imp"], "exp": v["exp"]} for k, v in por_uf.items()],
+        key=lambda x: -(x["imp"] + x["exp"]),
+    )
+    return {
+        "total_imp": total_imp,
+        "total_exp": total_exp,
+        "por_uf": por_uf_list,
+        "valores_por_mes": {ym: valores_por_mes[ym] for ym in todos_ym},
+        "valores_imp_por_mes": {ym: valores_imp.get(ym, 0.0) for ym in todos_ym},
+        "valores_exp_por_mes": {ym: valores_exp.get(ym, 0.0) for ym in todos_ym},
+        "registros_por_mes": registros_por_mes,
+        "ano_ini": ano_ini,
+        "ano_fim": ano_fim,
+    }
+
+
 def fetch_top_ncms_ufs(client, run_query, bt, table_env, ufs: List[str],
                        ano_ini: int, ano_fim: int, limit: int = 12) -> List[Dict]:
     """Top NCMs movimentados nas UFs da empresa (dados reais UF×NCM)."""
@@ -395,16 +524,17 @@ def stats_payload_empresa_estimado(
     valores_imp_por_mes: Optional[Dict[str, float]] = None,
     valores_exp_por_mes: Optional[Dict[str, float]] = None,
 ) -> Dict:
-    """Payload do dashboard com valores ESTIMADOS por empresa (rateio ponderado por porte)."""
+    """Payload do dashboard com valores ESTIMADOS por empresa (participação × mercado real da UF)."""
     nome = (empresa_importadora or empresa_exportadora or "empresa").strip()
     total_imp = float(estimativa.get("total_imp") or 0)
     total_exp = float(estimativa.get("total_exp") or 0)
     periodo = f"{estimativa.get('ano_ini')}-{estimativa.get('ano_fim')}"
     aviso = (
-        f"Valores ESTIMADOS para «{nome}» (período {periodo}). Não há registro real de "
-        "comércio exterior por CNPJ na base; a estimativa rateia o total de cada UF entre as "
-        "empresas comex-ativas do estado, ponderado pelo porte (nº de estabelecimentos). "
-        "Use como ordem de grandeza, não como histórico real."
+        f"Valores ESTIMADOS para «{nome}». Não há registro real de comércio exterior por CNPJ "
+        "na base. A estimativa aplica a participação estrutural da empresa em cada UF "
+        f"(ponderada por porte, base {periodo}) sobre o mercado REAL da UF mês a mês — "
+        "preservando a sazonalidade e a variação ao longo do período selecionado — com "
+        "orientação de comércio por setor (importador/exportador). Use como ordem de grandeza."
     )
     principais_paises = [
         {"pais": f"UF: {u.get('uf')}", "valor_total": float(u.get("imp") or 0) + float(u.get("exp") or 0), "total_operacoes": 0}

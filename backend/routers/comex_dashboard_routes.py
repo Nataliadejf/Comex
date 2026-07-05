@@ -719,9 +719,19 @@ def _dashboard_stats_payload_from_bq(
         cnae_hint, uf_hint = emp_stats.resolve_cnae_empresa(
             client, _run_query, _bt, _table_env, cnpjs
         )
-        # Tentar estimativa por empresa (tabela materializada ponderada por porte)
-        estimativa = emp_stats.fetch_estimativa_empresa(
-            client, _run_query, _bt, _table_env, cnpjs
+        # Orientação de comércio (importador/exportador) por setor CNAE
+        fator_imp, fator_exp = 1.0, 1.0
+        try:
+            from services import cnae_service
+            h = cnae_service.enriquecer_por_prefixo(cnae_hint) if cnae_hint else None
+            if h:
+                fator_imp, fator_exp = emp_stats.fatores_orientacao(h.get("setor"))
+        except Exception:
+            pass
+        # Estimativa período-consciente: participação × mercado REAL da UF mês a mês
+        estimativa = emp_stats.stats_estimativa_periodo(
+            client, _run_query, _bt, _table_env, cnpjs, ym_start, ym_end,
+            fator_imp=fator_imp, fator_exp=fator_exp,
         )
         if estimativa:
             ufs_emp = [u.get("uf") for u in estimativa.get("por_uf", []) if u.get("uf")]
@@ -729,17 +739,13 @@ def _dashboard_stats_payload_from_bq(
                 client, _run_query, _bt, _table_env, ufs_emp,
                 estimativa.get("ano_ini") or 2020, estimativa.get("ano_fim") or 2021,
             )
-            # Série mensal: distribui o total estimado pelos meses do período
-            # selecionado, seguindo a sazonalidade real das UFs da empresa.
-            valores_por_mes, registros_por_mes, valores_imp_pm, valores_exp_pm = emp_stats.fetch_serie_mensal_estimada(
-                client, _run_query, _bt, _table_env, ufs_emp, ym_start, ym_end,
-                float(estimativa.get("total_imp") or 0), float(estimativa.get("total_exp") or 0),
-            )
             payload = emp_stats.stats_payload_empresa_estimado(
                 fonte, empresa_importadora, empresa_exportadora,
                 estimativa, cnpjs=cnpjs, principais_ncms=principais_ncms,
-                valores_por_mes=valores_por_mes, registros_por_mes=registros_por_mes,
-                valores_imp_por_mes=valores_imp_pm, valores_exp_por_mes=valores_exp_pm,
+                valores_por_mes=estimativa.get("valores_por_mes"),
+                registros_por_mes=estimativa.get("registros_por_mes"),
+                valores_imp_por_mes=estimativa.get("valores_imp_por_mes"),
+                valores_exp_por_mes=estimativa.get("valores_exp_por_mes"),
             )
             payload["cnae_hint"] = cnae_hint
             payload["uf_hint"] = uf_hint
@@ -1089,8 +1095,20 @@ def get_tabela_detalhada_bq(
                 cnpjs = emp_stats.resolve_cnpjs_empresa_base(
                     client, _run_query, _bt, _table_env, empresa_importadora, empresa_exportadora
                 )
-                estimativa = emp_stats.fetch_estimativa_empresa(
+                cnae_hint, _uf_hint = emp_stats.resolve_cnae_empresa(
                     client, _run_query, _bt, _table_env, cnpjs
+                )
+                fator_imp, fator_exp = 1.0, 1.0
+                try:
+                    from services import cnae_service
+                    h = cnae_service.enriquecer_por_prefixo(cnae_hint) if cnae_hint else None
+                    if h:
+                        fator_imp, fator_exp = emp_stats.fatores_orientacao(h.get("setor"))
+                except Exception:
+                    pass
+                estimativa = emp_stats.stats_estimativa_periodo(
+                    client, _run_query, _bt, _table_env, cnpjs, ym_start, ym_end,
+                    fator_imp=fator_imp, fator_exp=fator_exp,
                 )
                 if estimativa:
                     nome_emp = (empresa_importadora or empresa_exportadora or "").strip()

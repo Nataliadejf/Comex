@@ -51,6 +51,7 @@ uf_w AS (SELECT uf, SUM(peso) AS total_peso, COUNT(*) AS empresas_uf FROM emp_p 
 SELECT
   emp_p.cnpj_raiz, emp_p.razao_social, emp_p.uf, emp_p.cnae,
   emp_p.peso, uf_w.empresas_uf,
+  emp_p.peso / NULLIF(uf_w.total_peso, 0) AS share_uf,
   COALESCE(ui.v, 0) * emp_p.peso / NULLIF(uf_w.total_peso, 0) AS imp_estimado,
   COALESCE(ue.v, 0) * emp_p.peso / NULLIF(uf_w.total_peso, 0) AS exp_estimado,
   {ANO_INI} AS ano_ini, {ANO_FIM} AS ano_fim
