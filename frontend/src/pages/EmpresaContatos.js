@@ -2,18 +2,17 @@ import React, { useState, useCallback } from 'react';
 import {
   Alert, AutoComplete, Badge, Button, Card, Col, Descriptions, Divider,
   Empty, Input, Row, Spin, Table, Tag, Tabs, Tooltip, Typography, message,
-  Statistic, Timeline,
+  Statistic,
 } from 'antd';
 import {
   ApartmentOutlined,
   BankOutlined,
   BulbOutlined,
-  CalendarOutlined,
   EnvironmentOutlined,
   ExportOutlined,
-  FileTextOutlined,
   GlobalOutlined,
   ImportOutlined,
+  LinkedinOutlined,
   MailOutlined,
   PhoneOutlined,
   SearchOutlined,
@@ -257,8 +256,6 @@ export default function EmpresaContatos() {
   const [activeTab, setActiveTab] = useState('perfil');
   const [sugestao, setSugestao] = useState(null);
   const [loadingSugestao, setLoadingSugestao] = useState(false);
-  const [dou, setDou] = useState(null);
-  const [loadingDou, setLoadingDou] = useState(false);
   const [selectedCnpj, setSelectedCnpj] = useState(null);
 
   const buscarSugestoes = useCallback(async (q) => {
@@ -299,7 +296,6 @@ export default function EmpresaContatos() {
     setLoading(true);
     setDados(null);
     setSugestao(null);
-    setDou(null);
     setActiveTab('perfil');
     setSelectedCnpj(cnpj);
     try {
@@ -325,23 +321,9 @@ export default function EmpresaContatos() {
     }
   }, [selectedCnpj]);
 
-  const carregarDou = useCallback(async () => {
-    if (!selectedCnpj) return;
-    setLoadingDou(true);
-    try {
-      const res = await api.get(`/api/contatos/empresa/${encodeURIComponent(selectedCnpj)}/dou`);
-      setDou(res.data);
-    } catch (e) {
-      message.error('Erro ao buscar publicações no DOU.');
-    } finally {
-      setLoadingDou(false);
-    }
-  }, [selectedCnpj]);
-
   const onTabChange = (key) => {
     setActiveTab(key);
     if (key === 'sugestao' && !sugestao && !loadingSugestao) carregarSugestao();
-    if (key === 'dou' && !dou && !loadingDou) carregarDou();
   };
 
   const onSelect = (_, opt) => {
@@ -760,97 +742,57 @@ export default function EmpresaContatos() {
       ),
     },
     {
-      key: 'dou',
-      label: <span><FileTextOutlined /> Diário Oficial</span>,
+      key: 'web',
+      label: <span><GlobalOutlined /> Contatos na Web</span>,
       children: (
-        <div>
-          {loadingDou ? (
-            <div style={{ textAlign: 'center', padding: 60 }}>
-              <Spin tip="Buscando publicações no DOU..." />
-            </div>
-          ) : !dou ? (
-            <div style={{ textAlign: 'center', padding: 40 }}>
-              <Button type="primary" icon={<FileTextOutlined />} onClick={carregarDou}>
-                Buscar no Diário Oficial
-              </Button>
-              <Paragraph type="secondary" style={{ marginTop: 12, fontSize: 12 }}>
-                Verifica publicações do DOU que mencionam este CNPJ ou razão social
-                (habilitações RADAR, portarias, atos normativos, etc.).
+        (() => {
+          const nome = perfil.razao_social || '';
+          const nomeQ = encodeURIComponent(nome);
+          const links = [
+            { icon: <LinkedinOutlined style={{ color: '#0a66c2' }} />, titulo: 'Empresa no LinkedIn',
+              desc: 'Página e informações institucionais da empresa',
+              url: `https://www.linkedin.com/search/results/companies/?keywords=${nomeQ}` },
+            { icon: <UserOutlined style={{ color: '#0a66c2' }} />, titulo: 'Pessoas no LinkedIn',
+              desc: 'Funcionários e contatos que trabalham na empresa',
+              url: `https://www.linkedin.com/search/results/people/?keywords=${nomeQ}` },
+            { icon: <MailOutlined style={{ color: '#ea4335' }} />, titulo: 'E-mail e telefone (Google)',
+              desc: 'Busca por contatos publicados na web',
+              url: `https://www.google.com/search?q=${encodeURIComponent('"' + nome + '" contato email telefone')}` },
+            { icon: <GlobalOutlined style={{ color: '#34a853' }} />, titulo: 'Site oficial',
+              desc: 'Encontrar o website da empresa',
+              url: `https://www.google.com/search?q=${encodeURIComponent(nome + ' site oficial')}` },
+          ];
+          return (
+            <div>
+              <Alert
+                type="info" showIcon style={{ marginBottom: 16 }}
+                message="Buscar contatos na web"
+                description="Links de busca externos para localizar contatos, funcionários e presença online da empresa. Abrem em nova aba."
+              />
+              <Row gutter={[16, 16]}>
+                {links.map((l) => (
+                  <Col xs={24} sm={12} key={l.titulo}>
+                    <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
+                      <Card size="small" hoverable>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <div style={{ fontSize: 24 }}>{l.icon}</div>
+                          <div>
+                            <div style={{ fontWeight: 600 }}>{l.titulo}</div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>{l.desc}</Text>
+                          </div>
+                        </div>
+                      </Card>
+                    </a>
+                  </Col>
+                ))}
+              </Row>
+              <Paragraph type="secondary" style={{ marginTop: 16, fontSize: 12 }}>
+                Observação: LinkedIn e buscadores exigem acesso externo e podem pedir login. Os contatos
+                oficiais da Receita Federal (quando disponíveis) estão na aba Perfil.
               </Paragraph>
             </div>
-          ) : (
-            <Row gutter={[16, 16]}>
-              <Col xs={24}>
-                <Alert
-                  message={`${dou.total} publicação(ões) encontrada(s) para ${dou.razao_social || dou.cnpj}`}
-                  description={`Fonte: ${dou.fonte}`}
-                  type={dou.total > 0 ? 'success' : 'info'}
-                  showIcon
-                  action={
-                    <Button size="small" onClick={carregarDou} loading={loadingDou}>
-                      Atualizar
-                    </Button>
-                  }
-                />
-              </Col>
-              {dou.publicacoes?.length > 0 ? (
-                <Col xs={24}>
-                  <Card size="small" title="Publicações no DOU">
-                    <Timeline
-                      items={dou.publicacoes.map((pub, i) => ({
-                        key: i,
-                        color: pub.tipo_ato === 'Habilitação' ? 'green'
-                             : pub.tipo_ato === 'Penalidade' ? 'red'
-                             : 'blue',
-                        children: (
-                          <div style={{ marginBottom: 12 }}>
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
-                              <Tag color={pub.tipo_ato === 'Habilitação' ? 'green' : pub.tipo_ato === 'Penalidade' ? 'red' : 'blue'}>
-                                {pub.tipo_ato || 'Outros'}
-                              </Tag>
-                              {pub.data_pub && (
-                                <Text type="secondary" style={{ fontSize: 11 }}>
-                                  <CalendarOutlined style={{ marginRight: 4 }} />
-                                  {typeof pub.data_pub === 'string' ? pub.data_pub : pub.data_pub}
-                                </Text>
-                              )}
-                              {pub.secao && <Tag>{`Seção ${pub.secao}`}</Tag>}
-                            </div>
-                            {pub.resumo && (
-                              <Paragraph style={{ fontSize: 12, marginBottom: 4, color: '#555' }} ellipsis={{ rows: 3, expandable: true }}>
-                                {pub.resumo}
-                              </Paragraph>
-                            )}
-                            {pub.cnpjs_encontrados?.length > 0 && (
-                              <div style={{ marginTop: 4 }}>
-                                <Text type="secondary" style={{ fontSize: 11 }}>CNPJs: </Text>
-                                {pub.cnpjs_encontrados.map((c) => (
-                                  <Tag key={c} style={{ fontSize: 10 }}>{fmtCnpj(c)}</Tag>
-                                ))}
-                              </div>
-                            )}
-                            {pub.url && (
-                              <a href={pub.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
-                                Ver publicação completa →
-                              </a>
-                            )}
-                          </div>
-                        ),
-                      }))}
-                    />
-                  </Card>
-                </Col>
-              ) : (
-                <Col xs={24}>
-                  <Empty
-                    description="Nenhuma publicação encontrada para este CNPJ no Diário Oficial."
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                </Col>
-              )}
-            </Row>
-          )}
-        </div>
+          );
+        })()
       ),
     },
   ] : [];

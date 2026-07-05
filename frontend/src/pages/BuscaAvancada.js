@@ -290,16 +290,15 @@ const BuscaAvancada = () => {
                 <AutoComplete
                   options={importadorasOptions}
                   onSearch={buscarImportadoras}
-                  placeholder="Digite o nome da empresa importadora"
                   loading={loadingImportadoras}
                   filterOption={(inputValue, option) =>
                     option?.value?.toLowerCase().includes(inputValue.toLowerCase())
                   }
                   style={{ width: '100%' }}
                 >
-                  <Input 
+                  <Input
                     prefix={<ImportOutlined />}
-                    placeholder="Digite o nome da empresa importadora"
+                    placeholder="Nome da empresa importadora"
                   />
                 </AutoComplete>
               </Form.Item>
@@ -309,16 +308,15 @@ const BuscaAvancada = () => {
                 <AutoComplete
                   options={exportadorasOptions}
                   onSearch={buscarExportadoras}
-                  placeholder="Digite o nome da empresa exportadora"
                   loading={loadingExportadoras}
                   filterOption={(inputValue, option) =>
                     option?.value?.toLowerCase().includes(inputValue.toLowerCase())
                   }
                   style={{ width: '100%' }}
                 >
-                  <Input 
+                  <Input
                     prefix={<ExportOutlined />}
-                    placeholder="Digite o nome da empresa exportadora"
+                    placeholder="Nome da empresa exportadora"
                   />
                 </AutoComplete>
               </Form.Item>

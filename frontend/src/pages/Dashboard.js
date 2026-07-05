@@ -1183,23 +1183,26 @@ const Dashboard = () => {
   const temPesoTendencias = tendenciasData.some((d) => (d.peso || 0) > 0);
 
   // Top Importadores (quando há filtro por empresa, mostrar a empresa filtrada; senão lista geral)
+  // Nome da empresa filtrada (independente de estar no campo importador ou exportador)
+  const nomeEmpresaFiltro = (empresaImportadora || empresaImportadoraInput || empresaExportadora || empresaExportadoraInput || '').toString().trim();
+  const temFiltroEmpresa = Boolean(nomeEmpresaFiltro);
+
   const topImportadores = (() => {
     if (!statsFinal) return [];
 
-    const temFiltroImp = (empresaImportadora && String(empresaImportadora).trim()) || (empresaImportadoraInput && String(empresaImportadoraInput).trim());
-    const nomeFiltroImp = (empresaImportadora || empresaImportadoraInput || '').toString().trim();
-    if (temFiltroImp && nomeFiltroImp && !statsFinal.kpis_empresa_indisponiveis) {
-      const valorImp = statsFinal.valor_total_importacoes ?? statsFinal.valor_total_usd ?? 0;
+    // Empresa filtrada → mostra a própria empresa com o valor de IMPORTAÇÃO
+    if (temFiltroEmpresa && !statsFinal.kpis_empresa_indisponiveis) {
+      const valorImp = statsFinal.valor_total_importacoes ?? 0;
       const pesoImp = statsFinal.volume_importacoes ?? 0;
       return [{
         cor: COLORS[0],
-        nome: nomeFiltroImp.length > 50 ? nomeFiltroImp.substring(0, 50) + '...' : nomeFiltroImp,
+        nome: nomeEmpresaFiltro.length > 50 ? nomeEmpresaFiltro.substring(0, 50) + '...' : nomeEmpresaFiltro,
         fob: Number(valorImp) || 0,
         peso: Number(pesoImp) || 0,
         percentual: 100,
       }];
     }
-    
+
     if (principaisImportadores && principaisImportadores.length > 0) {
       const valorTotalUsd = statsFinal.valor_total_usd || 1;
       return principaisImportadores
@@ -1258,21 +1261,20 @@ const Dashboard = () => {
   // Top Exportadores (quando há filtro por empresa, mostrar a empresa filtrada; senão lista geral)
   const topExportadores = (() => {
     if (!statsFinal) return [];
-    
-    const temFiltroExp = (empresaExportadora && String(empresaExportadora).trim()) || (empresaExportadoraInput && String(empresaExportadoraInput).trim());
-    const nomeFiltroExp = (empresaExportadora || empresaExportadoraInput || '').toString().trim();
-    if (temFiltroExp && nomeFiltroExp && !statsFinal.kpis_empresa_indisponiveis) {
-      const valorExp = statsFinal.valor_total_exportacoes ?? statsFinal.valor_total_usd ?? 0;
+
+    // Empresa filtrada → mostra a própria empresa com o valor de EXPORTAÇÃO
+    if (temFiltroEmpresa && !statsFinal.kpis_empresa_indisponiveis) {
+      const valorExp = statsFinal.valor_total_exportacoes ?? 0;
       const pesoExp = statsFinal.volume_exportacoes ?? 0;
       return [{
         cor: COLORS[0],
-        nome: nomeFiltroExp.length > 50 ? nomeFiltroExp.substring(0, 50) + '...' : nomeFiltroExp,
+        nome: nomeEmpresaFiltro.length > 50 ? nomeEmpresaFiltro.substring(0, 50) + '...' : nomeEmpresaFiltro,
         fob: Number(valorExp) || 0,
         peso: Number(pesoExp) || 0,
         percentual: 100,
       }];
     }
-    
+
     if (principaisExportadores && principaisExportadores.length > 0) {
       const valorTotalUsd = statsFinal.valor_total_usd || 1;
       return principaisExportadores
@@ -1452,23 +1454,6 @@ const Dashboard = () => {
               <Option value="Importação">Importação</Option>
               <Option value="Exportação">Exportação</Option>
             </Select>
-          </Col>
-          <Col xs={24} sm={8} md={6}>
-            <Select
-              mode="tags"
-              style={{ width: '100%' }}
-              placeholder="NCMs (múltiplos)"
-              value={ncmsFiltro}
-              onChange={(values) => {
-                setNcmsFiltro(values);
-                if (values.length > 0) setNcmFiltro(null);
-              }}
-              tokenSeparators={[',', ' ']}
-              filterOption={(input, option) =>
-                (option?.value ?? '').includes(input.replace(/[^\d]/g, ''))
-              }
-              allowClear
-            />
           </Col>
         </Row>
         <Row gutter={[16, 16]} align="middle" style={{ marginTop: '16px' }}>
