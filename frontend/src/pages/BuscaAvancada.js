@@ -1,355 +1,167 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
-  Card,
-  Form,
-  Input,
-  DatePicker,
-  Select,
-  Button,
-  Row,
-  Col,
-  Table,
-  Space,
-  Tag,
-  message,
-  AutoComplete,
+  Card, Form, Input, DatePicker, Select, Button, Row, Col, Table, Space, Tag, Alert, message,
 } from 'antd';
-import { SearchOutlined, DownloadOutlined, ShopOutlined, ImportOutlined, ExportOutlined } from '@ant-design/icons';
+import { SearchOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { buscaAPI, empresasAPI } from '../services/api';
-
-// Função debounce simples
-const debounce = (func, wait) => {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-};
+import api from '../services/api';
 
 const { RangePicker } = DatePicker;
 const { Option } = Select;
+
+const UFS = [
+  'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA',
+  'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN',
+  'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
+];
+
+const fmtUsd = (v) =>
+  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v || 0);
 
 const BuscaAvancada = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
-  const [pagination, setPagination] = useState({
-    current: 1,
-    pageSize: 100,
-    total: 0,
-  });
-  const [importadorasOptions, setImportadorasOptions] = useState([]);
-  const [exportadorasOptions, setExportadorasOptions] = useState([]);
-  const [loadingImportadoras, setLoadingImportadoras] = useState(false);
-  const [loadingExportadoras, setLoadingExportadoras] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [ncmOptions, setNcmOptions] = useState([]);
 
-  const ufs = [
-    'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA',
-    'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN',
-    'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'
-  ];
-
-  const viasTransporte = [
-    'MARITIMA',
-    'AEREA',
-    'RODOVIARIA',
-    'FERROVIARIA',
-    'DUTOVIARIA',
-    'POSTAL',
-    'OUTRAS',
-  ];
-
-  // Função de busca de importadoras com debounce
-  const buscarImportadoras = useCallback(
-    debounce(async (query) => {
-      if (!query || query.length < 2) {
-        setImportadorasOptions([]);
-        return;
-      }
-      
-      setLoadingImportadoras(true);
-      try {
-        const response = await empresasAPI.autocompleteImportadoras(query);
-        const options = response.data.map((empresa) => ({
-          value: empresa.nome,
-          label: `${empresa.nome} (${empresa.total_operacoes} operações)`,
-          empresa: empresa,
-        }));
-        setImportadorasOptions(options);
-      } catch (error) {
-        console.error('Erro ao buscar importadoras:', error);
-        setImportadorasOptions([]);
-      } finally {
-        setLoadingImportadoras(false);
-      }
-    }, 300),
-    []
-  );
-
-  // Função de busca de exportadoras com debounce
-  const buscarExportadoras = useCallback(
-    debounce(async (query) => {
-      if (!query || query.length < 2) {
-        setExportadorasOptions([]);
-        return;
-      }
-      
-      setLoadingExportadoras(true);
-      try {
-        const response = await empresasAPI.autocompleteExportadoras(query);
-        const options = response.data.map((empresa) => ({
-          value: empresa.nome,
-          label: `${empresa.nome} (${empresa.total_operacoes} operações)`,
-          empresa: empresa,
-        }));
-        setExportadorasOptions(options);
-      } catch (error) {
-        console.error('Erro ao buscar exportadoras:', error);
-        setExportadorasOptions([]);
-      } finally {
-        setLoadingExportadoras(false);
-      }
-    }, 300),
-    []
-  );
+  // Autocomplete de NCM (por código)
+  const buscarNcm = useCallback(async (q) => {
+    const digitos = (q || '').replace(/\D/g, '');
+    if (digitos.length < 2) { setNcmOptions([]); return; }
+    try {
+      const res = await api.get('/api/empresa-intel/ncm-autocomplete', { params: { q: digitos, limit: 20 } });
+      setNcmOptions((res.data?.items || []).map((i) => ({ value: i.ncm, label: i.ncm })));
+    } catch {
+      setNcmOptions([]);
+    }
+  }, []);
 
   const handleSearch = async (values, page = 1) => {
     setLoading(true);
     try {
-      // Processar NCMs múltiplos
-      let ncms = [];
-      if (values.ncms && Array.isArray(values.ncms)) {
-        ncms = values.ncms;
-      } else if (values.ncm) {
-        ncms = [values.ncm];
-      }
-
-      const filtros = {
-        ...values,
-        ncms: ncms.length > 0 ? ncms : undefined,
-        ncm: undefined, // Remover campo antigo
-        data_inicio: values.periodo?.[0]?.format('YYYY-MM-DD'),
-        data_fim: values.periodo?.[1]?.format('YYYY-MM-DD'),
-        periodo: undefined,
-        empresa_importadora: values.empresa_importadora || undefined,
-        empresa_exportadora: values.empresa_exportadora || undefined,
+      const tipoMap = { 'Importação': 'importacao', 'Exportação': 'exportacao' };
+      const params = {
         page,
-        page_size: pagination.pageSize,
+        page_size: 100,
       };
+      if (values.ncms && values.ncms.length) params.ncms = values.ncms;
+      if (values.tipo_operacao) params.tipo = tipoMap[values.tipo_operacao] || values.tipo_operacao;
+      if (values.uf) params.uf = values.uf;
+      if (values.periodo?.[0]) params.data_inicio = values.periodo[0].format('YYYY-MM-DD');
+      if (values.periodo?.[1]) params.data_fim = values.periodo[1].format('YYYY-MM-DD');
+      if (values.valor_fob_min) params.fob_min = Number(values.valor_fob_min);
+      if (values.valor_fob_max) params.fob_max = Number(values.valor_fob_max);
 
-      const response = await buscaAPI.buscar(filtros);
-      setResults(response.data.results);
-      setPagination({
-        ...pagination,
-        current: page,
-        total: response.data.total,
-      });
-    } catch (error) {
-      message.error('Erro ao buscar dados');
-      console.error(error);
+      const res = await api.get('/api/empresa-intel/busca-comex', { params });
+      if (res.data?.error) {
+        message.error('Erro: ' + res.data.error);
+        setResults([]); setTotal(0);
+      } else {
+        setResults(res.data?.results || []);
+        setTotal(res.data?.total || 0);
+      }
+    } catch (e) {
+      message.error('Erro ao buscar dados.');
+      setResults([]); setTotal(0);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleTableChange = (newPagination) => {
-    const values = form.getFieldsValue();
-    handleSearch(values, newPagination.current);
-  };
-
-  const handleExport = () => {
-    message.info('Funcionalidade de exportação em desenvolvimento');
+  const exportarCsv = () => {
+    if (!results?.length) return;
+    const header = ['ncm', 'tipo_operacao', 'uf', 'valor_fob', 'data_operacao'];
+    const linhas = results.map((r) => header.map((h) => `"${String(r[h] ?? '')}"`).join(','));
+    const csv = [header.join(','), ...linhas].join('\n');
+    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'busca_comex.csv'; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const columns = [
+    { title: 'NCM', dataIndex: 'ncm', key: 'ncm', width: 120 },
     {
-      title: 'NCM',
-      dataIndex: 'ncm',
-      key: 'ncm',
-      width: 100,
+      title: 'Tipo', dataIndex: 'tipo_operacao', key: 'tipo_operacao', width: 130,
+      render: (t) => <Tag color={t === 'Importação' ? 'blue' : 'green'}>{t}</Tag>,
+    },
+    { title: 'UF', dataIndex: 'uf', key: 'uf', width: 70, render: (v) => <Tag>{v}</Tag> },
+    {
+      title: 'Valor FOB (USD)', dataIndex: 'valor_fob', key: 'valor_fob', width: 180,
+      sorter: (a, b) => a.valor_fob - b.valor_fob, defaultSortOrder: 'descend',
+      render: (v) => fmtUsd(v),
     },
     {
-      title: 'Descrição',
-      dataIndex: 'descricao_produto',
-      key: 'descricao_produto',
-      ellipsis: true,
-    },
-    {
-      title: 'Tipo',
-      dataIndex: 'tipo_operacao',
-      key: 'tipo_operacao',
-      width: 120,
-      render: (tipo) => (
-        <Tag color={tipo === 'Importação' ? 'green' : 'blue'}>
-          {tipo}
-        </Tag>
-      ),
-    },
-    {
-      title: 'País',
-      dataIndex: 'pais_origem_destino',
-      key: 'pais_origem_destino',
-    },
-    {
-      title: 'UF',
-      dataIndex: 'uf',
-      key: 'uf',
-      width: 60,
-    },
-    {
-      title: 'Valor FOB (USD)',
-      dataIndex: 'valor_fob',
-      key: 'valor_fob',
-      width: 150,
-      render: (value) =>
-        `$${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
-    },
-    {
-      title: 'Data',
-      dataIndex: 'data_operacao',
-      key: 'data_operacao',
-      width: 120,
-      render: (date) => dayjs(date).format('DD/MM/YYYY'),
+      title: 'Período', dataIndex: 'data_operacao', key: 'data_operacao', width: 120,
+      render: (d) => (d ? dayjs(d).format('MM/YYYY') : '—'),
     },
   ];
 
   return (
-    <div>
-      <Card title="Busca Avançada" bordered={false}>
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={(values) => handleSearch(values, 1)}
-        >
+    <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+      <Card title="Busca Avançada — Comércio Exterior por NCM e UF" bordered={false}>
+        <Alert
+          type="info" showIcon style={{ marginBottom: 16 }}
+          message="Dados oficiais reais (MDIC) agregados por NCM × UF × mês"
+          description="Digite o NCM (o autocomplete sugere códigos válidos), escolha o tipo e o período. Os valores são o FOB total real por estado — independem de importador/exportador."
+        />
+        <Form form={form} layout="vertical" onFinish={(values) => handleSearch(values, 1)}>
           <Row gutter={16}>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item name="ncms" label="NCMs">
+              <Form.Item name="ncms" label="NCM (código)">
                 <Select
                   mode="tags"
-                  placeholder="Digite ou selecione NCMs (múltiplos)"
+                  placeholder="Digite o NCM (ex.: 8708...)"
                   tokenSeparators={[',', ' ']}
-                  filterOption={(input, option) =>
-                    (option?.value ?? '').includes(input.replace(/[^\d]/g, ''))
-                  }
+                  onSearch={buscarNcm}
+                  options={ncmOptions}
+                  filterOption={false}
                   style={{ width: '100%' }}
-                >
-                  {/* Opções podem ser adicionadas aqui se necessário */}
-                </Select>
+                />
               </Form.Item>
             </Col>
-            <Col xs={24} sm={12} md={6}>
+            <Col xs={24} sm={12} md={5}>
               <Form.Item name="tipo_operacao" label="Tipo de Operação">
-                <Select placeholder="Selecione">
+                <Select placeholder="Ambos" allowClear>
                   <Option value="Importação">Importação</Option>
                   <Option value="Exportação">Exportação</Option>
                 </Select>
               </Form.Item>
             </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item name="pais" label="País">
-                <Input placeholder="Nome do país" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
+            <Col xs={24} sm={12} md={5}>
               <Form.Item name="uf" label="UF">
-                <Select placeholder="Selecione UF" showSearch>
-                  {ufs.map((uf) => (
-                    <Option key={uf} value={uf}>
-                      {uf}
-                    </Option>
-                  ))}
+                <Select placeholder="Todas" showSearch allowClear>
+                  {UFS.map((uf) => <Option key={uf} value={uf}>{uf}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={6}>
-              <Form.Item name="via_transporte" label="Via de Transporte">
-                <Select placeholder="Selecione">
-                  {viasTransporte.map((via) => (
-                    <Option key={via} value={via}>
-                      {via.replace('_', ' ')}
-                    </Option>
-                  ))}
-                </Select>
+              <Form.Item name="periodo" label="Período" initialValue={[dayjs().subtract(1, 'year'), dayjs()]}>
+                <RangePicker style={{ width: '100%' }} picker="month" format="MM/YYYY" />
               </Form.Item>
             </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item name="periodo" label="Período">
-                <RangePicker 
-                  style={{ width: '100%' }}
-                  defaultValue={[dayjs().subtract(2, 'year'), dayjs()]}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={8}>
-              <Form.Item name="empresa_importadora" label="Provável Importador">
-                <AutoComplete
-                  options={importadorasOptions}
-                  onSearch={buscarImportadoras}
-                  loading={loadingImportadoras}
-                  filterOption={(inputValue, option) =>
-                    option?.value?.toLowerCase().includes(inputValue.toLowerCase())
-                  }
-                  style={{ width: '100%' }}
-                >
-                  <Input
-                    prefix={<ImportOutlined />}
-                    placeholder="Nome da empresa importadora"
-                  />
-                </AutoComplete>
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={8}>
-              <Form.Item name="empresa_exportadora" label="Provável Exportador">
-                <AutoComplete
-                  options={exportadorasOptions}
-                  onSearch={buscarExportadoras}
-                  loading={loadingExportadoras}
-                  filterOption={(inputValue, option) =>
-                    option?.value?.toLowerCase().includes(inputValue.toLowerCase())
-                  }
-                  style={{ width: '100%' }}
-                >
-                  <Input
-                    prefix={<ExportOutlined />}
-                    placeholder="Nome da empresa exportadora"
-                  />
-                </AutoComplete>
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
+            <Col xs={24} sm={12} md={5}>
               <Form.Item name="valor_fob_min" label="Valor FOB Mínimo (USD)">
-                <Input type="number" placeholder="0.00" />
+                <Input type="number" placeholder="0" />
               </Form.Item>
             </Col>
-            <Col xs={24} sm={12} md={6}>
+            <Col xs={24} sm={12} md={5}>
               <Form.Item name="valor_fob_max" label="Valor FOB Máximo (USD)">
-                <Input type="number" placeholder="0.00" />
+                <Input type="number" placeholder="0" />
               </Form.Item>
             </Col>
           </Row>
           <Form.Item>
             <Space>
-              <Button
-                type="primary"
-                icon={<SearchOutlined />}
-                htmlType="submit"
-                loading={loading}
-              >
+              <Button type="primary" icon={<SearchOutlined />} htmlType="submit" loading={loading}>
                 Buscar
               </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={handleExport}
-                disabled={!results}
-              >
-                Exportar
+              <Button icon={<DownloadOutlined />} onClick={exportarCsv} disabled={!results?.length}>
+                Exportar CSV
               </Button>
-              <Button onClick={() => form.resetFields()}>Limpar</Button>
+              <Button onClick={() => { form.resetFields(); setResults(null); setTotal(0); }}>Limpar</Button>
             </Space>
           </Form.Item>
         </Form>
@@ -357,19 +169,23 @@ const BuscaAvancada = () => {
 
       {results && (
         <Card
-          title={`Resultados (${pagination.total} registros)`}
+          title={`Resultados — ${total.toLocaleString('pt-BR')} registro(s) (NCM × UF × mês)`}
           bordered={false}
           style={{ marginTop: 16 }}
         >
-          <Table
-            columns={columns}
-            dataSource={results}
-            loading={loading}
-            pagination={pagination}
-            onChange={handleTableChange}
-            scroll={{ x: 1200 }}
-            rowKey="id"
-          />
+          {results.length === 0 ? (
+            <Alert type="warning" showIcon message="Nenhum resultado para os filtros informados." />
+          ) : (
+            <Table
+              rowKey={(r, i) => `${r.ncm}-${r.uf}-${r.data_operacao}-${r.tipo_operacao}-${i}`}
+              columns={columns}
+              dataSource={results}
+              loading={loading}
+              size="small"
+              pagination={{ pageSize: 20, showSizeChanger: true }}
+              scroll={{ x: 700 }}
+            />
+          )}
         </Card>
       )}
     </div>
@@ -377,4 +193,3 @@ const BuscaAvancada = () => {
 };
 
 export default BuscaAvancada;
-
