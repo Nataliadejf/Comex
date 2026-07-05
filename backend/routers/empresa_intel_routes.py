@@ -243,6 +243,131 @@ def _listar_empresas_cnae(client, prefixos, uf, limit):
     return res.get("lista") or [], total, resumo_uf
 
 
+_BD_COMEX = "basedosdados.br_me_comex_stat"
+_TBL_NCM_LISTA = "liquid-receiver-483923-n6.Projeto_Comex.ncm_lista"
+
+
+@router.get("/ncm-autocomplete")
+async def ncm_autocomplete(q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=50)):
+    """Autocomplete de NCM por código (prefixo)."""
+    from google.cloud import bigquery
+    digitos = "".join(c for c in q if c.isdigit())
+    if not digitos:
+        return {"items": []}
+    try:
+        client = _get_bq_client()
+        t = _bt(_env("COMEX_BQ_TABLE_NCM_LISTA", _TBL_NCM_LISTA))
+        sql = f"SELECT ncm FROM {t} WHERE ncm LIKE @p ORDER BY ncm LIMIT {int(limit)}"
+        rows = _run_query(client, sql, [bigquery.ScalarQueryParameter("p", "STRING", f"{digitos}%")])
+        return {"items": [{"ncm": r.get("ncm")} for r in rows]}
+    except Exception as e:
+        return {"items": [], "error": str(e)[:200]}
+
+
+@router.get("/busca-comex")
+async def busca_comex(
+    ncms: Optional[List[str]] = Query(None),
+    tipo: Optional[str] = Query(None, description="importacao | exportacao | (vazio = ambos)"),
+    uf: Optional[str] = Query(None),
+    data_inicio: Optional[str] = Query(None),
+    data_fim: Optional[str] = Query(None),
+    fob_min: Optional[float] = Query(None),
+    fob_max: Optional[float] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+):
+    """Busca REAL de comércio exterior por NCM × UF × mês (tabelas oficiais
+    importacao_uf_ncm / exportacao_uf_ncm, sempre atualizadas). Independente de
+    importador/exportador."""
+    from google.cloud import bigquery
+
+    def _ym(s, default):
+        d = "".join(c for c in (s or "") if c.isdigit())
+        return int(d[:6]) if len(d) >= 6 else default
+    ym_ini = _ym(data_inicio, 202001)
+    ym_fim = _ym(data_fim, 209912)
+
+    t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+    t = (tipo or "").lower()
+    if "import" in t:
+        fluxos = [("Importação", t_imp, "total_importacao_fob")]
+    elif "export" in t:
+        fluxos = [("Exportação", t_exp, "total_exportacao_fob")]
+    else:
+        fluxos = [("Importação", t_imp, "total_importacao_fob"),
+                  ("Exportação", t_exp, "total_exportacao_fob")]
+
+    try:
+        client = _get_bq_client()
+    except Exception as e:
+        return {"error": str(e), "results": [], "total": 0}
+
+    ncms_lp = [("".join(c for c in n if c.isdigit())) for n in (ncms or []) if n]
+    ncms_lp = [n for n in ncms_lp if n]
+    params: List = [
+        bigquery.ScalarQueryParameter("a", "INT64", ym_ini),
+        bigquery.ScalarQueryParameter("b", "INT64", ym_fim),
+    ]
+    if ncms_lp:
+        params.append(bigquery.ArrayQueryParameter("ncms", "STRING", ncms_lp))
+    if uf:
+        params.append(bigquery.ScalarQueryParameter("uf", "STRING", uf.upper()))
+
+    partes = []
+    for rotulo, tbl, col in fluxos:
+        cond = ["(ano*100+mes) BETWEEN @a AND @b"]
+        if ncms_lp:
+            cond.append("CAST(id_ncm AS STRING) IN UNNEST(@ncms)")
+        if uf:
+            cond.append("UPPER(TRIM(CAST(sigla_uf AS STRING))) = @uf")
+        partes.append(f"""
+        SELECT '{rotulo}' AS tipo_operacao, ano, mes,
+               CAST(id_ncm AS STRING) AS ncm,
+               UPPER(TRIM(CAST(sigla_uf AS STRING))) AS uf,
+               SUM(CAST({col} AS FLOAT64)) AS fob
+        FROM {tbl}
+        WHERE {' AND '.join(cond)}
+        GROUP BY tipo_operacao, ano, mes, ncm, uf
+        """)
+
+    having = []
+    if fob_min is not None:
+        having.append("fob >= @fmin")
+        params.append(bigquery.ScalarQueryParameter("fmin", "FLOAT64", float(fob_min)))
+    if fob_max is not None:
+        having.append("fob <= @fmax")
+        params.append(bigquery.ScalarQueryParameter("fmax", "FLOAT64", float(fob_max)))
+    having_sql = f"HAVING {' AND '.join(having)}" if having else ""
+
+    offset = (page - 1) * page_size
+    sql = f"""
+    WITH base AS (
+      {' UNION ALL '.join(partes)}
+    ),
+    filtrado AS (SELECT * FROM base {having_sql})
+    SELECT (SELECT COUNT(*) FROM filtrado) AS _total,
+           tipo_operacao, ano, mes, ncm, uf, fob
+    FROM filtrado
+    ORDER BY fob DESC
+    LIMIT {int(page_size)} OFFSET {int(offset)}
+    """
+    try:
+        rows = _run_query(client, sql, params)
+        total = int(rows[0].get("_total")) if rows else 0
+        results = [{
+            "ncm": r.get("ncm"),
+            "tipo_operacao": r.get("tipo_operacao"),
+            "uf": r.get("uf"),
+            "valor_fob": float(r.get("fob") or 0),
+            "data_operacao": f"{int(r.get('ano') or 0):04d}-{int(r.get('mes') or 0):02d}-01",
+        } for r in rows]
+        return {"results": results, "total": total, "page": page, "page_size": page_size,
+                "fonte": "importacao_uf_ncm / exportacao_uf_ncm (dados oficiais MDIC, por NCM×UF×mês)"}
+    except Exception as e:
+        return {"error": str(e)[:400], "results": [], "total": 0}
+
+
 @router.get("/cnae-arvore")
 async def cnae_arvore():
     """Árvore CNAE Setor→Segmento→Ramo→Categoria para os filtros do Painel de Empresas."""
