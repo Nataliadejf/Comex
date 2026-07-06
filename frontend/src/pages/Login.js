@@ -70,7 +70,7 @@ const Login = () => {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          timeout: 10000, // Timeout de 10 segundos
+          timeout: 60000, // 60s — o backend pode estar "acordando" (cold start do Render)
         }
       );
 
@@ -101,11 +101,9 @@ const Login = () => {
         message.error(`Erro: ${detail}`);
         console.error('Detalhes do erro:', detail);
       } else if (error.request) {
-        // Erro de conexão
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-        message.error(`Não foi possível conectar ao servidor em ${apiUrl}. Verifique se o backend está rodando.`);
-        console.error('Erro de conexão:', error.request);
-        console.error('URL tentada:', apiUrl);
+        // Erro de conexão / timeout (cold start do Render)
+        message.warning('O servidor estava iniciando (hiberna após inatividade). Aguarde alguns segundos e tente novamente.', 6);
+        console.error('Erro de conexão/timeout:', error.request);
       } else {
         // Outro erro
         message.error(`Erro ao fazer login: ${error.message}`);
@@ -159,7 +157,7 @@ const Login = () => {
           headers: {
             'Content-Type': 'application/json',
           },
-          timeout: 10000, // Timeout de 10 segundos
+          timeout: 60000, // 60s — o backend pode estar "acordando" (cold start do Render)
         }
       );
 
@@ -192,11 +190,9 @@ const Login = () => {
         message.error(`Erro: ${detail}`);
         console.error('Detalhes do erro:', detail);
       } else if (error.request) {
-        // Erro de conexão
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-        message.error(`Não foi possível conectar ao servidor em ${apiUrl}. Verifique se o backend está rodando.`);
-        console.error('Erro de conexão:', error.request);
-        console.error('URL tentada:', apiUrl);
+        // Erro de conexão / timeout (cold start do Render)
+        message.warning('O servidor estava iniciando (hiberna após inatividade). Aguarde alguns segundos e tente novamente.', 6);
+        console.error('Erro de conexão/timeout:', error.request);
         console.error('Dica: Execute REINICIAR_BACKEND.bat para iniciar o backend');
       } else {
         // Outro erro
