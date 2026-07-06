@@ -5740,9 +5740,10 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             else:
                 senha_final = senha_original
             
-            # username é o email
-            user = authenticate_user(db, username, senha_final)
-            
+            # username é o email — autenticação via BigQuery (usuarios)
+            from services import user_store_bq
+            user = user_store_bq.authenticate(username, senha_final)
+
             if not user:
                 logger.warning(f"Login falhou para: {username}")
                 raise HTTPException(
@@ -5750,26 +5751,20 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                     detail="Email ou senha incorretos, ou cadastro aguardando aprovação",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            
-            # Atualizar último login
-            try:
-                user.ultimo_login = datetime.utcnow()
-                db.commit()
-                logger.info(f"✅ Login bem-sucedido para: {user.email}")
-            except Exception as e:
-                logger.error(f"Erro ao atualizar último login: {e}")
-                db.rollback()
-            
-            access_token = create_access_token(data={"sub": user.email})
-            
+
+            user_store_bq.update_last_login(user.get("email"))
+            logger.info(f"✅ Login bem-sucedido para: {user.get('email')}")
+
+            access_token = create_access_token(data={"sub": user.get("email")})
+
             return {
                 "access_token": access_token,
                 "token_type": "bearer",
                 "user": {
-                    "id": user.id,
-                    "email": user.email,
-                    "nome_completo": user.nome_completo,
-                    "nome_empresa": user.nome_empresa
+                    "id": user.get("id"),
+                    "email": user.get("email"),
+                    "nome_completo": user.get("nome_completo"),
+                    "nome_empresa": user.get("nome_empresa"),
                 }
             }
         except HTTPException:
@@ -5803,90 +5798,55 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             if not senha_valida:
                 raise HTTPException(status_code=400, detail=mensagem_erro)
             
-            # Verificar se email já existe
-            usuario_existente = db.query(Usuario).filter(Usuario.email == cadastro.email).first()
-            if usuario_existente:
+            from services import user_store_bq
+
+            email_norm = (cadastro.email or "").strip().lower()
+            # Verificar se email já existe (BigQuery)
+            if user_store_bq.count_field("email", email_norm) > 0:
                 raise HTTPException(status_code=400, detail="Email já cadastrado")
-            
+
             # Normalizar CPF/CNPJ e validar duplicidade
             cpf_normalizado = _normalize_document(cadastro.cpf, 11)
             cnpj_normalizado = _normalize_document(cadastro.cnpj, 14)
-            
+
             if cadastro.cpf and not cpf_normalizado:
                 raise HTTPException(status_code=400, detail="CPF inválido. Informe um CPF válido.")
-            
             if cadastro.cnpj and not cnpj_normalizado:
                 raise HTTPException(status_code=400, detail="CNPJ inválido. Informe um CNPJ válido.")
-            
-            if cpf_normalizado:
-                cpf_existente = db.query(Usuario).filter(Usuario.cpf == cpf_normalizado).first()
-                if cpf_existente:
-                    raise HTTPException(status_code=400, detail="CPF já cadastrado")
-            
-            if cnpj_normalizado:
-                cnpj_existente = db.query(Usuario).filter(Usuario.cnpj == cnpj_normalizado).first()
-                if cnpj_existente:
-                    raise HTTPException(status_code=400, detail="CNPJ já cadastrado")
-            
+            if cpf_normalizado and user_store_bq.count_field("cpf", cpf_normalizado) > 0:
+                raise HTTPException(status_code=400, detail="CPF já cadastrado")
+            if cnpj_normalizado and user_store_bq.count_field("cnpj", cnpj_normalizado) > 0:
+                raise HTTPException(status_code=400, detail="CNPJ já cadastrado")
+
             # Truncar senha antes do hash
             senha_para_hash = cadastro.password
             senha_bytes = len(senha_para_hash.encode('utf-8'))
             if senha_bytes > 72:
-                senha_bytes_truncated = senha_para_hash.encode('utf-8')[:72]
-                senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
-                logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes")
-            
-            # Todos os cadastros precisam de aprovação manual
-            novo_usuario = Usuario(
-                email=cadastro.email,
+                senha_para_hash = senha_para_hash.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+
+            # Cadastro APROVADO imediatamente (auth no BigQuery)
+            novo = user_store_bq.create_user(
+                email=email_norm,
                 senha_hash=get_password_hash(senha_para_hash),
                 nome_completo=cadastro.nome_completo,
-                data_nascimento=cadastro.data_nascimento,
                 nome_empresa=cadastro.nome_empresa,
                 cpf=cpf_normalizado,
                 cnpj=cnpj_normalizado,
-                status_aprovacao="pendente",
-                ativo=0  # Inativo até aprovação
+                data_nascimento=cadastro.data_nascimento,
+                status_aprovacao="aprovado",
+                ativo=1,
             )
-            db.add(novo_usuario)
-            db.flush()
-            
-            # Criar token de aprovação
-            token_aprovacao = secrets.token_urlsafe(32)
-            data_expiracao = datetime.utcnow() + timedelta(days=7)
-            
-            aprovacao = AprovacaoCadastro(
-                usuario_id=novo_usuario.id,
-                token_aprovacao=token_aprovacao,
-                email_destino=cadastro.email,
-                status="pendente",
-                data_expiracao=data_expiracao
-            )
-            db.add(aprovacao)
-            db.commit()
-            
-            logger.info(f"✅ Usuário criado: {cadastro.email} (ID: {novo_usuario.id})")
-            
-            # Enviar email em background
-            if EMAIL_SERVICE_AVAILABLE:
-                background_tasks.add_task(
-                    enviar_email_aprovacao,
-                    cadastro.email,
-                    cadastro.nome_completo,
-                    token_aprovacao
-                )
-            
+            logger.info(f"✅ Usuário criado (BigQuery): {email_norm}")
+
             return {
-                "message": "Cadastro realizado com sucesso! Aguarde aprovação por email.",
-                "email": cadastro.email,
-                "aprovado": False
+                "message": "Cadastro realizado com sucesso! Você já pode fazer login.",
+                "email": email_norm,
+                "aprovado": True,
+                "user": {"id": novo.get("id"), "email": email_norm,
+                         "nome_completo": cadastro.nome_completo},
             }
         except HTTPException:
             raise
-        except SQLAlchemyError as e:
-            db.rollback()
-            logger.error(f"Erro de banco no cadastro: {e}")
-            raise HTTPException(status_code=400, detail="Dados já cadastrados ou inválidos")
         except Exception as e:
             logger.error(f"❌ Erro inesperado no cadastro: {e}")
             raise HTTPException(status_code=500, detail=f"Erro interno do servidor: {str(e)}")
