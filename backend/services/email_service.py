@@ -1,80 +1,127 @@
 """
-Serviço de envio de emails.
+Serviço de envio de e-mails via SMTP (configurável por variáveis de ambiente).
+
+Variáveis (definir no Render):
+  SMTP_HOST      ex.: smtp-relay.brevo.com | smtp.gmail.com | smtp-mail.outlook.com
+  SMTP_PORT      ex.: 587
+  SMTP_USER      usuário/login SMTP
+  SMTP_PASSWORD  senha/app-password/chave SMTP
+  SMTP_FROM      remetente (ex.: "Comex Analyzer <no-reply@seudominio.com>")
+  FRONTEND_URL   ex.: https://comex-bs9w.onrender.com  (para montar o link de reset)
+
+Se SMTP não estiver configurado, as mensagens são apenas registradas no log.
 """
+import os
+import smtplib
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 from loguru import logger
-from config import settings
 
-# Email do administrador para receber solicitações de aprovação
-ADMIN_EMAIL = "nataliadejesus2@gmail.com"
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "nataliadejesus2@hotmail.com")
 
 
-def enviar_email_aprovacao(email_usuario: str, nome: str, token: str):
-    """
-    Envia email de solicitação de aprovação para o administrador.
-    """
+def _smtp_config():
+    return {
+        "host": os.getenv("SMTP_HOST", "").strip(),
+        "port": int(os.getenv("SMTP_PORT", "587") or 587),
+        "user": os.getenv("SMTP_USER", "").strip(),
+        "password": os.getenv("SMTP_PASSWORD", "").strip(),
+        "from": (os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "").strip(),
+    }
+
+
+def smtp_configurado() -> bool:
+    c = _smtp_config()
+    return bool(c["host"] and c["user"] and c["password"] and c["from"])
+
+
+def frontend_url() -> str:
+    return (os.getenv("FRONTEND_URL") or "https://comex-bs9w.onrender.com").rstrip("/")
+
+
+def enviar_email(destino: str, assunto: str, html: str, texto: str = "") -> bool:
+    """Envia um e-mail HTML via SMTP. Retorna True se enviado."""
+    cfg = _smtp_config()
+    if not smtp_configurado():
+        logger.warning("SMTP não configurado — e-mail apenas registrado no log.")
+        logger.info(f"[EMAIL não enviado] Para: {destino} | Assunto: {assunto}")
+        return False
     try:
-        logger.info("=" * 60)
-        logger.info("📧 SOLICITAÇÃO DE APROVAÇÃO DE CADASTRO")
-        logger.info("=" * 60)
-        logger.info(f"Para: {ADMIN_EMAIL}")
-        logger.info(f"Assunto: Nova solicitação de cadastro - {nome}")
-        logger.info("")
-        logger.info(f"Novo usuário solicitou cadastro:")
-        logger.info(f"  Nome: {nome}")
-        logger.info(f"  Email: {email_usuario}")
-        logger.info(f"  Token de aprovação: {token}")
-        logger.info("")
-        logger.info(f"Link de aprovação: https://comex-4.onrender.com/aprovar?token={token}")
-        logger.info(f"Ou acesse: https://comex-backend-wjco.onrender.com/docs e use o endpoint /aprovar-cadastro")
-        logger.info(f"Ou use o endpoint: POST https://comex-backend-wjco.onrender.com/aprovar-cadastro")
-        logger.info(f"Com body JSON: {{\"token\": \"{token}\"}}")
-        logger.info("")
-        logger.info("=" * 60)
-        
-        # TODO: Implementar envio real de email usando SMTP
-        # Exemplo com smtplib:
-        # import smtplib
-        # from email.mime.text import MIMEText
-        # msg = MIMEText(f"Novo cadastro aguardando aprovação...\n\nNome: {nome}\nEmail: {email_usuario}\nToken: {token}")
-        # msg['Subject'] = f'Nova solicitação de cadastro - {nome}'
-        # msg['From'] = 'sistema@comex.com'
-        # msg['To'] = ADMIN_EMAIL
-        # server = smtplib.SMTP('smtp.gmail.com', 587)
-        # server.starttls()
-        # server.login('seu_email@gmail.com', 'sua_senha')
-        # server.send_message(msg)
-        # server.quit()
-        
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = assunto
+        msg["From"] = cfg["from"]
+        msg["To"] = destino
+        if texto:
+            msg.attach(MIMEText(texto, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        contexto = ssl.create_default_context()
+        if cfg["port"] == 465:
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=contexto, timeout=30) as s:
+                s.login(cfg["user"], cfg["password"])
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as s:
+                s.ehlo()
+                s.starttls(context=contexto)
+                s.login(cfg["user"], cfg["password"])
+                s.send_message(msg)
+        logger.info(f"✅ E-mail enviado para {destino} — {assunto}")
         return True
     except Exception as e:
-        logger.error(f"Erro ao enviar email de aprovação: {e}")
+        logger.error(f"Erro ao enviar e-mail para {destino}: {e}")
         return False
 
 
-def enviar_email_cadastro_aprovado(email: str, nome: str):
+def enviar_email_redefinicao(email: str, nome: str, token: str) -> bool:
+    """Envia o link de redefinição de senha para o usuário."""
+    link = f"{frontend_url()}/login?reset_token={token}"
+    assunto = "Redefinição de senha — Comex Analyzer"
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto">
+      <h2 style="color:#722ed1">Comex Analyzer</h2>
+      <p>Olá{(' ' + nome) if nome else ''},</p>
+      <p>Recebemos uma solicitação para redefinir sua senha. Clique no botão abaixo
+         (válido por 2 horas):</p>
+      <p style="text-align:center;margin:28px 0">
+        <a href="{link}" style="background:#722ed1;color:#fff;padding:12px 24px;
+           border-radius:6px;text-decoration:none;font-weight:bold">Redefinir senha</a>
+      </p>
+      <p style="font-size:12px;color:#888">Se você não solicitou, ignore este e-mail.
+         Link: <a href="{link}">{link}</a></p>
+    </div>
     """
-    Envia email de cadastro aprovado para o usuário.
-    """
-    try:
-        logger.info("=" * 60)
-        logger.info("📧 CADASTRO APROVADO")
-        logger.info("=" * 60)
-        logger.info(f"Para: {email}")
-        logger.info(f"Assunto: Seu cadastro foi aprovado!")
-        logger.info("")
-        logger.info(f"Olá {nome},")
-        logger.info("")
-        logger.info("Seu cadastro no Comex Analyzer foi aprovado!")
-        logger.info("Agora você já pode fazer login e usar o sistema.")
-        logger.info("")
-        logger.info(f"Acesse: https://comex-4.onrender.com/login")
-        logger.info("")
-        logger.info("=" * 60)
-        
-        # TODO: Implementar envio real de email usando SMTP
-        
-        return True
-    except Exception as e:
-        logger.error(f"Erro ao enviar email de cadastro aprovado: {e}")
-        return False
+    texto = f"Redefinição de senha — Comex Analyzer\n\nAcesse (válido 2h): {link}\n\nSe não solicitou, ignore."
+    return enviar_email(email, assunto, html, texto)
 
+
+def enviar_email_aprovacao(email_usuario: str, nome: str, token: str) -> bool:
+    """Notifica o administrador sobre novo cadastro pendente."""
+    assunto = f"Novo cadastro aguardando aprovação — {nome}"
+    html = f"""
+    <div style="font-family:Arial,sans-serif">
+      <h3>Novo cadastro no Comex Analyzer</h3>
+      <p><b>Nome:</b> {nome}<br><b>E-mail:</b> {email_usuario}</p>
+      <p>Aprove pela ferramenta admin:
+         <code>python gerenciar_usuarios.py aprovar {email_usuario}</code></p>
+    </div>
+    """
+    ok = enviar_email(ADMIN_EMAIL, assunto, html)
+    if not ok:
+        logger.info(f"[Aprovação pendente] {nome} <{email_usuario}> — aprovar via CLI.")
+    return ok
+
+
+def enviar_email_cadastro_aprovado(email: str, nome: str) -> bool:
+    """Avisa o usuário que o cadastro foi aprovado."""
+    assunto = "Seu cadastro foi aprovado — Comex Analyzer"
+    html = f"""
+    <div style="font-family:Arial,sans-serif">
+      <h3>Cadastro aprovado!</h3>
+      <p>Olá {nome}, seu acesso ao Comex Analyzer foi liberado.</p>
+      <p><a href="{frontend_url()}/login">Fazer login</a></p>
+    </div>
+    """
+    return enviar_email(email, assunto, html)

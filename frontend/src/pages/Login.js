@@ -15,6 +15,30 @@ const Login = () => {
   const navigate = useNavigate();
   const [loginForm] = Form.useForm();
   const [registerForm] = Form.useForm();
+  const [resetToken, setResetToken] = useState(
+    new URLSearchParams(window.location.search).get('reset_token') || ''
+  );
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetForm] = Form.useForm();
+
+  const onRedefinirSenha = async (values) => {
+    setResetLoading(true);
+    try {
+      await axios.post(
+        `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/redefinir-senha`,
+        { token: resetToken, nova_senha: values.nova_senha }
+      );
+      message.success('Senha redefinida com sucesso! Faça login com a nova senha.');
+      // limpa o token da URL e volta ao login
+      window.history.replaceState({}, '', '/login');
+      setResetToken('');
+      setActiveTab('login');
+    } catch (error) {
+      message.error(error.response?.data?.detail || 'Não foi possível redefinir. O link pode ter expirado.');
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   const onLoginFinish = async (values) => {
     setLoading(true);
@@ -238,6 +262,52 @@ const Login = () => {
           <Text type="secondary">Sistema de Análise de Comércio Exterior</Text>
         </div>
 
+        {resetToken ? (
+          <Form form={resetForm} name="nova_senha" layout="vertical" size="large" onFinish={onRedefinirSenha}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <Text strong style={{ fontSize: 16 }}>Definir nova senha</Text>
+            </div>
+            <Form.Item
+              name="nova_senha"
+              label="Nova senha"
+              rules={[
+                { required: true, message: 'Informe a nova senha' },
+                { min: 8, message: 'Mínimo de 8 caracteres' },
+              ]}
+              hasFeedback
+            >
+              <Input.Password prefix={<LockOutlined />} placeholder="Nova senha" />
+            </Form.Item>
+            <Form.Item
+              name="confirmar"
+              label="Confirmar nova senha"
+              dependencies={['nova_senha']}
+              hasFeedback
+              rules={[
+                { required: true, message: 'Confirme a nova senha' },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    if (!value || getFieldValue('nova_senha') === value) return Promise.resolve();
+                    return Promise.reject(new Error('As senhas não coincidem'));
+                  },
+                }),
+              ]}
+            >
+              <Input.Password prefix={<LockOutlined />} placeholder="Repita a nova senha" />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" htmlType="submit" block loading={resetLoading}
+                style={{ background: '#722ed1', border: 'none', height: 40, fontSize: 16 }}>
+                Salvar nova senha
+              </Button>
+            </Form.Item>
+            <div style={{ textAlign: 'center' }}>
+              <Button type="link" onClick={() => { window.history.replaceState({}, '', '/login'); setResetToken(''); }}>
+                Voltar para Login
+              </Button>
+            </div>
+          </Form>
+        ) : (
         <Tabs activeKey={activeTab} onChange={setActiveTab} centered>
           <TabPane tab="Login" key="login">
             <Form
@@ -540,6 +610,7 @@ const Login = () => {
             </Form>
           </TabPane>
         </Tabs>
+        )}
       </Card>
     </div>
   );

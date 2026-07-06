@@ -5870,8 +5870,8 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
         configurado, o token é registrado no log para uso administrativo."""
         try:
             from services import user_store_bq
-            generico = {"message": "Se o email existir, o administrador poderá redefinir sua senha. "
-                                   "Contate o administrador para concluir a redefinição."}
+            generico = {"message": "Se o email existir, enviaremos um link de redefinição. "
+                                   "Verifique sua caixa de entrada (e o spam)."}
             u = user_store_bq.get_user_by_email(request.email)
             if not u:
                 logger.info(f"Redefinição para email não encontrado: {request.email}")
@@ -5880,7 +5880,19 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             token_redefinicao = secrets.token_urlsafe(32)
             exp = (datetime.utcnow() + timedelta(hours=2)).isoformat()
             user_store_bq.set_reset_token(request.email, token_redefinicao, exp)
-            logger.info(f"📧 Token de redefinição p/ {request.email}: {token_redefinicao} (expira em 2h)")
+
+            # Enviar e-mail com o link (se SMTP configurado)
+            enviado = False
+            if EMAIL_SERVICE_AVAILABLE:
+                try:
+                    from services.email_service import enviar_email_redefinicao
+                    enviado = enviar_email_redefinicao(
+                        u.get("email"), u.get("nome_completo") or "", token_redefinicao
+                    )
+                except Exception as e:
+                    logger.error(f"Falha ao enviar e-mail de redefinição: {e}")
+            if not enviado:
+                logger.info(f"📧 Token de redefinição p/ {request.email}: {token_redefinicao} (expira 2h)")
             return generico
         except Exception as e:
             logger.error(f"Erro ao solicitar redefinição: {e}")
