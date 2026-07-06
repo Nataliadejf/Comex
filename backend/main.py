@@ -5866,69 +5866,46 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_db)
     ):
-        """Endpoint para solicitar redefinição de senha."""
+        """Solicita redefinição de senha (auth no BigQuery). Sem serviço de e-mail
+        configurado, o token é registrado no log para uso administrativo."""
         try:
-            usuario = db.query(Usuario).filter(Usuario.email == request.email).first()
-            if not usuario:
-                # Por segurança, não revelar se o email existe ou não
-                logger.info(f"Solicitação de redefinição para email não encontrado: {request.email}")
-                return {"message": "Se o email existir, você receberá instruções para redefinir a senha"}
-            
-            # Gerar token de redefinição
+            from services import user_store_bq
+            generico = {"message": "Se o email existir, o administrador poderá redefinir sua senha. "
+                                   "Contate o administrador para concluir a redefinição."}
+            u = user_store_bq.get_user_by_email(request.email)
+            if not u:
+                logger.info(f"Redefinição para email não encontrado: {request.email}")
+                return generico
+
             token_redefinicao = secrets.token_urlsafe(32)
-            
-            # Salvar token no banco
-            try:
-                usuario.token_aprovacao = token_redefinicao
-                db.commit()
-                logger.info(f"✅ Token de redefinição salvo para {request.email}")
-            except Exception as e:
-                logger.error(f"Erro ao salvar token de redefinição: {e}")
-                db.rollback()
-                raise HTTPException(status_code=500, detail=f"Erro ao processar solicitação: {str(e)}")
-            
-            # Log do token (em produção, enviar por email)
-            logger.info(f"📧 Token de redefinição gerado para {request.email}: {token_redefinicao}")
-            logger.info(f"   Link: http://localhost:3000/redefinir-senha?token={token_redefinicao}")
-            
-            return {"message": "Se o email existir, você receberá instruções para redefinir a senha"}
-        except HTTPException:
-            raise
+            exp = (datetime.utcnow() + timedelta(hours=2)).isoformat()
+            user_store_bq.set_reset_token(request.email, token_redefinicao, exp)
+            logger.info(f"📧 Token de redefinição p/ {request.email}: {token_redefinicao} (expira em 2h)")
+            return generico
         except Exception as e:
             logger.error(f"Erro ao solicitar redefinição: {e}")
-            raise HTTPException(status_code=500, detail="Erro ao processar solicitação")
+            # nunca vaza erro interno; retorna genérico
+            return {"message": "Se o email existir, o administrador poderá redefinir sua senha."}
     
     @app.post("/redefinir-senha")
     async def redefinir_senha(
         request: NovaSenhaRequest,
         db: Session = Depends(get_db)
     ):
-        """Endpoint para redefinir senha usando token."""
+        """Redefine a senha usando um token válido (auth no BigQuery)."""
         try:
-            # Validar nova senha
+            from services import user_store_bq
             senha_valida, mensagem_erro = validate_password(request.nova_senha)
             if not senha_valida:
                 raise HTTPException(status_code=400, detail=mensagem_erro)
-            
-            # Buscar usuário pelo token
-            usuario = db.query(Usuario).filter(Usuario.token_aprovacao == request.token).first()
-            if not usuario:
+
+            senha_para_hash = request.nova_senha.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+            ok = user_store_bq.reset_password_by_token(
+                request.token, get_password_hash(senha_para_hash)
+            )
+            if not ok:
                 raise HTTPException(status_code=400, detail="Token inválido ou expirado")
-            
-            # Truncar senha antes de criar hash
-            senha_para_hash = request.nova_senha
-            senha_bytes = len(senha_para_hash.encode('utf-8'))
-            if senha_bytes > 72:
-                senha_bytes_truncated = senha_para_hash.encode('utf-8')[:72]
-                senha_para_hash = senha_bytes_truncated.decode('utf-8', errors='ignore')
-                logger.warning(f"⚠️ Senha truncada de {senha_bytes} para 72 bytes na redefinição")
-            
-            # Atualizar senha
-            usuario.senha_hash = get_password_hash(senha_para_hash)
-            usuario.token_aprovacao = None  # Limpar token após uso
-            db.commit()
-            
-            logger.info(f"✅ Senha redefinida para: {usuario.email}")
+            logger.info("✅ Senha redefinida via token")
             return {"message": "Senha redefinida com sucesso"}
         except HTTPException:
             raise

@@ -124,6 +124,52 @@ def listar_pendentes(limit: int = 100) -> List[Dict]:
     return rows
 
 
+def set_reset_token(email: str, token: str, exp_iso: str) -> bool:
+    """Grava um token de redefinição de senha para o email (se existir)."""
+    from google.cloud import bigquery
+    u = get_user_by_email(email)
+    if not u:
+        return False
+    try:
+        _q(
+            f"UPDATE `{_tbl()}` SET token_reset=@t, token_reset_exp=TIMESTAMP(@x) WHERE LOWER(email)=@e",
+            [
+                bigquery.ScalarQueryParameter("t", "STRING", token),
+                bigquery.ScalarQueryParameter("x", "STRING", exp_iso),
+                bigquery.ScalarQueryParameter("e", "STRING", (email or "").strip().lower()),
+            ],
+        )
+        return True
+    except Exception as exc:
+        logger.warning(f"set_reset_token falhou: {exc}")
+        return False
+
+
+def reset_password_by_token(token: str, senha_hash: str) -> bool:
+    """Redefine a senha usando um token válido (não expirado). Limpa o token."""
+    from google.cloud import bigquery
+    if not token:
+        return False
+    rows = _q(
+        f"""SELECT email FROM `{_tbl()}`
+            WHERE token_reset=@t AND (token_reset_exp IS NULL OR token_reset_exp > CURRENT_TIMESTAMP())
+            LIMIT 1""",
+        [bigquery.ScalarQueryParameter("t", "STRING", token)],
+    )
+    if not rows:
+        return False
+    email = rows[0].get("email")
+    _q(
+        f"""UPDATE `{_tbl()}` SET senha_hash=@h, token_reset=NULL, token_reset_exp=NULL
+            WHERE LOWER(email)=@e""",
+        [
+            bigquery.ScalarQueryParameter("h", "STRING", senha_hash),
+            bigquery.ScalarQueryParameter("e", "STRING", (email or "").strip().lower()),
+        ],
+    )
+    return True
+
+
 def aprovar(email: str) -> bool:
     from google.cloud import bigquery
     try:
