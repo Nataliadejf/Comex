@@ -5824,7 +5824,7 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             if senha_bytes > 72:
                 senha_para_hash = senha_para_hash.encode('utf-8')[:72].decode('utf-8', errors='ignore')
 
-            # Cadastro APROVADO imediatamente (auth no BigQuery)
+            # Cadastro PENDENTE (aguarda aprovação do administrador)
             novo = user_store_bq.create_user(
                 email=email_norm,
                 senha_hash=get_password_hash(senha_para_hash),
@@ -5833,15 +5833,15 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 cpf=cpf_normalizado,
                 cnpj=cnpj_normalizado,
                 data_nascimento=cadastro.data_nascimento,
-                status_aprovacao="aprovado",
-                ativo=1,
+                status_aprovacao="pendente",
+                ativo=0,
             )
-            logger.info(f"✅ Usuário criado (BigQuery): {email_norm}")
+            logger.info(f"✅ Cadastro pendente criado (BigQuery): {email_norm}")
 
             return {
-                "message": "Cadastro realizado com sucesso! Você já pode fazer login.",
+                "message": "Cadastro realizado! Aguarde a aprovação do administrador para fazer login.",
                 "email": email_norm,
-                "aprovado": True,
+                "aprovado": False,
                 "user": {"id": novo.get("id"), "email": email_norm,
                          "nome_completo": cadastro.nome_completo},
             }
