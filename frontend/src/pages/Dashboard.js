@@ -1702,7 +1702,7 @@ const Dashboard = () => {
       {/* Cards de Métricas Principais */}
       {stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? null : null}
       <Row gutter={[8, 8]} style={{ marginBottom: 'clamp(12px, 3vw, 24px)', display: stats?.kpis_empresa_indisponiveis && (empresaImportadora || empresaExportadora) ? 'none' : undefined }} key={`cards-${empresaImportadora || ''}-${empresaExportadora || ''}-${stats?._timestamp || 0}`}>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card 
             className="dashboard-metric-card"
             key={`card-importacoes-${stats?._timestamp || 0}-${stats?.valor_total_importacoes || 0}`}
@@ -1749,7 +1749,7 @@ const Dashboard = () => {
             </div>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card 
             className="dashboard-metric-card"
             key={`card-exportacoes-${stats?._timestamp || 0}-${stats?.valor_total_exportacoes || 0}`}
@@ -1796,7 +1796,7 @@ const Dashboard = () => {
             </div>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card 
             className="dashboard-metric-card"
             style={{ 
@@ -1840,7 +1840,7 @@ const Dashboard = () => {
           </Card>
         </Col>
         {(statsFinal.valor_provavel_empresas != null && statsFinal.valor_provavel_empresas > 0) && (
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card 
             className="dashboard-metric-card"
             style={{ 
@@ -1883,7 +1883,7 @@ const Dashboard = () => {
         </Col>
         )}
         {statsFinal.volume_disponivel !== false && (
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card 
             className="dashboard-metric-card"
             style={{ 
