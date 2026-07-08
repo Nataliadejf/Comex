@@ -1242,69 +1242,40 @@ def autocomplete_empresa_ncm_uf(
     else:
         tipo_l = ""
 
-    params: List[object] = [
-        bigquery.ScalarQueryParameter("q_like", "STRING", f"%{q_strip}%"),
-        bigquery.ScalarQueryParameter("q_prefix", "STRING", f"{q_strip}%"),
-        bigquery.ScalarQueryParameter("q_word", "STRING", f"% {q_strip}%"),
-        bigquery.ScalarQueryParameter("q_raw", "STRING", q_strip),
-        bigquery.ScalarQueryParameter("limit_value", "INT64", limit),
-    ]
-    where_name = (
-        "(LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@q_like) "
-        "OR CAST(cnpj AS STRING) LIKE @q_like)"
-    )
+    # Base de empresas comex-ativas (tem todas as empresas que operaram comex).
+    t_hab = _bt(_table_env("COMEX_BQ_TABLE_HABILITACAO",
+                           "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"))
+    _STOP = {"ltda", "sa", "s.a", "s/a", "me", "epp", "eireli", "cia", "e", "de",
+             "do", "da", "dos", "das", "&", "-", "ind", "com"}
+    digitos = "".join(c for c in q_strip if c.isdigit())
+    toks = [t for t in re.findall(r"[0-9a-zà-ÿ]+", q_strip.lower()) if len(t) >= 2 and t not in _STOP]
 
-    # Score: 0=exato, 1=começa-com, 2=palavra contida, 3=substring qualquer.
-    # Garante que "VALE" digitado leve "VALE", "VALE S.A.", "VALE DO RIO DOCE" ao topo,
-    # mesmo havendo muitas empresas "... DO VALE ..." em ordem alfabética.
-    rank_case = (
-        "CASE "
-        "WHEN UPPER(CAST(razao_social AS STRING)) = UPPER(@q_raw) THEN 0 "
-        "WHEN UPPER(CAST(razao_social AS STRING)) LIKE UPPER(@q_prefix) THEN 1 "
-        "WHEN UPPER(CAST(razao_social AS STRING)) LIKE UPPER(@q_word) THEN 2 "
-        "ELSE 3 END"
-    )
+    params: List[object] = [bigquery.ScalarQueryParameter("limit_value", "INT64", limit)]
+    conds: List[str] = []
+    if len(digitos) >= 4:
+        conds.append("cnpj_raiz LIKE @qcnpj")
+        params.append(bigquery.ScalarQueryParameter("qcnpj", "STRING", f"{digitos[:8]}%"))
+    if toks:
+        for i, tk in enumerate(toks):
+            conds.append(f"LOWER(CAST(razao_social AS STRING)) LIKE @t{i}")
+            params.append(bigquery.ScalarQueryParameter(f"t{i}", "STRING", f"%{tk}%"))
+    if not conds:
+        return {"items": [], "fonte_dados": _fonte_dados()}
+    params.append(bigquery.ScalarQueryParameter("raw", "STRING", q_strip.lower()))
+    params.append(bigquery.ScalarQueryParameter("prefix", "STRING", f"{q_strip.lower()}%"))
 
-    if _use_related_model():
-        t_base = _bt(_table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE_TABLE))
-        sql = f"""
-        SELECT
-          CAST(cnpj AS STRING) AS cnpj,
-          ANY_VALUE(CAST(razao_social AS STRING)) AS nome,
-          CAST(0 AS FLOAT64) AS total_importacao_fob,
-          CAST(0 AS FLOAT64) AS total_exportacao_fob,
-          COUNT(*) AS total_operacoes,
-          MIN({rank_case}) AS rank_score,
-          MIN(LENGTH(CAST(razao_social AS STRING))) AS rank_len
-        FROM {t_base}
-        WHERE {where_name}
-        GROUP BY cnpj
-        ORDER BY rank_score ASC, rank_len ASC, nome ASC
-        LIMIT @limit_value
-        """
-    else:
-        tref = _get_table_ref()
-        if tipo_l == "importacao":
-            order_by = "SUM(total_importacao_fob) DESC, SUM(total_exportacao_fob) DESC"
-        elif tipo_l == "exportacao":
-            order_by = "SUM(total_exportacao_fob) DESC, SUM(total_importacao_fob) DESC"
-        else:
-            order_by = "(SUM(total_importacao_fob) + SUM(total_exportacao_fob)) DESC"
-        sql = f"""
-        SELECT
-          cnpj,
-          ANY_VALUE(razao_social) AS nome,
-          SUM(total_importacao_fob) AS total_importacao_fob,
-          SUM(total_exportacao_fob) AS total_exportacao_fob,
-          COUNT(*) AS total_operacoes,
-          MIN({rank_case}) AS rank_score
-        FROM {tref}
-        WHERE {where_name}
-        GROUP BY cnpj
-        ORDER BY rank_score ASC, {order_by}
-        LIMIT @limit_value
-        """
-
+    sql = f"""
+    SELECT cnpj_raiz, razao_social AS nome, anos_ativos,
+      CASE
+        WHEN LOWER(CAST(razao_social AS STRING)) = @raw THEN 0
+        WHEN LOWER(CAST(razao_social AS STRING)) LIKE @prefix THEN 1
+        ELSE 2
+      END AS rank_score
+    FROM {t_hab}
+    WHERE {' AND '.join(conds)}
+    ORDER BY rank_score ASC, anos_ativos DESC, LENGTH(CAST(razao_social AS STRING)) ASC
+    LIMIT @limit_value
+    """
     try:
         client = _get_bigquery_client()
         rows = _run_query(client, sql, params)
@@ -1313,15 +1284,13 @@ def autocomplete_empresa_ncm_uf(
             nome = str(row.get("nome") or "").strip()
             if not nome:
                 continue
-            items.append(
-                {
-                    "nome": nome,
-                    "cnpj": row.get("cnpj"),
-                    "total_operacoes": int(row.get("total_operacoes") or 0),
-                    "valor_total": 0.0,
-                    "fonte": "bigquery_empresas_ncm_uf",
-                }
-            )
+            items.append({
+                "nome": nome,
+                "cnpj": (str(row.get("cnpj_raiz")) + "000000") if row.get("cnpj_raiz") else None,
+                "total_operacoes": int(row.get("anos_ativos") or 0),
+                "valor_total": 0.0,
+                "fonte": "empresas_habilitacao",
+            })
         return {"items": items, "fonte_dados": _fonte_dados()}
     except HTTPException:
         raise

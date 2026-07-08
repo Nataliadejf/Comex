@@ -12,6 +12,14 @@ from loguru import logger
 
 _DEFAULT_EMPRESAS_BASE = "liquid-receiver-483923-n6.Projeto_Comex.empresas_base"
 _DEFAULT_UNIFIED = "liquid-receiver-483923-n6.Projeto_Comex.empresas_ncm_import_export_uf"
+_DEFAULT_HABILITACAO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"
+_STOP_TERMOS = {"ltda", "sa", "s.a", "s/a", "me", "epp", "eireli", "cia", "e", "de",
+                "do", "da", "dos", "das", "&", "-", "ind", "com"}
+
+
+def _tokens_nome(termo: str) -> list:
+    raw = re.findall(r"[0-9a-zà-ÿ]+", (termo or "").lower())
+    return [t for t in raw if len(t) >= 2 and t not in _STOP_TERMOS]
 
 
 def empresa_filtro_ativo(empresa_importadora: Optional[str], empresa_exportadora: Optional[str]) -> bool:
@@ -19,52 +27,60 @@ def empresa_filtro_ativo(empresa_importadora: Optional[str], empresa_exportadora
 
 
 def resolve_cnpjs_empresa_base(client, run_query, bt, table_env, empresa_importadora, empresa_exportadora) -> List[str]:
-    """Resolve CNPJ(s) em empresas_base a partir do texto digitado."""
+    """Resolve a raiz CNPJ (14 díg. com sufixo 0) a partir do texto digitado,
+    buscando na base de empresas comex-ativas (empresas_habilitacao) por
+    CNPJ ou por razão social (todos os tokens presentes, ranqueando exato/prefixo)."""
     from google.cloud import bigquery
 
-    termos: List[str] = []
+    termo = ""
     for t in (empresa_importadora, empresa_exportadora):
         if t and str(t).strip():
-            termos.append(str(t).strip())
-    if not termos:
+            termo = str(t).strip()
+            break
+    if not termo:
         return []
 
-    t_base = bt(table_env("COMEX_BQ_TABLE_EMPRESAS_BASE", _DEFAULT_EMPRESAS_BASE))
-    termo = termos[0]
+    t_hab = bt(table_env("COMEX_BQ_TABLE_HABILITACAO", _DEFAULT_HABILITACAO))
+    digitos = "".join(c for c in termo if c.isdigit())
 
-    sql_exact = f"""
-    SELECT DISTINCT REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj14
-    FROM {t_base}
-    WHERE LENGTH(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '')) = 14
-      AND UPPER(TRIM(CAST(razao_social AS STRING))) = UPPER(TRIM(@q))
-    LIMIT 3
-    """
-    rows = run_query(client, sql_exact, [bigquery.ScalarQueryParameter("q", "STRING", termo)])
-    out = [str(r["cnpj14"]) for r in rows if r.get("cnpj14") and len(str(r["cnpj14"])) == 14]
-    if out:
-        return out
+    # 1) Entrada é CNPJ
+    if len(digitos) >= 8:
+        sql = f"SELECT DISTINCT cnpj_raiz FROM {t_hab} WHERE cnpj_raiz = @r LIMIT 5"
+        rows = run_query(client, sql, [bigquery.ScalarQueryParameter("r", "STRING", digitos[:8])])
+        return [str(r.get("cnpj_raiz")) + "000000" for r in rows if r.get("cnpj_raiz")]
 
-    like = f"%{termo}%"
-    sql_like = f"""
-    SELECT
-      REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '') AS cnpj14,
-      MIN(LENGTH(CAST(razao_social AS STRING))) AS nome_len
-    FROM {t_base}
-    WHERE LENGTH(REGEXP_REPLACE(CAST(cnpj AS STRING), r'[^0-9]', '')) = 14
-      AND (
-        LOWER(CAST(razao_social AS STRING)) LIKE LOWER(@like)
-        OR CAST(cnpj AS STRING) LIKE @like
-      )
-    GROUP BY cnpj14
-    ORDER BY nome_len ASC
+    # 2) Busca por razão social (todos os tokens presentes)
+    toks = _tokens_nome(termo)
+    if not toks:
+        return []
+    conds, params = [], []
+    for i, tk in enumerate(toks):
+        conds.append(f"LOWER(CAST(razao_social AS STRING)) LIKE @t{i}")
+        params.append(bigquery.ScalarQueryParameter(f"t{i}", "STRING", f"%{tk}%"))
+    params.append(bigquery.ScalarQueryParameter("raw", "STRING", termo.lower()))
+    params.append(bigquery.ScalarQueryParameter("prefix", "STRING", f"{termo.lower()}%"))
+    sql = f"""
+    SELECT cnpj_raiz, razao_social
+    FROM {t_hab}
+    WHERE {' AND '.join(conds)}
+    ORDER BY
+      CASE
+        WHEN LOWER(CAST(razao_social AS STRING)) = @raw THEN 0
+        WHEN LOWER(CAST(razao_social AS STRING)) LIKE @prefix THEN 1
+        ELSE 2
+      END,
+      LENGTH(CAST(razao_social AS STRING))
     LIMIT 5
     """
-    rows = run_query(
-        client,
-        sql_like,
-        [bigquery.ScalarQueryParameter("like", "STRING", like)],
-    )
-    return [str(r["cnpj14"]) for r in rows if r.get("cnpj14") and len(str(r["cnpj14"])) == 14]
+    try:
+        rows = run_query(client, sql, params)
+    except Exception as exc:
+        logger.warning(f"resolve_cnpjs_empresa_base erro: {exc}")
+        return []
+    # melhor correspondência (uma empresa)
+    if rows and rows[0].get("cnpj_raiz"):
+        return [str(rows[0].get("cnpj_raiz")) + "000000"]
+    return []
 
 
 def append_cnpj_filter(where_clause: str, params: List[object], cnpjs: List[str]) -> Tuple[str, List[object]]:
