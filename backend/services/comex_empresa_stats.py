@@ -730,6 +730,86 @@ def stats_real_import_logcomex(
     }
 
 
+def detalhe_real_logcomex(
+    client, run_query, bt, table_env, cnpjs, nome_empresa, ym_start, ym_end,
+    lado: str = "importador", page: int = 1, page_size: int = 10
+):
+    """Linhas detalhadas REAIS (Logcomex) para a tabela do dashboard.
+
+    Retorna (results, total). Cada linha traz importador, exportador, NCM, país,
+    UF e FOB reais — agregado por (importador, exportador, ncm, uf, país, mês).
+    """
+    from google.cloud import bigquery
+
+    t_real = bt(table_env("COMEX_BQ_TABLE_REAL_LOGCOMEX", _DEFAULT_REAL_LOGCOMEX))
+    y0, m0 = ym_start // 100, ym_start % 100
+    y1, m1 = ym_end // 100, ym_end % 100
+    params = [
+        bigquery.ScalarQueryParameter("y0", "INT64", y0),
+        bigquery.ScalarQueryParameter("m0", "INT64", m0),
+        bigquery.ScalarQueryParameter("y1", "INT64", y1),
+        bigquery.ScalarQueryParameter("m1", "INT64", m1),
+    ]
+    conds = ["(ano*100 + mes) BETWEEN (@y0*100 + @m0) AND (@y1*100 + @m1)"]
+    is_exp = (lado == "exportador")
+    campo_nome = "exportador_nome" if is_exp else "importador_nome"
+
+    ors = []
+    if not is_exp:
+        raizes = sorted({str(c)[:8] for c in (cnpjs or []) if c})
+        if raizes:
+            params.append(bigquery.ArrayQueryParameter("raizes", "STRING", raizes))
+            ors.append("cnpj_raiz IN UNNEST(@raizes)")
+    toks = _tokens_nome(nome_empresa)
+    if toks:
+        tok_conds = []
+        for i, tk in enumerate(toks):
+            params.append(bigquery.ScalarQueryParameter(f"tk{i}", "STRING", f"%{tk}%"))
+            tok_conds.append(f"LOWER({campo_nome}) LIKE @tk{i}")
+        ors.append("(" + " AND ".join(tok_conds) + ")")
+    if not ors:
+        return [], 0
+    conds.append("(" + " OR ".join(ors) + ")")
+    where = " AND ".join(conds)
+    base_sql = f"FROM {t_real} WHERE {where}"
+
+    tot = list(run_query(client, f"SELECT COUNT(*) c FROM (SELECT 1 {base_sql} "
+        "GROUP BY importador_nome, exportador_nome, id_ncm, sigla_uf, pais_origem, ano, mes)", params))
+    total = int(tot[0].get("c") or 0) if tot else 0
+    if total <= 0:
+        return [], 0
+
+    offset = (page - 1) * page_size
+    params_pg = list(params) + [
+        bigquery.ScalarQueryParameter("lim", "INT64", page_size),
+        bigquery.ScalarQueryParameter("off", "INT64", offset),
+    ]
+    rows = run_query(client,
+        f"SELECT importador_nome, exportador_nome, id_ncm, sigla_uf, pais_origem, "
+        f"ano, mes, SUM(fob_import) fob, SUM(peso_liquido) peso "
+        f"{base_sql} GROUP BY importador_nome, exportador_nome, id_ncm, sigla_uf, "
+        f"pais_origem, ano, mes ORDER BY fob DESC LIMIT @lim OFFSET @off", params_pg)
+
+    results = []
+    for i, r in enumerate(rows):
+        ncm_s = re.sub(r"\D", "", str(r.get("id_ncm") or ""))[:8]
+        ano, mes = int(r.get("ano") or 0), int(r.get("mes") or 0)
+        results.append({
+            "id": f"real-{i}-{ncm_s}-{ano}{mes}",
+            "ncm": ncm_s,
+            "descricao_produto": "—",
+            "tipo_operacao": "Exportação" if is_exp else "Importação",
+            "razao_social_importador": str(r.get("importador_nome") or "").strip(),
+            "razao_social_exportador": str(r.get("exportador_nome") or "").strip(),
+            "pais_origem_destino": str(r.get("pais_origem") or "—").strip() or "—",
+            "uf": str(r.get("sigla_uf") or "").strip(),
+            "valor_fob": float(r.get("fob") or 0),
+            "peso_liquido_kg": float(r.get("peso") or 0),
+            "data_operacao": f"{ano:04d}-{mes:02d}-01" if ano and mes else "",
+        })
+    return results, total
+
+
 def stats_payload_empresa_real(
     fonte_dados: Dict[str, str],
     empresa_importadora: Optional[str],

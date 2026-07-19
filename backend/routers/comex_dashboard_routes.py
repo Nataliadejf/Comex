@@ -1119,27 +1119,15 @@ def get_tabela_detalhada_bq(
                     client, _run_query, _bt, _table_env, cnpjs, nome_emp, ym_start, ym_end, lado=_lado
                 )
                 if real:
-                    todas = [
-                        {
-                            "cnpj": cnpjs[0] if cnpjs else None,
-                            "razao_social": nome_emp,
-                            "sigla_uf": u.get("uf"),
-                            "id_ncm": "",
-                            "ano": ym_end // 100,
-                            "mes": ym_end % 100,
-                            "total_importacao_fob": float(u.get("imp") or 0),
-                            "total_exportacao_fob": float(u.get("exp") or 0),
-                        }
-                        for u in (real.get("por_uf") or [])
-                    ]
-                    offset = (page - 1) * page_size
-                    pagina = todas[offset:offset + page_size]
-                    results = [_map_row_to_operacao_detalhe(r, i) for i, r in enumerate(pagina)]
+                    results, total = emp_stats.detalhe_real_logcomex(
+                        client, _run_query, _bt, _table_env, cnpjs, nome_emp,
+                        ym_start, ym_end, lado=_lado, page=page, page_size=page_size,
+                    )
                     return {
                         "results": results,
                         "page": page,
                         "page_size": page_size,
-                        "total": len(todas),
+                        "total": total,
                         "fonte_valores": "real_logcomex",
                     }
                 cnae_hint, _uf_hint = emp_stats.resolve_cnae_empresa(
