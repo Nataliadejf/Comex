@@ -1635,16 +1635,6 @@ const Dashboard = () => {
         />
       )}
 
-      {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && !stats.kpis_empresa_indisponiveis && !stats.dados_empresa_reais && stats.fonte_valores === 'estimado' && (
-        <Alert
-          message={`📊 Valores ESTIMADOS por empresa${stats.periodo_estimativa ? ` (período ${stats.periodo_estimativa})` : ''}`}
-          description={stats.aviso_dados_sem_empresa}
-          type="info"
-          showIcon
-          style={{ marginBottom: '24px' }}
-        />
-      )}
-
       {stats && !error && stats.aviso_dados_sem_empresa && stats.filtro_empresa_aplicado && !stats.kpis_empresa_indisponiveis && !stats.dados_empresa_reais && stats.fonte_valores !== 'estimado' && (
         <Alert
           message={
@@ -1654,22 +1644,6 @@ const Dashboard = () => {
           }
           description={stats.aviso_dados_sem_empresa}
           type="warning"
-          showIcon
-          style={{ marginBottom: '24px' }}
-        />
-      )}
-
-      {stats && !error && stats.dados_empresa_reais && stats.filtro_empresa_aplicado && (
-        <Alert
-          message={stats.fonte_valores === 'real_logcomex' ? 'Valores REAIS de importação (registros aduaneiros)' : 'Dados filtrados por CNPJ da empresa'}
-          description={
-            stats.fonte_valores === 'real_logcomex' && stats.aviso_dados_sem_empresa
-              ? stats.aviso_dados_sem_empresa
-              : Array.isArray(stats.cnpjs_resolvidos) && stats.cnpjs_resolvidos.length > 0
-              ? `CNPJ: ${stats.cnpjs_resolvidos.join(', ')} — fonte empresas_ncm_import_export_uf (valores FOB da empresa, não totais da UF).`
-              : 'Valores agregados por CNPJ na tabela unificada do BigQuery.'
-          }
-          type="success"
           showIcon
           style={{ marginBottom: '24px' }}
         />
