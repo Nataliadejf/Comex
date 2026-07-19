@@ -613,13 +613,16 @@ def stats_payload_empresa_estimado(
 
 
 def stats_real_import_logcomex(
-    client, run_query, bt, table_env, cnpjs, nome_empresa, ym_start, ym_end
+    client, run_query, bt, table_env, cnpjs, nome_empresa, ym_start, ym_end,
+    lado: str = "importador"
 ) -> Optional[Dict]:
-    """Valores REAIS de importação (Logcomex, deduplicado) para a empresa/período.
+    """Valores REAIS (Logcomex, deduplicado) para a empresa/período.
 
-    Casa por cnpj_raiz (dos cnpjs resolvidos) OU por tokens do nome do importador
-    (para os importadores que não resolveram cnpj_raiz). Retorna None se não houver
-    registro real. Exportação não existe nesta base (é dado só de importação).
+    lado="importador": empresa brasileira compradora. Casa por cnpj_raiz OU por
+      tokens do nome do importador. Valores vão para IMPORTAÇÃO.
+    lado="exportador": empresa ESTRANGEIRA fornecedora. Casa por tokens do nome do
+      exportador. Os embarques dela para o Brasil são tratados como EXPORTAÇÃO
+      (visão da empresa estrangeira). Retorna None se não houver registro real.
     """
     from google.cloud import bigquery
 
@@ -634,17 +637,23 @@ def stats_real_import_logcomex(
     ]
     conds = ["(ano*100 + mes) BETWEEN (@y0*100 + @m0) AND (@y1*100 + @m1)"]
 
-    raizes = sorted({str(c)[:8] for c in (cnpjs or []) if c})
+    is_exp = (lado == "exportador")
+    campo_nome = "exportador_nome" if is_exp else "importador_nome"
+    # coluna de contraparte para o ranking "principais_*"
+    contraparte = "importador_nome" if is_exp else "exportador_nome"
+
     ors = []
-    if raizes:
-        params.append(bigquery.ArrayQueryParameter("raizes", "STRING", raizes))
-        ors.append("cnpj_raiz IN UNNEST(@raizes)")
+    if not is_exp:
+        raizes = sorted({str(c)[:8] for c in (cnpjs or []) if c})
+        if raizes:
+            params.append(bigquery.ArrayQueryParameter("raizes", "STRING", raizes))
+            ors.append("cnpj_raiz IN UNNEST(@raizes)")
     toks = _tokens_nome(nome_empresa)
     if toks:
         tok_conds = []
         for i, tk in enumerate(toks):
             params.append(bigquery.ScalarQueryParameter(f"tk{i}", "STRING", f"%{tk}%"))
-            tok_conds.append(f"LOWER(importador_nome) LIKE @tk{i}")
+            tok_conds.append(f"LOWER({campo_nome}) LIKE @tk{i}")
         ors.append("(" + " AND ".join(tok_conds) + ")")
     if not ors:
         return None
@@ -657,8 +666,8 @@ def stats_real_import_logcomex(
         f"SUM(n_operacoes) n {base_sql}", params))
     if not tot or not tot[0].get("t"):
         return None
-    total_imp = float(tot[0].get("t") or 0)
-    if total_imp <= 0:
+    total = float(tot[0].get("t") or 0)
+    if total <= 0:
         return None
 
     por_mes = {}
@@ -669,10 +678,13 @@ def stats_real_import_logcomex(
         por_mes[row["ym"]] = float(row.get("v") or 0)
         reg_mes[row["ym"]] = int(row.get("n") or 0)
 
+    vkey = "exp" if is_exp else "imp"
     por_uf = []
     for row in run_query(client,
         f"SELECT sigla_uf uf, SUM(fob_import) v {base_sql} GROUP BY uf ORDER BY v DESC", params):
-        por_uf.append({"uf": row.get("uf"), "imp": float(row.get("v") or 0), "exp": 0.0})
+        por_uf.append({"uf": row.get("uf"),
+                       "imp": 0.0 if is_exp else float(row.get("v") or 0),
+                       "exp": float(row.get("v") or 0) if is_exp else 0.0})
 
     por_ncm = []
     for row in run_query(client,
@@ -690,17 +702,31 @@ def stats_real_import_logcomex(
                          "valor_total": float(row.get("v") or 0),
                          "total_operacoes": int(row.get("n") or 0)})
 
+    # Contrapartes (importadores brasileiros que compraram do exportador, ou
+    # fornecedores estrangeiros do importador).
+    contrapartes = []
+    for row in run_query(client,
+        f"SELECT {contraparte} nome, SUM(fob_import) v, SUM(n_operacoes) n {base_sql} "
+        f"GROUP BY nome ORDER BY v DESC LIMIT 15", params):
+        contrapartes.append({"nome": row.get("nome") or "—",
+                             "valor_total": float(row.get("v") or 0),
+                             "total_operacoes": int(row.get("n") or 0)})
+
     return {
-        "total_imp": total_imp,
-        "total_exp": 0.0,
+        "total_imp": 0.0 if is_exp else total,
+        "total_exp": total if is_exp else 0.0,
+        "lado": lado,
         "qtd_estatistica": float(tot[0].get("q") or 0),
         "peso_liquido": float(tot[0].get("p") or 0),
         "n_operacoes": int(tot[0].get("n") or 0),
-        "valores_imp_por_mes": por_mes,
+        "valores_imp_por_mes": {} if is_exp else por_mes,
+        "valores_exp_por_mes": por_mes if is_exp else {},
         "registros_por_mes": reg_mes,
         "por_uf": por_uf,
         "principais_ncms": por_ncm,
         "principais_paises": por_pais,
+        "principais_importadores": contrapartes if is_exp else [],
+        "principais_exportadores": [] if is_exp else contrapartes,
     }
 
 
@@ -711,34 +737,43 @@ def stats_payload_empresa_real(
     real: Dict,
     cnpjs: Optional[List[str]] = None,
 ) -> Dict:
-    """Payload do dashboard com valores REAIS de importação (base Logcomex)."""
+    """Payload do dashboard com valores REAIS (base Logcomex)."""
     nome = (empresa_importadora or empresa_exportadora or "empresa").strip()
     total_imp = float(real.get("total_imp") or 0)
     total_exp = float(real.get("total_exp") or 0)
-    aviso = (
-        f"Valores REAIS de importação para «{nome}», apurados a partir de registros "
-        "aduaneiros (Logcomex), deduplicados. Exportação não consta nesta base (é dado "
-        "de importação brasileira). Fornecedores estrangeiros aparecem como exportadores "
-        "das operações, não na base de exportação do Brasil."
-    )
+    is_exp = (real.get("lado") == "exportador")
+    if is_exp:
+        aviso = (
+            f"Valores REAIS dos embarques de «{nome}» para o Brasil, apurados de registros "
+            "aduaneiros (Logcomex), deduplicados. «{nome}» é fornecedor estrangeiro — seus "
+            "embarques ao Brasil são exibidos como EXPORTAÇÃO (visão da empresa). Abaixo, os "
+            "importadores brasileiros que compraram dela.".replace("{nome}", nome)
+        )
+    else:
+        aviso = (
+            f"Valores REAIS de importação para «{nome}», apurados a partir de registros "
+            "aduaneiros (Logcomex), deduplicados. Exportação não consta nesta base (é dado "
+            "de importação brasileira). Fornecedores estrangeiros aparecem como exportadores "
+            "das operações, não na base de exportação do Brasil."
+        )
     return {
-        "volume_importacoes": float(real.get("peso_liquido") or 0),
-        "volume_exportacoes": 0.0,
+        "volume_importacoes": 0.0 if is_exp else float(real.get("peso_liquido") or 0),
+        "volume_exportacoes": float(real.get("peso_liquido") or 0) if is_exp else 0.0,
         "volume_disponivel": True,
         "valor_total_usd": total_imp + total_exp,
         "valor_total_importacoes": total_imp,
         "valor_total_exportacoes": total_exp,
-        "quantidade_estatistica_importacoes": float(real.get("qtd_estatistica") or 0),
-        "quantidade_estatistica_exportacoes": 0.0,
+        "quantidade_estatistica_importacoes": 0.0 if is_exp else float(real.get("qtd_estatistica") or 0),
+        "quantidade_estatistica_exportacoes": float(real.get("qtd_estatistica") or 0) if is_exp else 0.0,
         "quantidade_estatistica_total": float(real.get("qtd_estatistica") or 0),
         "principais_ncms": real.get("principais_ncms") or [],
         "principais_paises": real.get("principais_paises") or [],
-        "principais_importadores": [],
-        "principais_exportadores": [],
+        "principais_importadores": real.get("principais_importadores") or [],
+        "principais_exportadores": real.get("principais_exportadores") or [],
         "registros_por_mes": real.get("registros_por_mes") or {},
-        "valores_por_mes": real.get("valores_imp_por_mes") or {},
+        "valores_por_mes": (real.get("valores_exp_por_mes") if is_exp else real.get("valores_imp_por_mes")) or {},
         "valores_imp_por_mes": real.get("valores_imp_por_mes") or {},
-        "valores_exp_por_mes": {},
+        "valores_exp_por_mes": real.get("valores_exp_por_mes") or {},
         "pesos_por_mes": {},
         "filtro_empresa_aplicado": True,
         "ufs_filtradas_por_empresa": [u.get("uf") for u in (real.get("por_uf") or [])],

@@ -720,9 +720,10 @@ def _dashboard_stats_payload_from_bq(
             client, _run_query, _bt, _table_env, cnpjs
         )
         # 1) Valores REAIS (Logcomex, deduplicado) — preferidos quando existirem
+        _lado = "exportador" if ((empresa_exportadora or "").strip() and not (empresa_importadora or "").strip()) else "importador"
         real = emp_stats.stats_real_import_logcomex(
             client, _run_query, _bt, _table_env, cnpjs,
-            empresa_importadora or empresa_exportadora, ym_start, ym_end,
+            empresa_importadora or empresa_exportadora, ym_start, ym_end, lado=_lado,
         )
         if real:
             payload = emp_stats.stats_payload_empresa_real(
@@ -1113,8 +1114,9 @@ def get_tabela_detalhada_bq(
                 )
                 nome_emp = (empresa_importadora or empresa_exportadora or "").strip()
                 # Valores REAIS (Logcomex) — preferidos quando existirem
+                _lado = "exportador" if ((empresa_exportadora or "").strip() and not (empresa_importadora or "").strip()) else "importador"
                 real = emp_stats.stats_real_import_logcomex(
-                    client, _run_query, _bt, _table_env, cnpjs, nome_emp, ym_start, ym_end
+                    client, _run_query, _bt, _table_env, cnpjs, nome_emp, ym_start, ym_end, lado=_lado
                 )
                 if real:
                     todas = [
@@ -1126,7 +1128,7 @@ def get_tabela_detalhada_bq(
                             "ano": ym_end // 100,
                             "mes": ym_end % 100,
                             "total_importacao_fob": float(u.get("imp") or 0),
-                            "total_exportacao_fob": 0.0,
+                            "total_exportacao_fob": float(u.get("exp") or 0),
                         }
                         for u in (real.get("por_uf") or [])
                     ]
@@ -1289,40 +1291,68 @@ def autocomplete_empresa_ncm_uf(
     else:
         tipo_l = ""
 
-    # Base de empresas comex-ativas (tem todas as empresas que operaram comex).
-    t_hab = _bt(_table_env("COMEX_BQ_TABLE_HABILITACAO",
-                           "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"))
     _STOP = {"ltda", "sa", "s.a", "s/a", "me", "epp", "eireli", "cia", "e", "de",
              "do", "da", "dos", "das", "&", "-", "ind", "com"}
     digitos = "".join(c for c in q_strip if c.isdigit())
     toks = [t for t in re.findall(r"[0-9a-zà-ÿ]+", q_strip.lower()) if len(t) >= 2 and t not in _STOP]
+    params: List[object] = [
+        bigquery.ScalarQueryParameter("limit_value", "INT64", limit),
+        bigquery.ScalarQueryParameter("raw", "STRING", q_strip.lower()),
+        bigquery.ScalarQueryParameter("prefix", "STRING", f"{q_strip.lower()}%"),
+    ]
 
-    params: List[object] = [bigquery.ScalarQueryParameter("limit_value", "INT64", limit)]
-    conds: List[str] = []
-    if len(digitos) >= 4:
-        conds.append("cnpj_raiz LIKE @qcnpj")
-        params.append(bigquery.ScalarQueryParameter("qcnpj", "STRING", f"{digitos[:8]}%"))
-    if toks:
+    if tipo_l == "exportacao":
+        # Exportadores = empresas ESTRANGEIRAS (fornecedores) da base real Logcomex.
+        t_real = _bt(_table_env("COMEX_BQ_TABLE_REAL_LOGCOMEX",
+                                "liquid-receiver-483923-n6.Projeto_Comex.comex_real_import_logcomex"))
+        conds: List[str] = []
+        for i, tk in enumerate(toks):
+            conds.append(f"LOWER(exportador_nome) LIKE @t{i}")
+            params.append(bigquery.ScalarQueryParameter(f"t{i}", "STRING", f"%{tk}%"))
+        if not conds:
+            return {"items": [], "fonte_dados": _fonte_dados()}
+        sql = f"""
+        SELECT exportador_nome AS nome,
+          SUM(fob_import) AS fob, SUM(n_operacoes) AS n,
+          CASE
+            WHEN LOWER(exportador_nome) = @raw THEN 0
+            WHEN LOWER(exportador_nome) LIKE @prefix THEN 1
+            ELSE 2
+          END AS rank_score
+        FROM {t_real}
+        WHERE exportador_nome IS NOT NULL AND {' AND '.join(conds)}
+        GROUP BY nome, rank_score
+        ORDER BY rank_score ASC, fob DESC
+        LIMIT @limit_value
+        """
+        fonte_item, val_key, ops_key = "logcomex_exportador", "fob", "n"
+    else:
+        # Importadores = empresas brasileiras da base de habilitação.
+        t_hab = _bt(_table_env("COMEX_BQ_TABLE_HABILITACAO",
+                               "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"))
+        conds = []
+        if len(digitos) >= 4:
+            conds.append("cnpj_raiz LIKE @qcnpj")
+            params.append(bigquery.ScalarQueryParameter("qcnpj", "STRING", f"{digitos[:8]}%"))
         for i, tk in enumerate(toks):
             conds.append(f"LOWER(CAST(razao_social AS STRING)) LIKE @t{i}")
             params.append(bigquery.ScalarQueryParameter(f"t{i}", "STRING", f"%{tk}%"))
-    if not conds:
-        return {"items": [], "fonte_dados": _fonte_dados()}
-    params.append(bigquery.ScalarQueryParameter("raw", "STRING", q_strip.lower()))
-    params.append(bigquery.ScalarQueryParameter("prefix", "STRING", f"{q_strip.lower()}%"))
+        if not conds:
+            return {"items": [], "fonte_dados": _fonte_dados()}
+        sql = f"""
+        SELECT cnpj_raiz, razao_social AS nome, anos_ativos AS n,
+          CASE
+            WHEN LOWER(CAST(razao_social AS STRING)) = @raw THEN 0
+            WHEN LOWER(CAST(razao_social AS STRING)) LIKE @prefix THEN 1
+            ELSE 2
+          END AS rank_score
+        FROM {t_hab}
+        WHERE {' AND '.join(conds)}
+        ORDER BY rank_score ASC, anos_ativos DESC, LENGTH(CAST(razao_social AS STRING)) ASC
+        LIMIT @limit_value
+        """
+        fonte_item, val_key, ops_key = "empresas_habilitacao", None, "n"
 
-    sql = f"""
-    SELECT cnpj_raiz, razao_social AS nome, anos_ativos,
-      CASE
-        WHEN LOWER(CAST(razao_social AS STRING)) = @raw THEN 0
-        WHEN LOWER(CAST(razao_social AS STRING)) LIKE @prefix THEN 1
-        ELSE 2
-      END AS rank_score
-    FROM {t_hab}
-    WHERE {' AND '.join(conds)}
-    ORDER BY rank_score ASC, anos_ativos DESC, LENGTH(CAST(razao_social AS STRING)) ASC
-    LIMIT @limit_value
-    """
     try:
         client = _get_bigquery_client()
         rows = _run_query(client, sql, params)
@@ -1334,9 +1364,9 @@ def autocomplete_empresa_ncm_uf(
             items.append({
                 "nome": nome,
                 "cnpj": (str(row.get("cnpj_raiz")) + "000000") if row.get("cnpj_raiz") else None,
-                "total_operacoes": int(row.get("anos_ativos") or 0),
-                "valor_total": 0.0,
-                "fonte": "empresas_habilitacao",
+                "total_operacoes": int(row.get(ops_key) or 0),
+                "valor_total": float(row.get(val_key) or 0) if val_key else 0.0,
+                "fonte": fonte_item,
             })
         return {"items": items, "fonte_dados": _fonte_dados()}
     except HTTPException:
