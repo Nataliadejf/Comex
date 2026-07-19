@@ -1661,9 +1661,11 @@ const Dashboard = () => {
 
       {stats && !error && stats.dados_empresa_reais && stats.filtro_empresa_aplicado && (
         <Alert
-          message="Dados filtrados por CNPJ da empresa"
+          message={stats.fonte_valores === 'real_logcomex' ? 'Valores REAIS de importação (registros aduaneiros)' : 'Dados filtrados por CNPJ da empresa'}
           description={
-            Array.isArray(stats.cnpjs_resolvidos) && stats.cnpjs_resolvidos.length > 0
+            stats.fonte_valores === 'real_logcomex' && stats.aviso_dados_sem_empresa
+              ? stats.aviso_dados_sem_empresa
+              : Array.isArray(stats.cnpjs_resolvidos) && stats.cnpjs_resolvidos.length > 0
               ? `CNPJ: ${stats.cnpjs_resolvidos.join(', ')} — fonte empresas_ncm_import_export_uf (valores FOB da empresa, não totais da UF).`
               : 'Valores agregados por CNPJ na tabela unificada do BigQuery.'
           }

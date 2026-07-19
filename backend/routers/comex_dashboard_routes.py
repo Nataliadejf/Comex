@@ -719,6 +719,19 @@ def _dashboard_stats_payload_from_bq(
         cnae_hint, uf_hint = emp_stats.resolve_cnae_empresa(
             client, _run_query, _bt, _table_env, cnpjs
         )
+        # 1) Valores REAIS (Logcomex, deduplicado) — preferidos quando existirem
+        real = emp_stats.stats_real_import_logcomex(
+            client, _run_query, _bt, _table_env, cnpjs,
+            empresa_importadora or empresa_exportadora, ym_start, ym_end,
+        )
+        if real:
+            payload = emp_stats.stats_payload_empresa_real(
+                fonte, empresa_importadora, empresa_exportadora, real, cnpjs=cnpjs
+            )
+            payload["cnae_hint"] = cnae_hint
+            payload["uf_hint"] = uf_hint
+            payload["cnpj_hint"] = cnpjs[0] if cnpjs else None
+            return payload
         # Orientação de comércio (importador/exportador) por setor CNAE
         fator_imp, fator_exp = 1.0, 1.0
         try:
@@ -728,6 +741,9 @@ def _dashboard_stats_payload_from_bq(
                 fator_imp, fator_exp = emp_stats.fatores_orientacao(h.get("setor"))
         except Exception:
             pass
+        # 2) Empresa fora da base real: estimativa CALIBRADA pela base Logcomex
+        fator_imp *= emp_stats._FATOR_CALIBRACAO_IMPORT
+        fator_exp *= emp_stats._FATOR_CALIBRACAO_EXPORT
         # Estimativa período-consciente: participação × mercado REAL da UF mês a mês
         estimativa = emp_stats.stats_estimativa_periodo(
             client, _run_query, _bt, _table_env, cnpjs, ym_start, ym_end,
@@ -1095,6 +1111,35 @@ def get_tabela_detalhada_bq(
                 cnpjs = emp_stats.resolve_cnpjs_empresa_base(
                     client, _run_query, _bt, _table_env, empresa_importadora, empresa_exportadora
                 )
+                nome_emp = (empresa_importadora or empresa_exportadora or "").strip()
+                # Valores REAIS (Logcomex) — preferidos quando existirem
+                real = emp_stats.stats_real_import_logcomex(
+                    client, _run_query, _bt, _table_env, cnpjs, nome_emp, ym_start, ym_end
+                )
+                if real:
+                    todas = [
+                        {
+                            "cnpj": cnpjs[0] if cnpjs else None,
+                            "razao_social": nome_emp,
+                            "sigla_uf": u.get("uf"),
+                            "id_ncm": "",
+                            "ano": ym_end // 100,
+                            "mes": ym_end % 100,
+                            "total_importacao_fob": float(u.get("imp") or 0),
+                            "total_exportacao_fob": 0.0,
+                        }
+                        for u in (real.get("por_uf") or [])
+                    ]
+                    offset = (page - 1) * page_size
+                    pagina = todas[offset:offset + page_size]
+                    results = [_map_row_to_operacao_detalhe(r, i) for i, r in enumerate(pagina)]
+                    return {
+                        "results": results,
+                        "page": page,
+                        "page_size": page_size,
+                        "total": len(todas),
+                        "fonte_valores": "real_logcomex",
+                    }
                 cnae_hint, _uf_hint = emp_stats.resolve_cnae_empresa(
                     client, _run_query, _bt, _table_env, cnpjs
                 )
@@ -1106,6 +1151,8 @@ def get_tabela_detalhada_bq(
                         fator_imp, fator_exp = emp_stats.fatores_orientacao(h.get("setor"))
                 except Exception:
                     pass
+                fator_imp *= emp_stats._FATOR_CALIBRACAO_IMPORT
+                fator_exp *= emp_stats._FATOR_CALIBRACAO_EXPORT
                 estimativa = emp_stats.stats_estimativa_periodo(
                     client, _run_query, _bt, _table_env, cnpjs, ym_start, ym_end,
                     fator_imp=fator_imp, fator_exp=fator_exp,

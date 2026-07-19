@@ -13,8 +13,15 @@ from loguru import logger
 _DEFAULT_EMPRESAS_BASE = "liquid-receiver-483923-n6.Projeto_Comex.empresas_base"
 _DEFAULT_UNIFIED = "liquid-receiver-483923-n6.Projeto_Comex.empresas_ncm_import_export_uf"
 _DEFAULT_HABILITACAO = "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"
+_DEFAULT_REAL_LOGCOMEX = "liquid-receiver-483923-n6.Projeto_Comex.comex_real_import_logcomex"
 _STOP_TERMOS = {"ltda", "sa", "s.a", "s/a", "me", "epp", "eireli", "cia", "e", "de",
                 "do", "da", "dos", "das", "&", "-", "ind", "com"}
+
+# Fator de calibração derivado da base REAL Logcomex (importação real ÷ estimativa
+# para as mesmas 265 empresas/período): a estimativa por participação-de-UF
+# superestima ~17,5×. Aplicado às empresas que NÃO estão na base real.
+_FATOR_CALIBRACAO_IMPORT = 0.0573
+_FATOR_CALIBRACAO_EXPORT = 0.0573
 
 
 def _tokens_nome(termo: str) -> list:
@@ -602,6 +609,145 @@ def stats_payload_empresa_estimado(
         "cnpjs_resolvidos": cnpjs or [],
         "aviso_dados_sem_empresa": aviso,
         "fonte_dados": fonte_dados,
+    }
+
+
+def stats_real_import_logcomex(
+    client, run_query, bt, table_env, cnpjs, nome_empresa, ym_start, ym_end
+) -> Optional[Dict]:
+    """Valores REAIS de importação (Logcomex, deduplicado) para a empresa/período.
+
+    Casa por cnpj_raiz (dos cnpjs resolvidos) OU por tokens do nome do importador
+    (para os importadores que não resolveram cnpj_raiz). Retorna None se não houver
+    registro real. Exportação não existe nesta base (é dado só de importação).
+    """
+    from google.cloud import bigquery
+
+    t_real = bt(table_env("COMEX_BQ_TABLE_REAL_LOGCOMEX", _DEFAULT_REAL_LOGCOMEX))
+    y0, m0 = ym_start // 100, ym_start % 100
+    y1, m1 = ym_end // 100, ym_end % 100
+    params = [
+        bigquery.ScalarQueryParameter("y0", "INT64", y0),
+        bigquery.ScalarQueryParameter("m0", "INT64", m0),
+        bigquery.ScalarQueryParameter("y1", "INT64", y1),
+        bigquery.ScalarQueryParameter("m1", "INT64", m1),
+    ]
+    conds = ["(ano*100 + mes) BETWEEN (@y0*100 + @m0) AND (@y1*100 + @m1)"]
+
+    raizes = sorted({str(c)[:8] for c in (cnpjs or []) if c})
+    ors = []
+    if raizes:
+        params.append(bigquery.ArrayQueryParameter("raizes", "STRING", raizes))
+        ors.append("cnpj_raiz IN UNNEST(@raizes)")
+    toks = _tokens_nome(nome_empresa)
+    if toks:
+        tok_conds = []
+        for i, tk in enumerate(toks):
+            params.append(bigquery.ScalarQueryParameter(f"tk{i}", "STRING", f"%{tk}%"))
+            tok_conds.append(f"LOWER(importador_nome) LIKE @tk{i}")
+        ors.append("(" + " AND ".join(tok_conds) + ")")
+    if not ors:
+        return None
+    conds.append("(" + " OR ".join(ors) + ")")
+    where = " AND ".join(conds)
+
+    base_sql = f"FROM {t_real} WHERE {where}"
+    tot = list(run_query(client,
+        f"SELECT SUM(fob_import) t, SUM(qtd_estatistica) q, SUM(peso_liquido) p, "
+        f"SUM(n_operacoes) n {base_sql}", params))
+    if not tot or not tot[0].get("t"):
+        return None
+    total_imp = float(tot[0].get("t") or 0)
+    if total_imp <= 0:
+        return None
+
+    por_mes = {}
+    reg_mes = {}
+    for row in run_query(client,
+        f"SELECT FORMAT('%04d-%02d', ano, mes) ym, SUM(fob_import) v, SUM(n_operacoes) n "
+        f"{base_sql} GROUP BY ym ORDER BY ym", params):
+        por_mes[row["ym"]] = float(row.get("v") or 0)
+        reg_mes[row["ym"]] = int(row.get("n") or 0)
+
+    por_uf = []
+    for row in run_query(client,
+        f"SELECT sigla_uf uf, SUM(fob_import) v {base_sql} GROUP BY uf ORDER BY v DESC", params):
+        por_uf.append({"uf": row.get("uf"), "imp": float(row.get("v") or 0), "exp": 0.0})
+
+    por_ncm = []
+    for row in run_query(client,
+        f"SELECT id_ncm ncm, SUM(fob_import) v, SUM(n_operacoes) n {base_sql} "
+        f"GROUP BY ncm ORDER BY v DESC LIMIT 15", params):
+        por_ncm.append({"ncm": row.get("ncm"), "descricao": "",
+                        "valor_total": float(row.get("v") or 0),
+                        "total_operacoes": int(row.get("n") or 0)})
+
+    por_pais = []
+    for row in run_query(client,
+        f"SELECT pais_origem pais, SUM(fob_import) v, SUM(n_operacoes) n {base_sql} "
+        f"GROUP BY pais ORDER BY v DESC LIMIT 15", params):
+        por_pais.append({"pais": row.get("pais") or "—",
+                         "valor_total": float(row.get("v") or 0),
+                         "total_operacoes": int(row.get("n") or 0)})
+
+    return {
+        "total_imp": total_imp,
+        "total_exp": 0.0,
+        "qtd_estatistica": float(tot[0].get("q") or 0),
+        "peso_liquido": float(tot[0].get("p") or 0),
+        "n_operacoes": int(tot[0].get("n") or 0),
+        "valores_imp_por_mes": por_mes,
+        "registros_por_mes": reg_mes,
+        "por_uf": por_uf,
+        "principais_ncms": por_ncm,
+        "principais_paises": por_pais,
+    }
+
+
+def stats_payload_empresa_real(
+    fonte_dados: Dict[str, str],
+    empresa_importadora: Optional[str],
+    empresa_exportadora: Optional[str],
+    real: Dict,
+    cnpjs: Optional[List[str]] = None,
+) -> Dict:
+    """Payload do dashboard com valores REAIS de importação (base Logcomex)."""
+    nome = (empresa_importadora or empresa_exportadora or "empresa").strip()
+    total_imp = float(real.get("total_imp") or 0)
+    total_exp = float(real.get("total_exp") or 0)
+    aviso = (
+        f"Valores REAIS de importação para «{nome}», apurados a partir de registros "
+        "aduaneiros (Logcomex), deduplicados. Exportação não consta nesta base (é dado "
+        "de importação brasileira). Fornecedores estrangeiros aparecem como exportadores "
+        "das operações, não na base de exportação do Brasil."
+    )
+    return {
+        "volume_importacoes": float(real.get("peso_liquido") or 0),
+        "volume_exportacoes": 0.0,
+        "volume_disponivel": True,
+        "valor_total_usd": total_imp + total_exp,
+        "valor_total_importacoes": total_imp,
+        "valor_total_exportacoes": total_exp,
+        "quantidade_estatistica_importacoes": float(real.get("qtd_estatistica") or 0),
+        "quantidade_estatistica_exportacoes": 0.0,
+        "quantidade_estatistica_total": float(real.get("qtd_estatistica") or 0),
+        "principais_ncms": real.get("principais_ncms") or [],
+        "principais_paises": real.get("principais_paises") or [],
+        "principais_importadores": [],
+        "principais_exportadores": [],
+        "registros_por_mes": real.get("registros_por_mes") or {},
+        "valores_por_mes": real.get("valores_imp_por_mes") or {},
+        "valores_imp_por_mes": real.get("valores_imp_por_mes") or {},
+        "valores_exp_por_mes": {},
+        "pesos_por_mes": {},
+        "filtro_empresa_aplicado": True,
+        "ufs_filtradas_por_empresa": [u.get("uf") for u in (real.get("por_uf") or [])],
+        "dados_empresa_reais": True,
+        "kpis_empresa_indisponiveis": False,
+        "fonte_valores": "real_logcomex",
+        "cnpjs_resolvidos": cnpjs or [],
+        "aviso_dados_sem_empresa": aviso,
+        "fonte_dados": {**fonte_dados, "nome_logico": "comex_real_import_logcomex"},
     }
 
 
