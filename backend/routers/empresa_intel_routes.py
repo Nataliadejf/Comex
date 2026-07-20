@@ -268,9 +268,14 @@ async def ncm_autocomplete(q: str = Query(..., min_length=1), limit: int = Query
     try:
         client = _get_bq_client()
         t = _bt(_env("COMEX_BQ_TABLE_NCM_LISTA", _TBL_NCM_LISTA))
-        sql = f"SELECT ncm FROM {t} WHERE ncm LIKE @p ORDER BY ncm LIMIT {int(limit)}"
+        td = _bt(_env("COMEX_BQ_TABLE_NCM_DESC", _DEFAULT_NCM_DESC))
+        sql = (
+            f"SELECT n.ncm AS ncm, d.descricao AS descricao "
+            f"FROM {t} n LEFT JOIN {td} d ON n.ncm = d.ncm "
+            f"WHERE n.ncm LIKE @p ORDER BY n.ncm LIMIT {int(limit)}"
+        )
         rows = _run_query(client, sql, [bigquery.ScalarQueryParameter("p", "STRING", f"{digitos}%")])
-        return {"items": [{"ncm": r.get("ncm")} for r in rows]}
+        return {"items": [{"ncm": r.get("ncm"), "descricao": r.get("descricao") or ""} for r in rows]}
     except Exception as e:
         return {"items": [], "error": str(e)[:200]}
 

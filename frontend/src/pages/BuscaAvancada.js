@@ -31,7 +31,10 @@ const BuscaAvancada = () => {
     if (digitos.length < 2) { setNcmOptions([]); return; }
     try {
       const res = await api.get('/api/empresa-intel/ncm-autocomplete', { params: { q: digitos, limit: 20 } });
-      setNcmOptions((res.data?.items || []).map((i) => ({ value: i.ncm, label: i.ncm })));
+      setNcmOptions((res.data?.items || []).map((i) => ({
+        value: i.ncm,
+        label: i.descricao ? `${i.ncm} — ${i.descricao}` : i.ncm,
+      })));
     } catch {
       setNcmOptions([]);
     }

@@ -266,10 +266,6 @@ export const buscaAPI = {
 };
 
 export const empresasAPI = {
-  autocompleteImportadoras: (query, limit = 20) =>
-    api.get(`/empresas/autocomplete/importadoras?q=${encodeURIComponent(query || '')}&limit=${limit}`),
-  autocompleteExportadoras: (query, limit = 20) =>
-    api.get(`/empresas/autocomplete/exportadoras?q=${encodeURIComponent(query || '')}&limit=${limit}`),
   /** Fallback: usa endpoint de debug quando autocomplete falha (ex.: 404 em produção). */
   debugEmpresas: (tipo, limite = 30, busca = '') => {
     const params = new URLSearchParams({ limite: String(limite) });
