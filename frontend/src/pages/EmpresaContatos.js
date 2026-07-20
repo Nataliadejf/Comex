@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Alert, AutoComplete, Badge, Button, Card, Col, Descriptions, Divider,
   Empty, Input, Row, Spin, Table, Tag, Tabs, Tooltip, Typography, message,
@@ -258,37 +258,52 @@ export default function EmpresaContatos() {
   const [loadingSugestao, setLoadingSugestao] = useState(false);
   const [selectedCnpj, setSelectedCnpj] = useState(null);
 
-  const buscarSugestoes = useCallback(async (q) => {
-    const termo = (q || '').trim();
-    setQuery(termo);
-    if (termo.length < 2) { setOptions([]); return; }
-    setLoadingSearch(true);
-    try {
-      const res = await api.get('/api/contatos/autocomplete', { params: { q: termo, limit: 20 } });
-      const items = res?.data?.items || [];
-      setOptions(
-        items.map((e) => ({
-          value: e.cnpj || e.value,
-          label: (
-            <div style={{ lineHeight: 1.4 }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{e.razao_social || e.nome}</div>
-              <div style={{ fontSize: 11, color: '#888' }}>
-                {e.cnpj ? fmtCnpj(e.cnpj) : ''}
-                {e.uf ? ` · ${e.uf}` : ''}
-                {e.setor ? ` · ${e.setor}` : ''}
-                {e.cnae_descricao ? ` · ${e.cnae_descricao}` : ''}
-              </div>
-            </div>
-          ),
-          cnpj: e.cnpj,
-          nome: e.razao_social || e.nome,
-        }))
-      );
-    } catch {
+  const debounceRef = useRef(null);
+  const reqIdRef = useRef(0);
+
+  const buscarSugestoes = useCallback((q) => {
+    // Mantém o texto CRU (sem trim) para não apagar o espaço enquanto digita dois nomes.
+    const raw = q || '';
+    setQuery(raw);
+    const termo = raw.trim();
+    if (termo.length < 2) {
       setOptions([]);
-    } finally {
       setLoadingSearch(false);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      return;
     }
+    setLoadingSearch(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const meuId = ++reqIdRef.current;
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get('/api/contatos/autocomplete', { params: { q: termo, limit: 20 } });
+        if (meuId !== reqIdRef.current) return; // ignora resposta obsoleta
+        const items = res?.data?.items || [];
+        setOptions(
+          items.map((e) => ({
+            value: e.cnpj || e.value,
+            label: (
+              <div style={{ lineHeight: 1.4 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{e.razao_social || e.nome}</div>
+                <div style={{ fontSize: 11, color: '#888' }}>
+                  {e.cnpj ? fmtCnpj(e.cnpj) : ''}
+                  {e.uf ? ` · ${e.uf}` : ''}
+                  {e.setor ? ` · ${e.setor}` : ''}
+                  {e.cnae_descricao ? ` · ${e.cnae_descricao}` : ''}
+                </div>
+              </div>
+            ),
+            cnpj: e.cnpj,
+            nome: e.razao_social || e.nome,
+          }))
+        );
+      } catch {
+        if (meuId === reqIdRef.current) setOptions([]);
+      } finally {
+        if (meuId === reqIdRef.current) setLoadingSearch(false);
+      }
+    }, 350);
   }, []);
 
   const carregarEmpresa = useCallback(async (cnpj) => {
@@ -820,9 +835,11 @@ export default function EmpresaContatos() {
               options={options}
               onSearch={buscarSugestoes}
               onSelect={onSelect}
+              onChange={(v) => setQuery(v)}
               value={query}
+              filterOption={false}
               notFoundContent={
-                loadingSearch ? <Spin size="small" /> : query.length >= 2 ? 'Nenhuma empresa encontrada' : null
+                loadingSearch ? <Spin size="small" /> : query.trim().length >= 2 ? 'Nenhuma empresa encontrada' : null
               }
             >
               <Input
