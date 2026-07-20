@@ -1317,14 +1317,58 @@ async def empresa_inteligencia(
     total_exp = float(comex.get("total_exp") or 0)
     tem_dados = (total_imp + total_exp) > 0
 
+    # 2a. Valores REAIS de importação (base Logcomex deduplicada) — precedência.
+    real_lc = None
+    if not tem_dados:
+        try:
+            from services import comex_empresa_stats as _emp_stats
+            _ym0 = ano_inicio * 100 + 1
+            _ym1 = ano_fim * 100 + 12
+            real_lc = _emp_stats.stats_real_import_logcomex(
+                client, _run_query, _bt, _env, cnpjs, q, _ym0, _ym1, lado="importador"
+            )
+        except Exception as e:
+            logger.warning(f"real_logcomex error: {e}")
+            real_lc = None
+        if real_lc and (float(real_lc.get("total_imp") or 0) + float(real_lc.get("total_exp") or 0)) > 0:
+            total_imp = float(real_lc.get("total_imp") or 0)
+            total_exp = float(real_lc.get("total_exp") or 0)
+            tem_dados = True
+            # normaliza para os mesmos campos que o restante do endpoint usa
+            comex = {
+                "total_imp": total_imp,
+                "total_exp": total_exp,
+                "timeline": [
+                    {"ym": ym, "vi": v, "ve": (real_lc.get("valores_exp_por_mes") or {}).get(ym, 0)}
+                    for ym, v in sorted((real_lc.get("valores_imp_por_mes") or {}).items())
+                ],
+                "top_ncms": [
+                    {"ncm": n.get("ncm"), "vi": float(n.get("valor_total") or 0), "ve": 0}
+                    for n in (real_lc.get("principais_ncms") or [])
+                ],
+                "top_ufs": [
+                    {"uf": u.get("uf"), "vi": float(u.get("imp") or 0), "ve": float(u.get("exp") or 0)}
+                    for u in (real_lc.get("por_uf") or [])
+                ],
+            }
+
     # 2b. Estimativa por CNPJ (tabela empresas_comex_estimado), usada quando não há dado real
     estimado = {}
     fonte_valores = "indisponivel"
     if not tem_dados:
         estimado = _get_comex_estimado(client, cnpjs)
-        if estimado and (float(estimado.get("total_imp") or 0) + float(estimado.get("total_exp") or 0)) > 0:
-            total_imp = float(estimado.get("total_imp") or 0)
-            total_exp = float(estimado.get("total_exp") or 0)
+        est_tot = float(estimado.get("total_imp") or 0) + float(estimado.get("total_exp") or 0)
+        if estimado and est_tot > 0:
+            # Calibração pela base real Logcomex (estimativa por participação-de-UF infla ~17,5×)
+            _FCAL = getattr(__import__("services.comex_empresa_stats", fromlist=["_FATOR_CALIBRACAO_IMPORT"]),
+                            "_FATOR_CALIBRACAO_IMPORT", 0.0573)
+            for _u in (estimado.get("por_uf") or []):
+                _u["imp"] = float(_u.get("imp") or 0) * _FCAL
+                _u["exp"] = float(_u.get("exp") or 0) * _FCAL
+            total_imp = float(estimado.get("total_imp") or 0) * _FCAL
+            total_exp = float(estimado.get("total_exp") or 0) * _FCAL
+            estimado["total_imp"] = total_imp
+            estimado["total_exp"] = total_exp
             fonte_valores = "estimado"
     else:
         fonte_valores = "real"
