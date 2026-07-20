@@ -397,39 +397,23 @@ const DashboardComexBigQuery: React.FC = () => {
             </Card>
           )}
 
-          {/* Banner conforme a fonte dos valores */}
-          {empresa.fonte_valores === "estimado" && (
-            <Alert
-              type="info" showIcon icon={<BulbOutlined />}
-              message={`Valores ESTIMADOS (período ${empresa.periodo_estimativa || "—"})`}
-              description={empresa.aviso}
-              style={{ marginBottom: 16 }}
-            />
-          )}
           {empresa.fonte_valores === "indisponivel" && empresa.aviso && (
             <Alert type="warning" showIcon message="Dados de Comércio por CNPJ Indisponíveis" description={empresa.aviso} style={{ marginBottom: 16 }} />
           )}
 
-          {/* KPIs empresa (reais ou estimados) */}
+          {/* KPIs empresa */}
           {empresa.tem_dados_comex && (
             <>
-              {empresa.fonte_valores === "estimado" && (
-                <div style={{ marginBottom: 8 }}>
-                  <Tag color="orange" style={{ fontSize: 13, padding: "2px 10px" }}>⚠ Estimativa estatística — não é histórico real</Tag>
-                </div>
-              )}
               <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col xs={12} md={6}>
                   <Card style={{ background: "linear-gradient(135deg, #1890ff, #096dd9)", color: "#fff", position: "relative" }}>
-                    {empresa.fonte_valores === "estimado" && <Tag color="orange" style={{ position: "absolute", top: 8, right: 8 }}>est.</Tag>}
-                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>Importações {empresa.fonte_valores === "estimado" ? "(estimadas)" : "Totais"}</div>
+                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>Importações Totais</div>
                     <div style={{ color: "#fff", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{fmtM(empresa.kpis.total_imp)}</div>
                   </Card>
                 </Col>
                 <Col xs={12} md={6}>
                   <Card style={{ background: "linear-gradient(135deg, #52c41a, #389e0d)", color: "#fff", position: "relative" }}>
-                    {empresa.fonte_valores === "estimado" && <Tag color="orange" style={{ position: "absolute", top: 8, right: 8 }}>est.</Tag>}
-                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>Exportações {empresa.fonte_valores === "estimado" ? "(estimadas)" : "Totais"}</div>
+                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>Exportações Totais</div>
                     <div style={{ color: "#fff", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{fmtM(empresa.kpis.total_exp)}</div>
                   </Card>
                 </Col>
@@ -472,7 +456,7 @@ const DashboardComexBigQuery: React.FC = () => {
                   </Col>
                 )}
                 <Col xs={24} lg={empresa.ncms.length > 0 ? 10 : 24}>
-                  <Card title={empresa.fonte_valores === "estimado" ? "Distribuição Estimada por UF" : "Distribuição por UF"}>
+                  <Card title="Distribuição por UF">
                     {empresa.ufs.map((u, i) => {
                       const total = u.v_imp + u.v_exp;
                       const maxTotal = Math.max(...empresa.ufs.map((x) => x.v_imp + x.v_exp), 1);
