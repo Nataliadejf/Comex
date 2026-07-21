@@ -128,10 +128,22 @@ def enviar_email_cadastro_aprovado(email: str, nome: str) -> bool:
 
 
 def enviar_email_aviso_cadastro_pendente(admin_email: str, nome: str, email_usuario: str,
-                                         nome_empresa: str = "") -> bool:
-    """Avisa o admin que há um novo cadastro aguardando aprovação (só notificação)."""
+                                         nome_empresa: str = "",
+                                         link_aprovar: str = "", link_recusar: str = "") -> bool:
+    """Avisa o admin de um novo cadastro pendente, com botões de aprovar/recusar (1 clique)."""
     assunto = "Novo cadastro aguardando aprovação — Comex Analyzer"
     empresa_txt = f"<li><b>Empresa:</b> {nome_empresa}</li>" if nome_empresa else ""
+    botoes = ""
+    if link_aprovar:
+        botoes = f"""
+        <div style="margin:16px 0">
+          <a href="{link_aprovar}" style="display:inline-block;background:#52c41a;color:#fff;
+             padding:11px 22px;border-radius:8px;text-decoration:none;margin-right:8px">✓ Aprovar</a>
+          <a href="{link_recusar}" style="display:inline-block;background:#f5222d;color:#fff;
+             padding:11px 22px;border-radius:8px;text-decoration:none">✕ Recusar</a>
+        </div>
+        <p style="color:#888;font-size:12px">Os botões acima aprovam/recusam com 1 clique (link válido por 7 dias).</p>
+        """
     html = f"""
     <div style="font-family:Arial,sans-serif">
       <h3>Novo cadastro pendente</h3>
@@ -141,8 +153,8 @@ def enviar_email_aviso_cadastro_pendente(admin_email: str, nome: str, email_usua
         <li><b>E-mail:</b> {email_usuario}</li>
         {empresa_txt}
       </ul>
-      <p>Aprove ou recuse na tela de administração:
-         <a href="{frontend_url()}/usuarios">Gerenciar usuários</a></p>
+      {botoes}
+      <p>Ou gerencie na tela: <a href="{frontend_url()}/usuarios">Gerenciar usuários</a></p>
     </div>
     """
     return enviar_email(admin_email, assunto, html)

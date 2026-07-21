@@ -8,12 +8,39 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/admin/usuarios", tags=["admin-usuarios"])
+
+
+def gerar_token_acao(email: str, acao: str, dias: int = 7) -> str:
+    """Gera um token assinado para aprovar/recusar por link (expira em `dias`)."""
+    from datetime import timedelta
+    from auth import create_access_token
+    return create_access_token(
+        data={"sub": (email or "").strip().lower(), "act": acao},
+        expires_delta=timedelta(days=dias),
+    )
+
+
+def _pagina(titulo: str, msg: str, cor: str = "#1890ff") -> HTMLResponse:
+    html = f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{titulo}</title></head>
+    <body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:40px;text-align:center">
+      <div style="max-width:460px;margin:40px auto;background:#fff;border-radius:12px;padding:32px 24px;box-shadow:0 4px 16px rgba(0,0,0,.08)">
+        <div style="font-size:44px;color:{cor}">&#10003;</div>
+        <h2 style="color:#222;margin:8px 0">{titulo}</h2>
+        <p style="color:#555">{msg}</p>
+        <a href="https://comex-bs9w.onrender.com/usuarios"
+           style="display:inline-block;margin-top:12px;background:{cor};color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none">
+          Abrir gerenciamento</a>
+      </div></body></html>"""
+    return HTMLResponse(content=html)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -87,3 +114,34 @@ def recusar(body: EmailBody, admin: str = Depends(require_admin)):
         raise HTTPException(status_code=500, detail="Falha ao recusar")
     logger.info(f"Admin {admin} recusou {body.email}")
     return {"ok": True, "email": body.email, "status": "recusado"}
+
+
+@router.get("/acao-link", response_class=HTMLResponse)
+def acao_por_link(token: str = Query(...)):
+    """Aprova/recusa por link do e-mail (token assinado, sem exigir login)."""
+    from auth import decode_token
+    from services import user_store_bq
+
+    payload = decode_token(token)
+    if not payload or not payload.get("sub") or payload.get("act") not in ("approve", "reject"):
+        return _pagina("Link inválido ou expirado",
+                       "Este link não é mais válido. Abra o gerenciamento para aprovar manualmente.",
+                       "#f5222d")
+    email = payload["sub"]
+    u = user_store_bq.get_user_by_email(email)
+    if not u:
+        return _pagina("Usuário não encontrado", f"O cadastro «{email}» não existe mais.", "#faad14")
+
+    if payload["act"] == "approve":
+        user_store_bq.aprovar(email)
+        logger.info(f"Aprovação por link: {email}")
+        try:
+            from services.email_service import enviar_email_cadastro_aprovado
+            enviar_email_cadastro_aprovado(email, u.get("nome_completo") or "")
+        except Exception:
+            pass
+        return _pagina("Cadastro aprovado", f"«{email}» agora pode acessar o Comex Analyzer.", "#52c41a")
+    else:
+        user_store_bq.recusar(email)
+        logger.info(f"Recusa por link: {email}")
+        return _pagina("Cadastro recusado", f"«{email}» foi recusado e não terá acesso.", "#f5222d")

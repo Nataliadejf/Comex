@@ -5844,15 +5844,21 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
             )
             logger.info(f"✅ Cadastro pendente criado (BigQuery): {email_norm}")
 
-            # Aviso ao admin (só notificação) — não bloqueia o cadastro se falhar
+            # Aviso ao admin com botões de aprovar/recusar (1 clique) — não bloqueia o cadastro
             def _avisar_admin():
                 try:
                     from services.email_service import enviar_email_aviso_cadastro_pendente
+                    from routers.admin_usuarios_routes import gerar_token_acao
                     destino = os.getenv("ADMIN_NOTIFY_EMAIL", "nataliadejesusfranca1@gmail.com").strip()
-                    if destino:
-                        enviar_email_aviso_cadastro_pendente(
-                            destino, cadastro.nome_completo, email_norm, cadastro.nome_empresa or ""
-                        )
+                    if not destino:
+                        return
+                    base = os.getenv("BACKEND_URL", "https://comex-backend-mcp7.onrender.com").rstrip("/")
+                    link_ap = f"{base}/admin/usuarios/acao-link?token={gerar_token_acao(email_norm, 'approve')}"
+                    link_re = f"{base}/admin/usuarios/acao-link?token={gerar_token_acao(email_norm, 'reject')}"
+                    enviar_email_aviso_cadastro_pendente(
+                        destino, cadastro.nome_completo, email_norm, cadastro.nome_empresa or "",
+                        link_aprovar=link_ap, link_recusar=link_re,
+                    )
                 except Exception as exc:
                     logger.warning(f"Aviso de cadastro pendente não enviado: {exc}")
             background_tasks.add_task(_avisar_admin)

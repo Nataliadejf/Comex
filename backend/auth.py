@@ -105,21 +105,25 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
-def decode_token_email(token: str) -> Optional[str]:
-    """Decodifica o JWT e retorna o email (claim 'sub'), ou None se inválido.
-    Não depende de banco — útil para autorização com usuários no BigQuery."""
+def decode_token(token: str) -> Optional[dict]:
+    """Decodifica o JWT e retorna o payload completo, ou None se inválido/expirado."""
     try:
         if not JWT_AVAILABLE:
             return None
         if JWT_LIB == "pyjwt":
-            payload = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            return pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         elif JWT_LIB == "jose":
-            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        else:
-            return None
-        return payload.get("sub")
+            return jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return None
     except Exception:
         return None
+
+
+def decode_token_email(token: str) -> Optional[str]:
+    """Decodifica o JWT e retorna o email (claim 'sub'), ou None se inválido.
+    Não depende de banco — útil para autorização com usuários no BigQuery."""
+    payload = decode_token(token)
+    return payload.get("sub") if payload else None
 
 
 def authenticate_user(db: Session, email: str, password: str):
