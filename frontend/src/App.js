@@ -9,6 +9,7 @@ import AnaliseNCM from './pages/AnaliseNCM';
 import EmpresasDashboard from './pages/EmpresasDashboard';
 import EmpresaContatos from './pages/EmpresaContatos';
 import EmpresasHabilitadas from './pages/EmpresasHabilitadas';
+import GerenciarUsuarios from './pages/GerenciarUsuarios';
 import Login from './pages/Login';
 import './App.css';
 
@@ -43,6 +44,7 @@ function App() {
                     <Route path="/empresas" element={<EmpresasDashboard />} />
                     <Route path="/contatos" element={<EmpresaContatos />} />
                     <Route path="/habilitadas" element={<EmpresasHabilitadas />} />
+                    <Route path="/usuarios" element={<GerenciarUsuarios />} />
                   </Routes>
                 </Content>
               </AppLayout>

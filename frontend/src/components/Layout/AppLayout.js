@@ -8,6 +8,7 @@ import {
   PhoneOutlined,
   SafetyCertificateOutlined,
   TagsOutlined,
+  TeamOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuFoldOutlined,
@@ -22,8 +23,24 @@ const AppLayout = ({ children }) => {
   // Começar com sidebar encolhido por padrão (desktop)
   const [collapsed, setCollapsed] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Verificar se o usuário logado é administrador (mostra o menu de Usuários)
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const { adminUsuariosAPI } = await import('../../services/api');
+        const res = await adminUsuariosAPI.me();
+        if (ativo) setIsAdmin(!!res.data?.is_admin);
+      } catch (_) {
+        if (ativo) setIsAdmin(false);
+      }
+    })();
+    return () => { ativo = false; };
+  }, []);
 
   // Detectar se está em mobile e ajustar sidebar
   useEffect(() => {
@@ -77,6 +94,11 @@ const AppLayout = ({ children }) => {
       icon: <SafetyCertificateOutlined />,
       label: 'Habilitadas Comex',
     },
+    ...(isAdmin ? [{
+      key: '/usuarios',
+      icon: <TeamOutlined />,
+      label: 'Gerenciar Usuários',
+    }] : []),
   ];
 
   const handleMenuClick = ({ key }) => {

@@ -188,6 +188,13 @@ try:
 except ImportError as e:
     logger.warning(f"Router admin sync não disponível: {e}")
 
+try:
+    from routers.admin_usuarios_routes import router as admin_usuarios_router
+    app.include_router(admin_usuarios_router)
+    logger.info("✅ Router admin usuários (/admin/usuarios/*) incluído")
+except ImportError as e:
+    logger.warning(f"Router admin usuários não disponível: {e}")
+
 # Router dashboard local (/api/dashboard/buscar) — DESATIVADO: dependia do
 # PostgreSQL abandonado (retornava 500) e não é mais usado pelo frontend.
 # from routers.dashboard_data_routes import router as dashboard_local_router
@@ -5836,6 +5843,19 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 ativo=0,
             )
             logger.info(f"✅ Cadastro pendente criado (BigQuery): {email_norm}")
+
+            # Aviso ao admin (só notificação) — não bloqueia o cadastro se falhar
+            def _avisar_admin():
+                try:
+                    from services.email_service import enviar_email_aviso_cadastro_pendente
+                    destino = os.getenv("ADMIN_NOTIFY_EMAIL", "nataliadejesusfranca1@gmail.com").strip()
+                    if destino:
+                        enviar_email_aviso_cadastro_pendente(
+                            destino, cadastro.nome_completo, email_norm, cadastro.nome_empresa or ""
+                        )
+                except Exception as exc:
+                    logger.warning(f"Aviso de cadastro pendente não enviado: {exc}")
+            background_tasks.add_task(_avisar_admin)
 
             return {
                 "message": "Cadastro realizado! Aguarde a aprovação do administrador para fazer login.",

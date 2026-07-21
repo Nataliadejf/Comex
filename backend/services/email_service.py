@@ -125,3 +125,24 @@ def enviar_email_cadastro_aprovado(email: str, nome: str) -> bool:
     </div>
     """
     return enviar_email(email, assunto, html)
+
+
+def enviar_email_aviso_cadastro_pendente(admin_email: str, nome: str, email_usuario: str,
+                                         nome_empresa: str = "") -> bool:
+    """Avisa o admin que há um novo cadastro aguardando aprovação (só notificação)."""
+    assunto = "Novo cadastro aguardando aprovação — Comex Analyzer"
+    empresa_txt = f"<li><b>Empresa:</b> {nome_empresa}</li>" if nome_empresa else ""
+    html = f"""
+    <div style="font-family:Arial,sans-serif">
+      <h3>Novo cadastro pendente</h3>
+      <p>Um novo usuário se cadastrou e aguarda sua aprovação:</p>
+      <ul>
+        <li><b>Nome:</b> {nome or '—'}</li>
+        <li><b>E-mail:</b> {email_usuario}</li>
+        {empresa_txt}
+      </ul>
+      <p>Aprove ou recuse na tela de administração:
+         <a href="{frontend_url()}/usuarios">Gerenciar usuários</a></p>
+    </div>
+    """
+    return enviar_email(admin_email, assunto, html)

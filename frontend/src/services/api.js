@@ -427,3 +427,11 @@ export const healthAPI = {
   check: () => api.get('/health'),
 };
 
+// Administração de usuários (aprovação de cadastros) — requer admin
+export const adminUsuariosAPI = {
+  me: () => api.get('/admin/usuarios/me'),
+  pendentes: () => api.get('/admin/usuarios/pendentes'),
+  aprovar: (email) => api.post('/admin/usuarios/aprovar', { email }),
+  recusar: (email) => api.post('/admin/usuarios/recusar', { email }),
+};
+

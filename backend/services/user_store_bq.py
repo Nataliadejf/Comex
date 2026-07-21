@@ -181,3 +181,17 @@ def aprovar(email: str) -> bool:
     except Exception as exc:
         logger.warning(f"aprovar falhou: {exc}")
         return False
+
+
+def recusar(email: str) -> bool:
+    """Recusa/desativa um cadastro (status recusado, ativo=0)."""
+    from google.cloud import bigquery
+    try:
+        _q(
+            f"UPDATE `{_tbl()}` SET status_aprovacao='recusado', ativo=0 WHERE LOWER(email)=@e",
+            [bigquery.ScalarQueryParameter("e", "STRING", (email or "").strip().lower())],
+        )
+        return True
+    except Exception as exc:
+        logger.warning(f"recusar falhou: {exc}")
+        return False
