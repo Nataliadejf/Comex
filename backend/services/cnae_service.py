@@ -13,6 +13,9 @@ from loguru import logger
 # Caminho padrão — pode ser sobrescrito via env CNAE_XLSX_PATH
 _DEFAULT_PATH = Path(__file__).parent.parent / "data" / "NOVO_CNAE.xlsx"
 
+# Tabela BigQuery com a hierarquia CNAE (fonte primária; evita ler Excel na startup)
+_DEFAULT_BQ_TABLE = "liquid-receiver-483923-n6.Projeto_Comex.cnae_hierarquia"
+
 # Dicionário global carregado no startup
 _cnae_map: Dict[str, dict] = {}
 _loaded = False
@@ -30,6 +33,36 @@ def carregar_cnae(path: Optional[str] = None) -> int:
     Seguro para chamar múltiplas vezes (idempotente).
     """
     global _cnae_map, _loaded
+
+    # 1) Fonte primária: BigQuery (leve, sem pandas/openpyxl). Só é ignorada se
+    #    o caller passar um path explícito de Excel.
+    if path is None and os.getenv("CNAE_USE_BQ", "true").strip().lower() in {"1", "true", "yes", "y"}:
+        try:
+            from services.bq_client import get_bigquery_client, run_query
+            table = os.getenv("CNAE_BQ_TABLE", _DEFAULT_BQ_TABLE).strip().strip("`")
+            client = get_bigquery_client()
+            rows = run_query(client, f"SELECT cnae, descricao, setor, segmento, ramo, categoria, produto FROM `{table}`", None)
+            mapa: Dict[str, dict] = {}
+            for r in rows:
+                codigo = _normalizar_cnae(r.get("cnae") or "")
+                if not codigo or codigo == "0000000":
+                    continue
+                mapa[codigo] = {
+                    "descricao": r.get("descricao"),
+                    "setor": r.get("setor"),
+                    "segmento": r.get("segmento"),
+                    "ramo": r.get("ramo"),
+                    "categoria": r.get("categoria"),
+                    "produto": r.get("produto"),
+                }
+            if mapa:
+                _cnae_map = mapa
+                _loaded = True
+                logger.info(f"✅ CNAE carregado do BigQuery: {len(mapa)} códigos ({table})")
+                return len(mapa)
+            logger.warning("CNAE BigQuery retornou vazio — caindo para o Excel.")
+        except Exception as exc:
+            logger.warning(f"CNAE BigQuery indisponível ({exc}); usando Excel local.")
 
     xlsx_path = Path(path or os.getenv("CNAE_XLSX_PATH") or _DEFAULT_PATH)
     if not xlsx_path.exists():
