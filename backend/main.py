@@ -5849,7 +5849,7 @@ if AUTH_FUNCTIONS_AVAILABLE and AUTH_AVAILABLE:
                 try:
                     from services.email_service import enviar_email_aviso_cadastro_pendente
                     from routers.admin_usuarios_routes import gerar_token_acao
-                    destino = os.getenv("ADMIN_NOTIFY_EMAIL", "nataliadejesusfranca1@gmail.com").strip()
+                    destino = os.getenv("ADMIN_NOTIFY_EMAIL", "nataliadejesus2@gmail.com").strip()
                     if not destino:
                         return
                     base = os.getenv("BACKEND_URL", "https://comex-backend-mcp7.onrender.com").rstrip("/")
