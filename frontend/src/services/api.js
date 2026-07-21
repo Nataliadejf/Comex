@@ -276,7 +276,8 @@ export const empresasAPI = {
 };
 
 export const ncmAPI = {
-  getAnalise: (ncm) => api.get(`/ncm/${ncm}/analise`),
+  getAnalise: (ncm, anoInicio = 2022, anoFim = 2025) =>
+    api.get('/api/empresa-intel/ncm-analise', { params: { ncm, ano_inicio: anoInicio, ano_fim: anoFim } }),
 };
 
 // API de Empresas Recomendadas

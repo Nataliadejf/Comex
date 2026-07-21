@@ -384,6 +384,110 @@ async def busca_comex(
         return {"error": str(e)[:400], "results": [], "total": 0}
 
 
+@router.get("/ncm-analise")
+async def ncm_analise(
+    ncm: str = Query(..., min_length=2, description="Código NCM (8 dígitos)"),
+    ano_inicio: int = Query(2022, ge=2000, le=2030),
+    ano_fim: int = Query(2025, ge=2000, le=2030),
+):
+    """Análise REAL de um NCM (BigQuery, dados oficiais MDIC por UF×mês):
+    totais, evolução mensal e distribuição por UF de importação/exportação,
+    mais os principais importadores/exportadores reais (base Logcomex)."""
+    from google.cloud import bigquery
+
+    dig = "".join(c for c in (ncm or "") if c.isdigit())[:8]
+    if len(dig) < 2:
+        return {"error": "NCM inválido", "ncm": ncm}
+    try:
+        client = _get_bq_client()
+    except Exception as e:
+        return {"error": str(e), "ncm": dig}
+
+    t_imp = _bt(_env("COMEX_BQ_TABLE_IMPORT_UF_NCM", _DEFAULT_IMPORT_UF))
+    t_exp = _bt(_env("COMEX_BQ_TABLE_EXPORT_UF_NCM", _DEFAULT_EXPORT_UF))
+    t_desc = _bt(_env("COMEX_BQ_TABLE_NCM_DESC", _DEFAULT_NCM_DESC))
+    t_real = _bt(_env("COMEX_BQ_TABLE_REAL_LOGCOMEX",
+                      "liquid-receiver-483923-n6.Projeto_Comex.comex_real_import_logcomex"))
+    ym0, ym1 = ano_inicio * 100 + 1, ano_fim * 100 + 12
+    params = [
+        bigquery.ScalarQueryParameter("a", "INT64", ym0),
+        bigquery.ScalarQueryParameter("b", "INT64", ym1),
+        bigquery.ScalarQueryParameter("ncm", "STRING", dig),
+    ]
+
+    # Descrição
+    descricao = None
+    try:
+        drows = _run_query(client, f"SELECT descricao FROM {t_desc} WHERE ncm=@ncm LIMIT 1",
+                           [bigquery.ScalarQueryParameter("ncm", "STRING", dig)])
+        if drows:
+            descricao = drows[0].get("descricao")
+    except Exception:
+        pass
+
+    def _agg(tbl, col):
+        sql = f"""
+        SELECT ano, mes, UPPER(TRIM(CAST(sigla_uf AS STRING))) uf,
+               SUM(CAST({col} AS FLOAT64)) fob
+        FROM {tbl}
+        WHERE (ano*100+mes) BETWEEN @a AND @b AND CAST(id_ncm AS STRING)=@ncm
+        GROUP BY ano, mes, uf
+        """
+        return _run_query(client, sql, params)
+
+    tl = {}   # ym -> {imp, exp}
+    ufs = {}  # uf -> {imp, exp}
+    total_imp = total_exp = 0.0
+    for rows, key in ((_agg(t_imp, "total_importacao_fob"), "imp"),
+                      (_agg(t_exp, "total_exportacao_fob"), "exp")):
+        for r in rows:
+            v = float(r.get("fob") or 0)
+            ym = f"{int(r.get('ano') or 0):04d}-{int(r.get('mes') or 0):02d}"
+            tl.setdefault(ym, {"v_imp": 0.0, "v_exp": 0.0})[f"v_{key}"] += v
+            u = r.get("uf") or "—"
+            ufs.setdefault(u, {"v_imp": 0.0, "v_exp": 0.0})[f"v_{key}"] += v
+            if key == "imp":
+                total_imp += v
+            else:
+                total_exp += v
+
+    timeline = [{"ym": k, **tl[k]} for k in sorted(tl)]
+    por_uf = sorted(
+        [{"uf": u, **ufs[u]} for u in ufs],
+        key=lambda x: (x["v_imp"] + x["v_exp"]), reverse=True,
+    )
+
+    # Principais importadores/exportadores reais para o NCM (base Logcomex)
+    def _top_real(campo):
+        try:
+            sql = f"""
+            SELECT {campo} nome, SUM(fob_import) v, SUM(n_operacoes) n
+            FROM {t_real}
+            WHERE id_ncm=@ncm AND {campo} IS NOT NULL
+              AND (ano*100+mes) BETWEEN @a AND @b
+            GROUP BY nome ORDER BY v DESC LIMIT 10
+            """
+            return [{"nome": r.get("nome"), "valor_total": float(r.get("v") or 0),
+                     "total_operacoes": int(r.get("n") or 0)}
+                    for r in _run_query(client, sql, params)]
+        except Exception:
+            return []
+
+    return {
+        "ncm": dig,
+        "descricao": descricao,
+        "periodo": {"ano_inicio": ano_inicio, "ano_fim": ano_fim},
+        "total_imp": total_imp,
+        "total_exp": total_exp,
+        "saldo": total_exp - total_imp,
+        "timeline": timeline,
+        "por_uf": por_uf,
+        "top_importadores": _top_real("importador_nome"),
+        "top_exportadores": _top_real("exportador_nome"),
+        "fonte": "importacao_uf_ncm / exportacao_uf_ncm (MDIC) + comex_real_import_logcomex",
+    }
+
+
 @router.get("/cnae-arvore")
 async def cnae_arvore():
     """Árvore CNAE Setor→Segmento→Ramo→Categoria para os filtros do Painel de Empresas."""

@@ -7,6 +7,7 @@ import {
   BankOutlined,
   PhoneOutlined,
   SafetyCertificateOutlined,
+  TagsOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuFoldOutlined,
@@ -55,6 +56,11 @@ const AppLayout = ({ children }) => {
       key: '/busca',
       icon: <SearchOutlined />,
       label: 'Busca Avançada',
+    },
+    {
+      key: '/ncm',
+      icon: <TagsOutlined />,
+      label: 'Análise por NCM',
     },
     {
       key: '/empresas',

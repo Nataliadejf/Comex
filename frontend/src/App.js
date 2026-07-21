@@ -38,6 +38,7 @@ function App() {
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/dashboard-comex-bq" element={<DashboardComexBigQuery />} />
                     <Route path="/busca" element={<BuscaAvancada />} />
+                    <Route path="/ncm" element={<AnaliseNCM />} />
                     <Route path="/ncm/:ncm" element={<AnaliseNCM />} />
                     <Route path="/empresas" element={<EmpresasDashboard />} />
                     <Route path="/contatos" element={<EmpresaContatos />} />

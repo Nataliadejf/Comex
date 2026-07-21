@@ -188,12 +188,10 @@ try:
 except ImportError as e:
     logger.warning(f"Router admin sync não disponível: {e}")
 
-try:
-    from routers.dashboard_data_routes import router as dashboard_local_router
-    app.include_router(dashboard_local_router)
-    logger.info("✅ Router dashboard local (/api/dashboard/buscar) incluído")
-except ImportError as e:
-    logger.warning(f"Router dashboard local não disponível: {e}")
+# Router dashboard local (/api/dashboard/buscar) — DESATIVADO: dependia do
+# PostgreSQL abandonado (retornava 500) e não é mais usado pelo frontend.
+# from routers.dashboard_data_routes import router as dashboard_local_router
+# app.include_router(dashboard_local_router)
 
 try:
     from routers.comex_dashboard_routes import router as comex_dashboard_router
@@ -216,12 +214,10 @@ try:
 except ImportError as e:
     logger.warning(f"Router DOU não disponível: {e}")
 
-try:
-    from routers.ncm_routes import router as ncm_router
-    app.include_router(ncm_router)
-    logger.info("✅ Router NCM (/api/ncm) incluído")
-except ImportError as e:
-    logger.warning(f"Router NCM não disponível: {e}")
+# Router NCM (/api/ncm/*) — DESATIVADO: dependia do PostgreSQL abandonado
+# (retornava 500). A análise por NCM agora é /api/empresa-intel/ncm-analise (BigQuery).
+# from routers.ncm_routes import router as ncm_router
+# app.include_router(ncm_router)
 
 try:
     from routers.contatos_routes import router as contatos_router

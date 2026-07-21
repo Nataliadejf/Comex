@@ -27,7 +27,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { empresasRecomendadasAPI, comexDashboardBqAPI } from '../services/api';
+import { comexDashboardBqAPI } from '../services/api';
 import api from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
@@ -306,10 +306,6 @@ const Dashboard = () => {
   const importadorInputRef = useRef('');
   const exportadorInputRef = useRef('');
   
-  // Fallback de top importadoras/exportadoras (usado por topImportadores/topExportadores)
-  const [empresasImportadorasRecomendadas, setEmpresasImportadorasRecomendadas] = useState([]);
-  const [empresasExportadorasRecomendadas, setEmpresasExportadorasRecomendadas] = useState([]);
-
   // Estado para detectar mobile
   const [isMobile, setIsMobile] = useState(false);
 
@@ -750,31 +746,6 @@ const Dashboard = () => {
     // Carga inicial apenas; demais atualizações via botão Buscar / Limpar
   }, []);
 
-  // Carregar empresas recomendadas quando stats carregar
-  useEffect(() => {
-    const loadEmpresasRecomendadas = async () => {
-      try {
-        // Carregar empresas importadoras
-        const impData = await empresasRecomendadasAPI.getEmpresasImportadoras(10);
-        if (impData.success && impData.data) {
-          setEmpresasImportadorasRecomendadas(impData.data);
-        }
-
-        // Carregar empresas exportadoras
-        const expData = await empresasRecomendadasAPI.getEmpresasExportadoras(10);
-        if (expData.success && expData.data) {
-          setEmpresasExportadorasRecomendadas(expData.data);
-        }
-      } catch (error) {
-        console.error('Erro ao carregar empresas recomendadas:', error);
-      }
-    };
-
-    if (stats) {
-      loadEmpresasRecomendadas();
-    }
-  }, [stats]);
-
   const handleSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
     // Usar refs como fonte principal (atualizados a cada digitação); DOM como fallback
@@ -1048,25 +1019,6 @@ const Dashboard = () => {
         });
     }
     
-    if (empresasImportadorasRecomendadas.length > 0) {
-      const volumeTotal = statsFinal.volume_importacoes || 0;
-      const valorTotalUsd = statsFinal.valor_total_usd || 1;
-      return empresasImportadorasRecomendadas
-        .slice(0, 5)
-        .map((empresa, idx) => {
-          const valorTotal = empresa.valor_total || empresa.importado_rs || 0;
-          const pesoKg = Number(empresa.peso_kg);
-          const pesoProporcional = valorTotalUsd > 0 ? (volumeTotal * (valorTotal / valorTotalUsd)) : 0;
-          return {
-            cor: COLORS[idx % COLORS.length],
-            nome: String(empresa.nome || empresa.pais || empresa.razao_social || 'N/A'),
-            fob: Number(valorTotal) || 0,
-            peso: (pesoKg > 0 ? pesoKg : pesoProporcional) || 0,
-            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
-          };
-        });
-    }
-    
     if (principaisPaises && Array.isArray(principaisPaises)) {
       return principaisPaises
         .filter((_, idx) => idx < 5)
@@ -1120,25 +1072,6 @@ const Dashboard = () => {
         });
     }
     
-    if (empresasExportadorasRecomendadas.length > 0) {
-      const volumeTotal = statsFinal.volume_exportacoes || 0;
-      const valorTotalUsd = statsFinal.valor_total_usd || 1;
-      return empresasExportadorasRecomendadas
-        .slice(0, 5)
-        .map((empresa, idx) => {
-          const valorTotal = empresa.valor_total || empresa.exportado_rs || 0;
-          const pesoKg = Number(empresa.peso_kg);
-          const pesoProporcional = valorTotalUsd > 0 ? (volumeTotal * (valorTotal / valorTotalUsd)) : 0;
-          return {
-            cor: COLORS[idx % COLORS.length],
-            nome: String(empresa.nome || empresa.pais || empresa.razao_social || 'N/A'),
-            fob: Number(valorTotal) || 0,
-            peso: (pesoKg > 0 ? pesoKg : pesoProporcional) || 0,
-            percentual: valorTotalUsd > 0 ? ((valorTotal / valorTotalUsd) * 100) : 0,
-          };
-        });
-    }
-    
     if (principaisPaises && Array.isArray(principaisPaises)) {
       return principaisPaises
         .filter((_, idx) => idx < 5)
@@ -1154,7 +1087,7 @@ const Dashboard = () => {
           };
         });
     }
-    
+
     return [];
   })();
 
