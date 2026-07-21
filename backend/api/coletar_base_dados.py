@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from loguru import logger
 from typing import Dict, Any
-import pandas as pd
 from datetime import datetime
 
 from database import get_db
@@ -134,8 +133,9 @@ def coletar_dados_bigquery():
         )
 
 
-def importar_para_postgresql(df: pd.DataFrame, db: Session):
+def importar_para_postgresql(df, db: Session):
     """Importa dados para PostgreSQL."""
+    import pandas as pd  # lazy: evita carregar pandas na startup
     try:
         logger.info("🗄️ Importando dados para PostgreSQL...")
         

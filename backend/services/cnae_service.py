@@ -38,23 +38,38 @@ def carregar_cnae(path: Optional[str] = None) -> int:
         return 0
 
     try:
-        import pandas as pd
+        # openpyxl read-only em vez de pandas: evita carregar pandas+numpy na
+        # startup (economiza ~60MB de RAM no Render free de 512MB).
+        from openpyxl import load_workbook
 
-        df = pd.read_excel(xlsx_path, dtype={"CNAE": str})
+        wb = load_workbook(xlsx_path, read_only=True, data_only=True)
+        ws = wb.active
+        it = ws.iter_rows(values_only=True)
+        header = [str(h).strip() if h is not None else "" for h in next(it)]
+        idx = {name: i for i, name in enumerate(header)}
+
+        def _get(row, col):
+            i = idx.get(col)
+            return row[i] if (i is not None and i < len(row)) else None
+
+        def _clean(v):
+            s = str(v).strip() if v is not None else ""
+            return s if s and s.lower() not in ("nan", "none") else None
+
         mapa: Dict[str, dict] = {}
-        for _, row in df.iterrows():
-            codigo = _normalizar_cnae(row.get("CNAE") or "")
+        for row in it:
+            codigo = _normalizar_cnae(_get(row, "CNAE") or "")
             if not codigo or codigo == "0000000":
                 continue
-            produto = row.get("PRODUTO")
             mapa[codigo] = {
-                "descricao": str(row.get("DESCRIÇÃO") or "").strip() or None,
-                "setor": str(row.get("SETOR") or "").strip() or None,
-                "segmento": str(row.get("SEGMENTO") or "").strip() or None,
-                "ramo": str(row.get("RAMO") or "").strip() or None,
-                "categoria": str(row.get("CATEGORIA") or "").strip() or None,
-                "produto": str(produto).strip() if produto and str(produto).strip() not in ("nan", "None", "") else None,
+                "descricao": _clean(_get(row, "DESCRIÇÃO")),
+                "setor": _clean(_get(row, "SETOR")),
+                "segmento": _clean(_get(row, "SEGMENTO")),
+                "ramo": _clean(_get(row, "RAMO")),
+                "categoria": _clean(_get(row, "CATEGORIA")),
+                "produto": _clean(_get(row, "PRODUTO")),
             }
+        wb.close()
 
         _cnae_map = mapa
         _loaded = True
