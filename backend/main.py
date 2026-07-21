@@ -80,7 +80,10 @@ app.add_middleware(
 
 # Importação automática opcional do Excel no startup
 def _start_auto_import_excel_if_configured() -> None:
-    flag = os.getenv("AUTO_IMPORT_EXCEL_ON_START", "true").strip().lower()
+    # Padrão DESLIGADO: ler um Excel anual de comex para o pandas na startup
+    # estoura a RAM (512MB no Render free). Os dados vivem no BigQuery — só
+    # ative (AUTO_IMPORT_EXCEL_ON_START=true) em ambiente com memória sobrando.
+    flag = os.getenv("AUTO_IMPORT_EXCEL_ON_START", "false").strip().lower()
     if flag not in {"1", "true", "yes", "y"}:
         return
 
