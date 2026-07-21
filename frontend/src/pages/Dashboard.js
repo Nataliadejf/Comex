@@ -2367,7 +2367,8 @@ const Dashboard = () => {
       {/* Seções gerais (não específicas da empresa) — ocultas sob filtro de empresa */}
       {!filtroEmpresaAtivo && (
       <>
-      {/* Seção de Sinergias e Sugestões */}
+      {/* Seção de Sinergias e Sugestões — REMOVIDA a pedido */}
+      {false && (
       <Row gutter={[8, 8]} style={{ marginTop: 'clamp(12px, 3vw, 24px)' }}>
         <Col xs={24} lg={12}>
           <Card
@@ -2601,7 +2602,8 @@ const Dashboard = () => {
           </Card>
         </Col>
       </Row>
-      
+      )}
+
       {/* Seção de Empresas Recomendadas */}
       <Row gutter={16} style={{ marginTop: 16 }}>
         <Col span={24}>
