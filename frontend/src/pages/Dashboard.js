@@ -27,7 +27,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { sinergiasAPI, empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI, comexDashboardBqAPI } from '../services/api';
+import { empresasRecomendadasAPI, comexstatAPI, dadosReaisAPI, adminSyncAPI, dashboardLocalAPI, comexDashboardBqAPI } from '../services/api';
 import api from '../services/api';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br';
@@ -307,10 +307,6 @@ const Dashboard = () => {
   const exportadorInputRef = useRef('');
   
   // Estados para sinergias e sugestões
-  const [sinergiasEstado, setSinergiasEstado] = useState(null);
-  const [sugestoesEmpresas, setSugestoesEmpresas] = useState([]);
-  const [loadingSinergias, setLoadingSinergias] = useState(false);
-  const [loadingSugestoes, setLoadingSugestoes] = useState(false);
   
   // Estados para empresas recomendadas e dados ComexStat
   const [empresasRecomendadas, setEmpresasRecomendadas] = useState([]);
@@ -874,22 +870,6 @@ const Dashboard = () => {
     }
   }, [stats]);
 
-  // Função para carregar sugestões de empresas
-  const loadSugestoesEmpresas = useCallback(async (tipo = null) => {
-    setLoadingSugestoes(true);
-    try {
-      const data = await sinergiasAPI.getSugestoesEmpresas(20, tipo, null);
-      if (data.success && data.sugestoes) {
-        setSugestoesEmpresas(data.sugestoes);
-      }
-    } catch (error) {
-      console.error('Erro ao carregar sugestões:', error);
-      setSugestoesEmpresas([]);
-    } finally {
-      setLoadingSugestoes(false);
-    }
-  }, []);
-
   // Função para carregar empresas recomendadas
   const loadEmpresasRecomendadas = useCallback(async () => {
     setLoadingEmpresasRecomendadas(true);
@@ -922,30 +902,11 @@ const Dashboard = () => {
     }
   }, []);
 
-  // Carregar sinergias e sugestões ao montar componente
+  // Carregar dados gerais ao montar componente
   useEffect(() => {
-    // Carregar sinergias
-    const loadSinergias = async () => {
-      try {
-        const data = await sinergiasAPI.getSinergiasEstado();
-        setSinergiasEstado(data);
-      } catch (error) {
-        console.error('Erro ao carregar sinergias:', error);
-      }
-    };
-
-    // Carregar sugestões
-    loadSugestoesEmpresas();
-    
-    // Carregar empresas recomendadas
     loadEmpresasRecomendadas();
-    
-    // Carregar dados ComexStat
     loadDadosComexstat();
-
-    // Carregar sinergias após um pequeno delay para não sobrecarregar
-    setTimeout(loadSinergias, 2000);
-  }, [loadSugestoesEmpresas, loadEmpresasRecomendadas, loadDadosComexstat]);
+  }, [loadEmpresasRecomendadas, loadDadosComexstat]);
 
   const handleSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
@@ -2367,242 +2328,6 @@ const Dashboard = () => {
       {/* Seções gerais (não específicas da empresa) — ocultas sob filtro de empresa */}
       {!filtroEmpresaAtivo && (
       <>
-      {/* Seção de Sinergias e Sugestões — REMOVIDA a pedido */}
-      {false && (
-      <Row gutter={[8, 8]} style={{ marginTop: 'clamp(12px, 3vw, 24px)' }}>
-        <Col xs={24} lg={12}>
-          <Card
-            title="📊 Sinergias por Estado"
-            extra={
-              <Button 
-                size="small" 
-                icon={<ReloadOutlined />}
-                onClick={async () => {
-                  setLoadingSinergias(true);
-                  try {
-                    const data = await sinergiasAPI.getSinergiasEstado();
-                    setSinergiasEstado(data);
-                  } catch (error) {
-                    console.error('Erro ao carregar sinergias:', error);
-                  } finally {
-                    setLoadingSinergias(false);
-                  }
-                }}
-                loading={loadingSinergias}
-              >
-                Atualizar
-              </Button>
-            }
-          >
-            <Spin spinning={loadingSinergias}>
-              {sinergiasEstado ? (
-                <div>
-                  <div style={{ marginBottom: 16 }}>
-                    <Statistic 
-                      title="Estados com Sinergia" 
-                      value={sinergiasEstado.estados_com_sinergia} 
-                      suffix={`/ ${sinergiasEstado.total_estados}`}
-                    />
-                  </div>
-                  <Table
-                    size="small"
-                    dataSource={sinergiasEstado.sinergias || []}
-                    rowKey="uf"
-                    pagination={false}
-                    columns={[
-                      {
-                        title: 'Estado',
-                        dataIndex: 'uf',
-                        key: 'uf',
-                        width: isMobile ? 160 : 200,
-                        render: (uf) => {
-                          const texto = obterNomeEstado(uf) || uf || '-';
-                          return (
-                            <div
-                              style={{
-                                whiteSpace: 'normal',
-                                wordBreak: 'break-word',
-                                lineHeight: 1.2,
-                              }}
-                            >
-                              {texto}
-                            </div>
-                          );
-                        },
-                        sorter: (a, b) => {
-                          const nomeA = obterNomeEstado(a.uf) || '';
-                          const nomeB = obterNomeEstado(b.uf) || '';
-                          return nomeA.localeCompare(nomeB);
-                        },
-                      },
-                      {
-                        title: 'Índice Sinergia',
-                        dataIndex: 'indice_sinergia',
-                        key: 'indice_sinergia',
-                        width: 120,
-                        render: (valor) => (valor * 100).toFixed(1) + '%',
-                        sorter: (a, b) => a.indice_sinergia - b.indice_sinergia,
-                      },
-                      {
-                        title: 'Importações',
-                        dataIndex: ['importacoes', 'valor_total'],
-                        key: 'imp_valor',
-                        width: 120,
-                        render: (valor) => formatCurrency(valor || 0),
-                      },
-                      {
-                        title: 'Exportações',
-                        dataIndex: ['exportacoes', 'valor_total'],
-                        key: 'exp_valor',
-                        width: 120,
-                        render: (valor) => formatCurrency(valor || 0),
-                      },
-                      {
-                        title: 'Sugestão',
-                        dataIndex: 'sugestao',
-                        key: 'sugestao',
-                        ellipsis: true,
-                      },
-                    ]}
-                  />
-                </div>
-              ) : (
-                <div style={{ textAlign: 'center', padding: 20 }}>
-                  <Button 
-                    type="primary" 
-                    onClick={async () => {
-                      setLoadingSinergias(true);
-                      try {
-                        const data = await sinergiasAPI.getSinergiasEstado();
-                        setSinergiasEstado(data);
-                      } catch (error) {
-                        console.error('Erro ao carregar sinergias:', error);
-                      } finally {
-                        setLoadingSinergias(false);
-                      }
-                    }}
-                    loading={loadingSinergias}
-                  >
-                    Carregar Sinergias
-                  </Button>
-                </div>
-              )}
-            </Spin>
-          </Card>
-        </Col>
-
-        <Col xs={24} lg={12}>
-          <Card 
-            title="💡 Sugestões de Empresas" 
-            extra={
-              <Space>
-                <Select
-                  size="small"
-                  style={{ width: 120 }}
-                  placeholder="Tipo"
-                  onChange={(tipo) => {
-                    loadSugestoesEmpresas(tipo);
-                  }}
-                >
-                  <Option value={null}>Todos</Option>
-                  <Option value="importacao">Importação</Option>
-                  <Option value="exportacao">Exportação</Option>
-                </Select>
-                <Button 
-                  size="small" 
-                  icon={<ReloadOutlined />}
-                  onClick={() => loadSugestoesEmpresas()}
-                  loading={loadingSugestoes}
-                >
-                  Atualizar
-                </Button>
-              </Space>
-            }
-          >
-            <Spin spinning={loadingSugestoes}>
-              {sugestoesEmpresas.length > 0 ? (
-                <Table
-                  size="small"
-                  dataSource={sugestoesEmpresas}
-                  rowKey={(r, i) => r.cnpj || r.razao_social || `${i}`}
-                  pagination={{ pageSize: 5 }}
-                  columns={[
-                    {
-                      title: 'Empresa',
-                      dataIndex: 'nome',
-                      key: 'empresa',
-                      ellipsis: true,
-                      render: (text, record) => (
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{text || record.razao_social || record.nome_fantasia}</div>
-                          {(record.uf || record.estado) && (
-                            <Tag size="small">
-                              {obterNomeEstado(record.uf || record.estado) || record.uf || record.estado}
-                            </Tag>
-                          )}
-                          {record.cnae && <Tag size="small" color="blue">CNAE: {record.cnae}</Tag>}
-                        </div>
-                      ),
-                    },
-                    {
-                      title: 'Valor provável (por empresas)',
-                      dataIndex: 'valor_total',
-                      key: 'valor_total',
-                      width: 140,
-                      align: 'right',
-                      render: (v) => v != null ? `US$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '-',
-                      sorter: (a, b) => (a.valor_total || 0) - (b.valor_total || 0),
-                    },
-                    {
-                      title: 'Potencial',
-                      dataIndex: 'peso_participacao',
-                      key: 'potencial',
-                      width: 100,
-                      render: (valor, record) => {
-                        const v = valor ?? record.potencial_sinergia;
-                        if (v == null) return '-';
-                        const percent = typeof v === 'number' && v <= 1 ? (v * 100).toFixed(0) : Number(v).toFixed(1);
-                        const color = v > 0.7 || v > 70 ? 'green' : v > 0.3 || v > 30 ? 'orange' : 'default';
-                        return <Tag color={color}>{percent}%</Tag>;
-                      },
-                      sorter: (a, b) => (a.peso_participacao ?? a.potencial_sinergia ?? 0) - (b.peso_participacao ?? b.potencial_sinergia ?? 0),
-                    },
-                    {
-                      title: 'Tipo',
-                      dataIndex: 'tipo',
-                      key: 'tipo',
-                      width: 100,
-                      render: (v) => v ? (v === 'importadora' ? 'Importadora' : v === 'exportadora' ? 'Exportadora' : v) : '-',
-                    },
-                    {
-                      title: 'Sugestão / Fonte',
-                      dataIndex: 'fonte',
-                      key: 'sugestao',
-                      width: 120,
-                      render: (text, record) => (
-                        <div style={{ fontSize: '12px', color: '#666' }}>
-                          {text || record.sugestao || (record.fonte === 'empresas_recomendadas' ? 'BigQuery/cruzamento' : '')}
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              ) : (
-                <div style={{ textAlign: 'center', padding: 20 }}>
-                  <Button 
-                    type="primary" 
-                    onClick={() => loadSugestoesEmpresas()}
-                    loading={loadingSugestoes}
-                  >
-                    Carregar Sugestões
-                  </Button>
-                </div>
-              )}
-            </Spin>
-          </Card>
-        </Col>
-      </Row>
-      )}
 
       {/* Seção de Empresas Recomendadas */}
       <Row gutter={16} style={{ marginTop: 16 }}>
