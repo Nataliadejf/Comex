@@ -742,9 +742,21 @@ def _dashboard_stats_payload_from_bq(
                 fator_imp, fator_exp = emp_stats.fatores_orientacao(h.get("setor"))
         except Exception:
             pass
+        # Importadora conhecida (existe na base Logcomex, que é só importação):
+        # suprime a exportação estimada, que seria inflada pela participação na UF.
+        importadora_conhecida = False
+        if _lado == "importador":
+            try:
+                _orient = emp_stats.stats_real_import_logcomex(
+                    client, _run_query, _bt, _table_env, cnpjs,
+                    empresa_importadora or empresa_exportadora, 200001, 209912, lado="importador",
+                )
+                importadora_conhecida = bool(_orient and float(_orient.get("total_imp") or 0) > 0)
+            except Exception:
+                pass
         # 2) Empresa fora da base real: estimativa CALIBRADA pela base Logcomex
         fator_imp *= emp_stats._FATOR_CALIBRACAO_IMPORT
-        fator_exp *= emp_stats._FATOR_CALIBRACAO_EXPORT
+        fator_exp *= emp_stats._FATOR_CALIBRACAO_EXPORT * (0.03 if importadora_conhecida else 1.0)
         # Estimativa período-consciente: participação × mercado REAL da UF mês a mês
         estimativa = emp_stats.stats_estimativa_periodo(
             client, _run_query, _bt, _table_env, cnpjs, ym_start, ym_end,
