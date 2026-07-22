@@ -1423,6 +1423,7 @@ async def empresa_inteligencia(
 
     # 2a. Valores REAIS de importação (base Logcomex deduplicada) — precedência.
     real_lc = None
+    importadora_conhecida = False  # existe na base Logcomex (só importação) → não inflar exportação
     if not tem_dados:
         try:
             from services import comex_empresa_stats as _emp_stats
@@ -1431,6 +1432,13 @@ async def empresa_inteligencia(
             real_lc = _emp_stats.stats_real_import_logcomex(
                 client, _run_query, _bt, _env, cnpjs, q, _ym0, _ym1, lado="importador"
             )
+            # Orientação: a base Logcomex é só de importação. Se a empresa aparece
+            # nela em qualquer período, é importadora conhecida — não temos indício
+            # de exportação, então a exportação estimada deve ser suprimida.
+            _orient = _emp_stats.stats_real_import_logcomex(
+                client, _run_query, _bt, _env, cnpjs, q, 200001, 209912, lado="importador"
+            )
+            importadora_conhecida = bool(_orient and float(_orient.get("total_imp") or 0) > 0)
         except Exception as e:
             logger.warning(f"real_logcomex error: {e}")
             real_lc = None
@@ -1466,11 +1474,14 @@ async def empresa_inteligencia(
             # Calibração pela base real Logcomex (estimativa por participação-de-UF infla ~17,5×)
             _FCAL = getattr(__import__("services.comex_empresa_stats", fromlist=["_FATOR_CALIBRACAO_IMPORT"]),
                             "_FATOR_CALIBRACAO_IMPORT", 0.0573)
+            # Importadora conhecida (existe na Logcomex): suprime a exportação estimada,
+            # que seria inflada pela participação na UF (ex.: PA, gigante em exportação).
+            _FEXP = _FCAL * (0.03 if importadora_conhecida else 1.0)
             for _u in (estimado.get("por_uf") or []):
                 _u["imp"] = float(_u.get("imp") or 0) * _FCAL
-                _u["exp"] = float(_u.get("exp") or 0) * _FCAL
+                _u["exp"] = float(_u.get("exp") or 0) * _FEXP
             total_imp = float(estimado.get("total_imp") or 0) * _FCAL
-            total_exp = float(estimado.get("total_exp") or 0) * _FCAL
+            total_exp = float(estimado.get("total_exp") or 0) * _FEXP
             estimado["total_imp"] = total_imp
             estimado["total_exp"] = total_exp
             fonte_valores = "estimado"
