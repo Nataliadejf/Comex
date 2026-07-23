@@ -21,8 +21,10 @@ import { message } from 'antd';
 const { Header, Sider } = Layout;
 
 const AppLayout = ({ children }) => {
-  // Começar com sidebar encolhido por padrão (desktop)
-  const [collapsed, setCollapsed] = useState(true);
+  // Menu começa ABERTO no desktop e recolhido no mobile
+  const [collapsed, setCollapsed] = useState(
+    typeof window !== 'undefined' && window.innerWidth < 768
+  );
   const [isMobile, setIsMobile] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
