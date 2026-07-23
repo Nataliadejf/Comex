@@ -172,7 +172,7 @@ const AppLayout = ({ children }) => {
         collapsed={collapsed}
         onCollapse={setCollapsed}
         theme="dark"
-        width={isMobile ? 250 : 200}
+        width={isMobile ? 250 : 240}
         collapsedWidth={isMobile ? 0 : 80}
         style={{
           position: isMobile ? 'fixed' : 'relative',
@@ -208,7 +208,7 @@ const AppLayout = ({ children }) => {
           onClick={handleMenuClick}
         />
       </Sider>
-      <Layout style={{ marginLeft: isMobile ? 0 : (collapsed ? 80 : 200) }}>
+      <Layout style={{ marginLeft: isMobile ? 0 : (collapsed ? 80 : 240) }}>
         <Header
           style={{
             background: '#fff',
