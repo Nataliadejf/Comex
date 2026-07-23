@@ -21,10 +21,9 @@ import { message } from 'antd';
 const { Header, Sider } = Layout;
 
 const AppLayout = ({ children }) => {
-  // Menu começa ABERTO no desktop e recolhido no mobile
-  const [collapsed, setCollapsed] = useState(
-    typeof window !== 'undefined' && window.innerWidth < 768
-  );
+  // Menu começa RECOLHIDO (só ícones); nome de cada página aparece ao passar o
+  // mouse, e o botão no topo permite expandir/recolher quando quiser.
+  const [collapsed, setCollapsed] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
