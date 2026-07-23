@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Menu, Button, Space, Dropdown } from 'antd';
+import { Layout, Menu, Button, Space, Dropdown, Tooltip } from 'antd';
 import {
   DashboardOutlined,
   LineChartOutlined,
@@ -222,10 +222,11 @@ const AppLayout = ({ children }) => {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* Botão toggle do sidebar - sempre visível em mobile */}
-            {(isMobile || !collapsed) && (
+            {/* Botão toggle do sidebar - SEMPRE visível (recolher/expandir o menu) */}
+            <Tooltip title={collapsed ? 'Expandir menu' : 'Recolher menu'} placement="right">
               <Button
                 type="text"
+                aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
                 icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
                 onClick={toggleSidebar}
                 style={{
@@ -237,7 +238,7 @@ const AppLayout = ({ children }) => {
                   justifyContent: 'center',
                 }}
               />
-            )}
+            </Tooltip>
             <h1 
               style={{ 
                 margin: 0, 
