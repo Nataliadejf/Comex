@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import DashboardComexBigQuery from './pages/DashboardComexBigQuery';
 import BuscaAvancada from './pages/BuscaAvancada';
 import AnaliseNCM from './pages/AnaliseNCM';
+import PanoramaGlobal from './pages/PanoramaGlobal';
 import EmpresasDashboard from './pages/EmpresasDashboard';
 import EmpresaContatos from './pages/EmpresaContatos';
 import EmpresasHabilitadas from './pages/EmpresasHabilitadas';
@@ -41,6 +42,7 @@ function App() {
                     <Route path="/busca" element={<BuscaAvancada />} />
                     <Route path="/ncm" element={<AnaliseNCM />} />
                     <Route path="/ncm/:ncm" element={<AnaliseNCM />} />
+                    <Route path="/panorama-global" element={<PanoramaGlobal />} />
                     <Route path="/empresas" element={<EmpresasDashboard />} />
                     <Route path="/contatos" element={<EmpresaContatos />} />
                     <Route path="/habilitadas" element={<EmpresasHabilitadas />} />

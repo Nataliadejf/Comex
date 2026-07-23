@@ -488,6 +488,81 @@ async def ncm_analise(
     }
 
 
+@router.get("/panorama-global")
+async def panorama_global(
+    ncm: str = Query(..., min_length=2, description="NCM (usa os 6 primeiros dígitos = HS6)"),
+    ano: Optional[int] = Query(None, description="Ano; vazio = último disponível"),
+):
+    """Panorama do comércio internacional do produto (HS6) — UN Comtrade.
+    Mostra os maiores países importadores/exportadores do produto no mundo."""
+    from google.cloud import bigquery
+
+    hs6 = "".join(c for c in (ncm or "") if c.isdigit())[:6]
+    if len(hs6) < 6:
+        return {"error": "Informe um NCM com ao menos 6 dígitos", "ncm": ncm}
+    t = _bt(_env("COMEX_BQ_TABLE_COMTRADE", "liquid-receiver-483923-n6.Projeto_Comex.comtrade_global"))
+    t_desc = _bt(_env("COMEX_BQ_TABLE_NCM_DESC", _DEFAULT_NCM_DESC))
+    try:
+        client = _get_bq_client()
+    except Exception as e:
+        return {"error": str(e), "hs6": hs6}
+
+    params = [bigquery.ScalarQueryParameter("hs6", "STRING", hs6)]
+    cond_ano = ""
+    if ano:
+        cond_ano = "AND ano=@ano"
+        params.append(bigquery.ScalarQueryParameter("ano", "INT64", ano))
+
+    # anos disponíveis + ano de referência
+    try:
+        anos = [r["ano"] for r in _run_query(client, f"SELECT DISTINCT ano FROM {t} WHERE hs6=@hs6 ORDER BY ano DESC",
+                                             [bigquery.ScalarQueryParameter("hs6", "STRING", hs6)])]
+    except Exception as e:
+        logger.warning(f"comtrade_global indisponível: {e}")
+        return {"hs6": hs6, "disponivel": False,
+                "aviso": "Base global (Comtrade) ainda não carregada."}
+    if not anos:
+        return {"hs6": hs6, "disponivel": False,
+                "aviso": "Este produto ainda não está na base global (Comtrade). Amostra curada."}
+    ref = ano if (ano in anos) else anos[0]
+    params_ref = [bigquery.ScalarQueryParameter("hs6", "STRING", hs6),
+                  bigquery.ScalarQueryParameter("ano", "INT64", ref)]
+
+    def _top(flow):
+        sql = f"""SELECT pais, iso3, valor_usd FROM {t}
+                  WHERE hs6=@hs6 AND ano=@ano AND fluxo=@f AND valor_usd>0
+                  ORDER BY valor_usd DESC LIMIT 15"""
+        p = params_ref + [bigquery.ScalarQueryParameter("f", "STRING", flow)]
+        return [{"pais": r["pais"], "iso3": r["iso3"], "valor_usd": float(r["valor_usd"] or 0)}
+                for r in _run_query(client, sql, p)]
+
+    tot = list(_run_query(client,
+        f"""SELECT fluxo, SUM(valor_usd) v, COUNT(DISTINCT reporter_code) n
+            FROM {t} WHERE hs6=@hs6 AND ano=@ano GROUP BY fluxo""", params_ref))
+    totais = {r["fluxo"]: {"valor": float(r["v"] or 0), "paises": int(r["n"] or 0)} for r in tot}
+
+    desc = None
+    drows = _run_query(client, f"SELECT descricao FROM {t_desc} WHERE SUBSTR(ncm,1,6)=@hs6 LIMIT 1",
+                       [bigquery.ScalarQueryParameter("hs6", "STRING", hs6)])
+    if drows:
+        desc = drows[0].get("descricao")
+
+    return {
+        "hs6": hs6,
+        "descricao": desc,
+        "disponivel": True,
+        "ano": ref,
+        "anos_disponiveis": anos,
+        "total_importacao_mundial": totais.get("Importação", {}).get("valor", 0),
+        "total_exportacao_mundial": totais.get("Exportação", {}).get("valor", 0),
+        "n_paises_importadores": totais.get("Importação", {}).get("paises", 0),
+        "n_paises_exportadores": totais.get("Exportação", {}).get("paises", 0),
+        "top_importadores": _top("Importação"),
+        "top_exportadores": _top("Exportação"),
+        "fonte": "UN Comtrade (HS6, parceiro=Mundo, anual) — amostra curada",
+    }
+
+
 @router.get("/cnae-arvore")
 async def cnae_arvore():
     """Árvore CNAE Setor→Segmento→Ramo→Categoria para os filtros do Painel de Empresas."""

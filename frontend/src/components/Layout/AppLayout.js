@@ -9,6 +9,7 @@ import {
   SafetyCertificateOutlined,
   TagsOutlined,
   TeamOutlined,
+  GlobalOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuFoldOutlined,
@@ -78,6 +79,11 @@ const AppLayout = ({ children }) => {
       key: '/ncm',
       icon: <TagsOutlined />,
       label: 'Análise por NCM',
+    },
+    {
+      key: '/panorama-global',
+      icon: <GlobalOutlined />,
+      label: 'Panorama Global',
     },
     {
       key: '/empresas',
