@@ -85,6 +85,51 @@ def pendentes(_admin: str = Depends(require_admin)):
     return {"pendentes": user_store_bq.listar_pendentes(200)}
 
 
+@router.get("/uso")
+def uso(_admin: str = Depends(require_admin), dias: int = 90):
+    """Painel de uso por usuário: nº de sessões (acessos), tempo de permanência
+    e telas mais visitadas — a partir do log de atividade (heartbeat)."""
+    from services.bq_client import get_bigquery_client, run_query
+    t = "liquid-receiver-483923-n6.Projeto_Comex.acessos_log"
+    client = get_bigquery_client()
+    # Por sessão: início, fim e duração (min); depois agrega por usuário.
+    sql = f"""
+    WITH sess AS (
+      SELECT email, session_id,
+             MIN(criado_em) ini, MAX(criado_em) fim,
+             TIMESTAMP_DIFF(MAX(criado_em), MIN(criado_em), SECOND) dur_s
+      FROM `{t}`
+      WHERE criado_em >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(dias)} DAY)
+        AND session_id != ''
+      GROUP BY email, session_id
+    )
+    SELECT email,
+           COUNT(*) AS acessos,
+           MAX(fim) AS ultimo_acesso,
+           ROUND(SUM(dur_s)/60.0, 1) AS tempo_total_min,
+           ROUND(AVG(dur_s)/60.0, 1) AS tempo_medio_min
+    FROM sess GROUP BY email ORDER BY acessos DESC
+    """
+    usuarios = [dict(r) for r in run_query(client, sql, None)]
+
+    # Telas mais usadas por usuário (top 5 por nº de pings)
+    sql_t = f"""
+    SELECT email, tela, COUNT(*) n FROM `{t}`
+    WHERE criado_em >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(dias)} DAY)
+      AND tela != '' AND tela IS NOT NULL
+    GROUP BY email, tela ORDER BY email, n DESC
+    """
+    telas_por_user = {}
+    for r in run_query(client, sql_t, None):
+        telas_por_user.setdefault(r["email"], [])
+        if len(telas_por_user[r["email"]]) < 5:
+            telas_por_user[r["email"]].append({"tela": r["tela"], "visitas": int(r["n"])})
+    for u in usuarios:
+        u["telas"] = telas_por_user.get(u["email"], [])
+        u["ultimo_acesso"] = u["ultimo_acesso"].isoformat() if u.get("ultimo_acesso") else None
+    return {"dias": dias, "usuarios": usuarios}
+
+
 @router.post("/aprovar")
 def aprovar(body: EmailBody, admin: str = Depends(require_admin)):
     from services import user_store_bq

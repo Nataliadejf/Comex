@@ -435,5 +435,12 @@ export const adminUsuariosAPI = {
   pendentes: () => api.get('/admin/usuarios/pendentes'),
   aprovar: (email) => api.post('/admin/usuarios/aprovar', { email }),
   recusar: (email) => api.post('/admin/usuarios/recusar', { email }),
+  uso: (dias = 90) => api.get('/admin/usuarios/uso', { params: { dias } }),
+};
+
+// Rastreamento de uso (heartbeat) — silencioso
+export const atividadeAPI = {
+  ping: (session_id, tela) =>
+    api.post('/atividade/ping', { session_id, tela, evento: 'ping' }).catch(() => {}),
 };
 

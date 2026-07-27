@@ -13,6 +13,7 @@ export default function GerenciarUsuarios() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(null);
   const [pendentes, setPendentes] = useState([]);
+  const [uso, setUso] = useState([]);
   const [acao, setAcao] = useState(null); // email em processamento
 
   const carregar = useCallback(async () => {
@@ -24,6 +25,10 @@ export default function GerenciarUsuarios() {
       if (admin) {
         const res = await adminUsuariosAPI.pendentes();
         setPendentes(res.data?.pendentes || []);
+        try {
+          const u = await adminUsuariosAPI.uso(90);
+          setUso(u.data?.usuarios || []);
+        } catch (_) { setUso([]); }
       }
     } catch (e) {
       setIsAdmin(false);
@@ -114,6 +119,36 @@ export default function GerenciarUsuarios() {
           <Empty description="Nenhum cadastro pendente no momento." />
         ) : (
           <Table rowKey="email" columns={columns} dataSource={pendentes} pagination={false} size="small" scroll={{ x: 700 }} />
+        )}
+      </Card>
+
+      <Card title="📊 Uso do aplicativo (últimos 90 dias)" style={{ marginTop: 16 }}
+        extra={<Button size="small" icon={<ReloadOutlined />} onClick={carregar}>Atualizar</Button>}>
+        {uso.length === 0 ? (
+          <Empty description="Ainda sem dados de uso registrados. O rastreamento começa a partir de agora." />
+        ) : (
+          <Table
+            rowKey="email"
+            dataSource={uso}
+            pagination={false}
+            size="small"
+            scroll={{ x: 800 }}
+            columns={[
+              { title: 'Usuário', dataIndex: 'email', key: 'email' },
+              { title: 'Acessos', dataIndex: 'acessos', key: 'acessos', width: 90,
+                sorter: (a, b) => a.acessos - b.acessos, defaultSortOrder: 'descend' },
+              { title: 'Tempo total', dataIndex: 'tempo_total_min', key: 'tt', width: 120,
+                render: (v) => `${(v || 0).toLocaleString('pt-BR')} min` },
+              { title: 'Tempo médio/sessão', dataIndex: 'tempo_medio_min', key: 'tm', width: 150,
+                render: (v) => `${(v || 0).toLocaleString('pt-BR')} min` },
+              { title: 'Último acesso', dataIndex: 'ultimo_acesso', key: 'ua', width: 170,
+                render: (v) => v ? new Date(v).toLocaleString('pt-BR') : '—' },
+              { title: 'Telas mais usadas', key: 'telas',
+                render: (_, r) => (r.telas || []).slice(0, 4).map((t) => (
+                  <Tag key={t.tela}>{t.tela} ({t.visitas})</Tag>
+                )) },
+            ]}
+          />
         )}
       </Card>
     </div>

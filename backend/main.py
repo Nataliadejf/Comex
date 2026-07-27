@@ -195,6 +195,13 @@ try:
 except ImportError as e:
     logger.warning(f"Router admin usuários não disponível: {e}")
 
+try:
+    from routers.atividade_routes import router as atividade_router
+    app.include_router(atividade_router)
+    logger.info("✅ Router atividade (/atividade/*) incluído")
+except ImportError as e:
+    logger.warning(f"Router atividade não disponível: {e}")
+
 # Router dashboard local (/api/dashboard/buscar) — DESATIVADO: dependia do
 # PostgreSQL abandonado (retornava 500) e não é mais usado pelo frontend.
 # from routers.dashboard_data_routes import router as dashboard_local_router

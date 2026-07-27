@@ -44,6 +44,29 @@ const AppLayout = ({ children }) => {
     return () => { ativo = false; };
   }, []);
 
+  // Heartbeat de uso: registra atividade (nº de acessos + tempo de permanência).
+  useEffect(() => {
+    let sid;
+    try {
+      sid = sessionStorage.getItem('sid');
+      if (!sid) {
+        sid = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()) + Math.random();
+        sessionStorage.setItem('sid', sid);
+      }
+    } catch (_) {
+      sid = String(Date.now());
+    }
+    let ativo = true;
+    const enviar = async () => {
+      if (!ativo || !localStorage.getItem('token')) return;
+      const { atividadeAPI } = await import('../../services/api');
+      atividadeAPI.ping(sid, window.location.pathname);
+    };
+    enviar();
+    const t = setInterval(enviar, 60000);
+    return () => { ativo = false; clearInterval(t); };
+  }, [location.pathname]);
+
   // Detectar se está em mobile e ajustar sidebar
   useEffect(() => {
     const checkMobile = () => {
