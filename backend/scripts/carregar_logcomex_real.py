@@ -21,6 +21,8 @@ FILES = {
     "Fornecedores": "Fornecedores.xlsx",
     "Concorrentes": "Concorrentes.xlsx",
     "ClientesEConcorrentes": "Clientes e Concorrentes.xlsx",
+    "Silicone1": "Silicone1 (1).xlsx",
+    "JJ": "J&j (1).xlsx",
 }
 DEST = "liquid-receiver-483923-n6.Projeto_Comex.comex_real_import_logcomex"
 HAB = "liquid-receiver-483923-n6.Projeto_Comex.empresas_habilitacao"
