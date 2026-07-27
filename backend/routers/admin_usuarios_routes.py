@@ -158,7 +158,44 @@ def uso(_admin: str = Depends(require_admin), dias: int = 90):
         "tempo_total_min": round(sum(float(u.get("tempo_total_min") or 0) for u in usuarios), 1),
         "tela_mais_acessada": telas_ranking[0]["tela"] if telas_ranking else None,
     }
-    return {"dias": dias, "resumo": resumo, "telas_ranking": telas_ranking, "usuarios": usuarios}
+
+    # Histórico mês a mês (últimos 12 meses) — acessos, usuários e tempo
+    sql_mes = f"""
+    WITH sess AS (
+      SELECT email, session_id, MIN(criado_em) ini,
+             TIMESTAMP_DIFF(MAX(criado_em), MIN(criado_em), SECOND) dur_s
+      FROM `{t}`
+      WHERE criado_em >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
+        AND session_id != '' AND email NOT LIKE '%@example.com'
+      GROUP BY email, session_id
+    )
+    SELECT FORMAT_TIMESTAMP('%Y-%m', ini) mes,
+           COUNT(*) acessos, COUNT(DISTINCT email) usuarios,
+           ROUND(SUM(dur_s)/60.0, 1) tempo_min
+    FROM sess GROUP BY mes ORDER BY mes
+    """
+    reais = {r["mes"]: r for r in run_query(client, sql_mes, None)}
+    # Preenche os 12 meses (inclui meses sem acesso = 0) para o gráfico não ter buracos
+    from datetime import datetime, timezone
+    hoje = datetime.now(timezone.utc)
+    por_mes = []
+    for i in range(11, -1, -1):
+        y = hoje.year
+        m = hoje.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        chave = f"{y:04d}-{m:02d}"
+        r = reais.get(chave)
+        por_mes.append({
+            "mes": chave,
+            "acessos": int(r["acessos"]) if r else 0,
+            "usuarios": int(r["usuarios"]) if r else 0,
+            "tempo_min": float(r["tempo_min"]) if r else 0.0,
+        })
+
+    return {"dias": dias, "resumo": resumo, "telas_ranking": telas_ranking,
+            "por_mes": por_mes, "usuarios": usuarios}
 
 
 @router.post("/aprovar")

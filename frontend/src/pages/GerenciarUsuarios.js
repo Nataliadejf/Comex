@@ -7,6 +7,9 @@ import {
   CheckOutlined, CloseOutlined, ReloadOutlined, TeamOutlined,
   UserOutlined, LoginOutlined, ClockCircleOutlined, EyeOutlined,
 } from '@ant-design/icons';
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend, ResponsiveContainer,
+} from 'recharts';
 import { adminUsuariosAPI } from '../services/api';
 
 const { Title, Text } = Typography;
@@ -21,6 +24,7 @@ export default function GerenciarUsuarios() {
   const [uso, setUso] = useState([]);
   const [usoResumo, setUsoResumo] = useState(null);
   const [telasRanking, setTelasRanking] = useState([]);
+  const [porMes, setPorMes] = useState([]);
   const [acao, setAcao] = useState(null); // email em processamento
 
   const carregar = useCallback(async () => {
@@ -50,7 +54,8 @@ export default function GerenciarUsuarios() {
         setUso(u.data?.usuarios || []);
         setUsoResumo(u.data?.resumo || null);
         setTelasRanking(u.data?.telas_ranking || []);
-      } catch (_) { setUso([]); setUsoResumo(null); setTelasRanking([]); }
+        setPorMes(u.data?.por_mes || []);
+      } catch (_) { setUso([]); setUsoResumo(null); setTelasRanking([]); setPorMes([]); }
     }
     setLoading(false);
   }, []);
@@ -188,6 +193,24 @@ export default function GerenciarUsuarios() {
                 </Card>
               </Col>
             </Row>
+
+            {/* Histórico mês a mês (últimos 12 meses) */}
+            {porMes.length > 0 && (
+              <Card size="small" title="📅 Acessos por mês (últimos 12 meses)" style={{ marginBottom: 16 }}>
+                <ResponsiveContainer width="100%" height={260}>
+                  <ComposedChart data={porMes} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="mes" tick={{ fontSize: 11 }} tickFormatter={(v) => (v || '').slice(2)} />
+                    <YAxis yAxisId="l" tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <RTooltip formatter={(v, n) => [v, n === 'tempo_min' ? 'Tempo (min)' : n === 'usuarios' ? 'Usuários' : 'Acessos']} />
+                    <Legend formatter={(n) => (n === 'acessos' ? 'Acessos' : n === 'usuarios' ? 'Usuários ativos' : 'Tempo (min)')} />
+                    <Bar yAxisId="l" dataKey="acessos" fill="#667eea" radius={[4, 4, 0, 0]} />
+                    <Line yAxisId="r" type="monotone" dataKey="usuarios" stroke="#fa709a" strokeWidth={2} dot={{ r: 3 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </Card>
+            )}
 
             <Row gutter={[16, 16]}>
               {/* Ranking global de telas */}
