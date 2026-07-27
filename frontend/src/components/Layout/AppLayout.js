@@ -25,22 +25,38 @@ const AppLayout = ({ children }) => {
   // mouse, e o botão no topo permite expandir/recolher quando quiser.
   const [collapsed, setCollapsed] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  // Inicia do cache p/ o menu de admin não sumir enquanto o backend acorda
+  // (cold start pode fazer /me demorar/falhar). Só limpa em 401/403 explícito.
+  const [isAdmin, setIsAdmin] = useState(() => {
+    try { return localStorage.getItem('is_admin') === '1'; } catch { return false; }
+  });
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Verificar se o usuário logado é administrador (mostra o menu de Usuários)
+  // Verificar se o usuário logado é administrador (mostra o menu de Usuários).
+  // Com retry: cold start do backend não deve esconder o menu de quem é admin.
   useEffect(() => {
     let ativo = true;
-    (async () => {
+    const checar = async (tentativa = 0) => {
       try {
         const { adminUsuariosAPI } = await import('../../services/api');
         const res = await adminUsuariosAPI.me();
-        if (ativo) setIsAdmin(!!res.data?.is_admin);
-      } catch (_) {
-        if (ativo) setIsAdmin(false);
+        const admin = !!res.data?.is_admin;
+        if (!ativo) return;
+        setIsAdmin(admin);
+        try { localStorage.setItem('is_admin', admin ? '1' : '0'); } catch (_) {}
+      } catch (err) {
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          // sessão inválida / não é admin → limpa
+          if (ativo) { setIsAdmin(false); try { localStorage.setItem('is_admin', '0'); } catch (_) {} }
+        } else if (ativo && tentativa < 4) {
+          // erro de rede/cold start → tenta de novo, mantendo o valor em cache
+          setTimeout(() => ativo && checar(tentativa + 1), 4000);
+        }
       }
-    })();
+    };
+    checar();
     return () => { ativo = false; };
   }, []);
 

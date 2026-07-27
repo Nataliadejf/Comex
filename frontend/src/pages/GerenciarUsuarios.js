@@ -11,30 +11,42 @@ const { Title, Text } = Typography;
 
 export default function GerenciarUsuarios() {
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(null);
+  // Inicia do cache p/ não bloquear a tela enquanto o backend acorda (cold start)
+  const [isAdmin, setIsAdmin] = useState(() => {
+    try { return localStorage.getItem('is_admin') === '1' ? true : null; } catch { return null; }
+  });
   const [pendentes, setPendentes] = useState([]);
   const [uso, setUso] = useState([]);
   const [acao, setAcao] = useState(null); // email em processamento
 
   const carregar = useCallback(async () => {
     setLoading(true);
+    let admin = false;
     try {
       const meRes = await adminUsuariosAPI.me();
-      const admin = !!meRes.data?.is_admin;
+      admin = !!meRes.data?.is_admin;
       setIsAdmin(admin);
-      if (admin) {
+      try { localStorage.setItem('is_admin', admin ? '1' : '0'); } catch (_) {}
+    } catch (e) {
+      const status = e?.response?.status;
+      if (status === 401 || status === 403) {
+        setIsAdmin(false);
+      } else {
+        // erro de rede/cold start → mantém o que já estava (cache); tenta carregar os dados mesmo assim
+        admin = localStorage.getItem('is_admin') === '1';
+      }
+    }
+    if (admin) {
+      try {
         const res = await adminUsuariosAPI.pendentes();
         setPendentes(res.data?.pendentes || []);
-        try {
-          const u = await adminUsuariosAPI.uso(90);
-          setUso(u.data?.usuarios || []);
-        } catch (_) { setUso([]); }
-      }
-    } catch (e) {
-      setIsAdmin(false);
-    } finally {
-      setLoading(false);
+      } catch (_) {}
+      try {
+        const u = await adminUsuariosAPI.uso(90);
+        setUso(u.data?.usuarios || []);
+      } catch (_) { setUso([]); }
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
@@ -69,12 +81,22 @@ export default function GerenciarUsuarios() {
     return <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" tip="Carregando..." /></div>;
   }
 
-  if (!isAdmin) {
+  if (isAdmin === false) {
     return (
       <Alert
         type="warning" showIcon
         message="Acesso restrito"
         description="Esta página é exclusiva para administradores."
+      />
+    );
+  }
+  if (isAdmin == null) {
+    // Status ainda desconhecido (ex.: backend acordando). Não bloqueia — oferece retry.
+    return (
+      <Alert
+        type="info" showIcon
+        message="Não foi possível confirmar seu acesso agora"
+        description={<span>O servidor pode estar iniciando. <Button size="small" type="link" onClick={carregar}>Tentar novamente</Button></span>}
       />
     );
   }
