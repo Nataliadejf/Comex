@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Table, Button, Tag, Typography, Space, Popconfirm, message, Empty, Spin, Alert,
+  Row, Col, Statistic, Progress,
 } from 'antd';
 import {
   CheckOutlined, CloseOutlined, ReloadOutlined, TeamOutlined,
+  UserOutlined, LoginOutlined, ClockCircleOutlined, EyeOutlined,
 } from '@ant-design/icons';
 import { adminUsuariosAPI } from '../services/api';
 
@@ -17,6 +19,8 @@ export default function GerenciarUsuarios() {
   });
   const [pendentes, setPendentes] = useState([]);
   const [uso, setUso] = useState([]);
+  const [usoResumo, setUsoResumo] = useState(null);
+  const [telasRanking, setTelasRanking] = useState([]);
   const [acao, setAcao] = useState(null); // email em processamento
 
   const carregar = useCallback(async () => {
@@ -44,7 +48,9 @@ export default function GerenciarUsuarios() {
       try {
         const u = await adminUsuariosAPI.uso(90);
         setUso(u.data?.usuarios || []);
-      } catch (_) { setUso([]); }
+        setUsoResumo(u.data?.resumo || null);
+        setTelasRanking(u.data?.telas_ranking || []);
+      } catch (_) { setUso([]); setUsoResumo(null); setTelasRanking([]); }
     }
     setLoading(false);
   }, []);
@@ -144,33 +150,92 @@ export default function GerenciarUsuarios() {
         )}
       </Card>
 
-      <Card title="📊 Uso do aplicativo (últimos 90 dias)" style={{ marginTop: 16 }}
+      <Card title="📊 Dashboard de Uso (últimos 90 dias)" style={{ marginTop: 16 }}
         extra={<Button size="small" icon={<ReloadOutlined />} onClick={carregar}>Atualizar</Button>}>
         {uso.length === 0 ? (
-          <Empty description="Ainda sem dados de uso registrados. O rastreamento começa a partir de agora." />
+          <Empty description="Ainda sem dados de uso registrados. O rastreamento começa a partir de agora — conforme os usuários acessarem, os números aparecem aqui." />
         ) : (
-          <Table
-            rowKey="email"
-            dataSource={uso}
-            pagination={false}
-            size="small"
-            scroll={{ x: 800 }}
-            columns={[
-              { title: 'Usuário', dataIndex: 'email', key: 'email' },
-              { title: 'Acessos', dataIndex: 'acessos', key: 'acessos', width: 90,
-                sorter: (a, b) => a.acessos - b.acessos, defaultSortOrder: 'descend' },
-              { title: 'Tempo total', dataIndex: 'tempo_total_min', key: 'tt', width: 120,
-                render: (v) => `${(v || 0).toLocaleString('pt-BR')} min` },
-              { title: 'Tempo médio/sessão', dataIndex: 'tempo_medio_min', key: 'tm', width: 150,
-                render: (v) => `${(v || 0).toLocaleString('pt-BR')} min` },
-              { title: 'Último acesso', dataIndex: 'ultimo_acesso', key: 'ua', width: 170,
-                render: (v) => v ? new Date(v).toLocaleString('pt-BR') : '—' },
-              { title: 'Telas mais usadas', key: 'telas',
-                render: (_, r) => (r.telas || []).slice(0, 4).map((t) => (
-                  <Tag key={t.tela}>{t.tela} ({t.visitas})</Tag>
-                )) },
-            ]}
-          />
+          <>
+            {/* KPIs */}
+            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+              <Col xs={12} md={6}>
+                <Card size="small" style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', color: '#fff' }}>
+                  <Statistic title={<span style={{ color: 'rgba(255,255,255,.85)' }}>Usuários ativos</span>}
+                    value={usoResumo?.usuarios_ativos ?? uso.length}
+                    valueStyle={{ color: '#fff' }} prefix={<UserOutlined />} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card size="small" style={{ background: 'linear-gradient(135deg,#4facfe,#00f2fe)', color: '#fff' }}>
+                  <Statistic title={<span style={{ color: 'rgba(255,255,255,.85)' }}>Total de acessos</span>}
+                    value={usoResumo?.total_acessos ?? 0}
+                    valueStyle={{ color: '#fff' }} prefix={<LoginOutlined />} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card size="small" style={{ background: 'linear-gradient(135deg,#43e97b,#38f9d7)', color: '#fff' }}>
+                  <Statistic title={<span style={{ color: 'rgba(255,255,255,.85)' }}>Tempo total</span>}
+                    value={usoResumo?.tempo_total_min ?? 0} suffix="min"
+                    valueStyle={{ color: '#fff' }} prefix={<ClockCircleOutlined />} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card size="small" style={{ background: 'linear-gradient(135deg,#fa709a,#fee140)', color: '#fff' }}>
+                  <div style={{ color: 'rgba(255,255,255,.85)', fontSize: 14 }}><EyeOutlined /> Tela mais acessada</div>
+                  <div style={{ color: '#fff', fontSize: 18, fontWeight: 700, marginTop: 6 }}>
+                    {usoResumo?.tela_mais_acessada || '—'}
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row gutter={[16, 16]}>
+              {/* Ranking global de telas */}
+              <Col xs={24} lg={9}>
+                <Card size="small" title="🖥️ Telas mais acessadas">
+                  {telasRanking.length === 0 ? <Empty description="Sem dados" /> : (() => {
+                    const max = Math.max(...telasRanking.map((t) => t.visitas), 1);
+                    return telasRanking.slice(0, 8).map((t) => (
+                      <div key={t.tela} style={{ marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                          <span>{t.tela}</span><span>{t.visitas}</span>
+                        </div>
+                        <Progress percent={Math.round((t.visitas / max) * 100)} showInfo={false} size="small" />
+                      </div>
+                    ));
+                  })()}
+                </Card>
+              </Col>
+
+              {/* Tabela por usuário */}
+              <Col xs={24} lg={15}>
+                <Card size="small" title="👤 Por usuário">
+                  <Table
+                    rowKey="email"
+                    dataSource={uso}
+                    pagination={false}
+                    size="small"
+                    scroll={{ x: 700 }}
+                    columns={[
+                      { title: 'Usuário', dataIndex: 'email', key: 'email', ellipsis: true },
+                      { title: 'Acessos', dataIndex: 'acessos', key: 'acessos', width: 90,
+                        sorter: (a, b) => a.acessos - b.acessos, defaultSortOrder: 'descend' },
+                      { title: 'Tempo total', dataIndex: 'tempo_total_min', key: 'tt', width: 110,
+                        render: (v) => `${(v || 0).toLocaleString('pt-BR')} min` },
+                      { title: 'Média/sessão', dataIndex: 'tempo_medio_min', key: 'tm', width: 120,
+                        render: (v) => `${(v || 0).toLocaleString('pt-BR')} min` },
+                      { title: 'Último acesso', dataIndex: 'ultimo_acesso', key: 'ua', width: 160,
+                        render: (v) => v ? new Date(v).toLocaleString('pt-BR') : '—' },
+                      { title: 'Telas mais usadas', key: 'telas',
+                        render: (_, r) => (r.telas || []).slice(0, 3).map((t) => (
+                          <Tag key={t.tela}>{t.tela} ({t.visitas})</Tag>
+                        )) },
+                    ]}
+                  />
+                </Card>
+              </Col>
+            </Row>
+          </>
         )}
       </Card>
     </div>

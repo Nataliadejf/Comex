@@ -121,15 +121,44 @@ def uso(_admin: str = Depends(require_admin), dias: int = 90):
       AND email NOT LIKE '%@example.com'
     GROUP BY email, tela ORDER BY email, n DESC
     """
+    # Nome amigável de cada tela (rota → nome)
+    nomes_tela = {
+        "/": "Dashboard", "/dashboard": "Dashboard",
+        "/dashboard-comex-bq": "Comex BigQuery", "/busca": "Busca Avançada",
+        "/ncm": "Análise por NCM", "/panorama-global": "Panorama Global",
+        "/empresas": "Empresas por Segmento", "/contatos": "Empresas & Contatos",
+        "/habilitadas": "Habilitadas Comex", "/usuarios": "Gerenciar Usuários",
+    }
+
+    def _nome(rota):
+        r = (rota or "").rstrip("/") or "/"
+        if r.startswith("/ncm/"):
+            r = "/ncm"
+        return nomes_tela.get(r, r)
+
     telas_por_user = {}
+    ranking_global = {}
     for r in run_query(client, sql_t, None):
-        telas_por_user.setdefault(r["email"], [])
-        if len(telas_por_user[r["email"]]) < 5:
-            telas_por_user[r["email"]].append({"tela": r["tela"], "visitas": int(r["n"])})
+        nome = _nome(r["tela"])
+        telas_por_user.setdefault(r["email"], {})
+        telas_por_user[r["email"]][nome] = telas_por_user[r["email"]].get(nome, 0) + int(r["n"])
+        ranking_global[nome] = ranking_global.get(nome, 0) + int(r["n"])
+
     for u in usuarios:
-        u["telas"] = telas_por_user.get(u["email"], [])
+        tp = telas_por_user.get(u["email"], {})
+        u["telas"] = [{"tela": k, "visitas": v}
+                      for k, v in sorted(tp.items(), key=lambda x: x[1], reverse=True)][:5]
         u["ultimo_acesso"] = u["ultimo_acesso"].isoformat() if u.get("ultimo_acesso") else None
-    return {"dias": dias, "usuarios": usuarios}
+
+    telas_ranking = [{"tela": k, "visitas": v}
+                     for k, v in sorted(ranking_global.items(), key=lambda x: x[1], reverse=True)]
+    resumo = {
+        "usuarios_ativos": len(usuarios),
+        "total_acessos": sum(int(u.get("acessos") or 0) for u in usuarios),
+        "tempo_total_min": round(sum(float(u.get("tempo_total_min") or 0) for u in usuarios), 1),
+        "tela_mais_acessada": telas_ranking[0]["tela"] if telas_ranking else None,
+    }
+    return {"dias": dias, "resumo": resumo, "telas_ranking": telas_ranking, "usuarios": usuarios}
 
 
 @router.post("/aprovar")
