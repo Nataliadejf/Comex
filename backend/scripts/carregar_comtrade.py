@@ -19,7 +19,7 @@ DEST = "liquid-receiver-483923-n6.Projeto_Comex.comtrade_global"
 LOGCOMEX = "liquid-receiver-483923-n6.Projeto_Comex.comex_real_import_logcomex"
 BASE = "https://comtradeapi.un.org/public/v1/preview/C/A/HS"
 
-TOP_HS6 = int(os.getenv("COMTRADE_TOP_HS6", "50"))
+TOP_HS6 = int(os.getenv("COMTRADE_TOP_HS6", "150"))
 ANOS = [int(a) for a in os.getenv("COMTRADE_ANOS", "2021,2022,2023,2024").split(",")]
 THROTTLE = float(os.getenv("COMTRADE_THROTTLE", "0.5"))
 
