@@ -101,6 +101,7 @@ def uso(_admin: str = Depends(require_admin), dias: int = 90):
       FROM `{t}`
       WHERE criado_em >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(dias)} DAY)
         AND session_id != ''
+        AND email NOT LIKE '%@example.com'
       GROUP BY email, session_id
     )
     SELECT email,
@@ -117,6 +118,7 @@ def uso(_admin: str = Depends(require_admin), dias: int = 90):
     SELECT email, tela, COUNT(*) n FROM `{t}`
     WHERE criado_em >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(dias)} DAY)
       AND tela != '' AND tela IS NOT NULL
+      AND email NOT LIKE '%@example.com'
     GROUP BY email, tela ORDER BY email, n DESC
     """
     telas_por_user = {}
